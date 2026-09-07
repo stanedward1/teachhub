@@ -1,14 +1,29 @@
 #!/usr/bin/env bash
 # ============================================================
-# TechHub 一键启动脚本
-# 覆盖从零开始的完整启动流程：数据库 -> 后端 -> 前端
-# 自动检测 CPU 架构（x86_64 / aarch64），兼容两种平台
+# TechHub 一键启动脚本（本地开发 / 服务器部署通用）
 #
 # 用法:
-#   ./start.sh          # 启动（若依赖缺失会自动安装）
-#   ./start.sh --install-only   # 只安装依赖，不启动服务
+#   bash start.sh                 # 启动（缺依赖会自动安装），默认 SQLite
+#   DB_ENGINE=mysql bash start.sh # 使用 MySQL（需先填写下方连接信息）
+#   bash start.sh --install-only  # 只装依赖，不启动服务
+#
+# 数据库默认 SQLite（零配置，与项目/Docker 默认一致）。
+# 生产环境建议改用 `docker compose up -d`（见 README）。
 # ============================================================
+
+# 必须用 bash 运行（脚本使用了 bash 数组等特性）
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "[ERROR] 请用 bash 运行本脚本：bash start.sh"
+  exit 1
+fi
+
 set -euo pipefail
+
+# ---------- 颜色输出 ----------
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
+error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 # ---------- 路径配置 ----------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +31,10 @@ BACKEND_DIR="$SCRIPT_DIR/backend"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 ENV_FILE="$BACKEND_DIR/.env"
 
-# ---------- 数据库配置（按需修改） ----------
+# ---------- 数据库配置 ----------
+# 默认 SQLite（零配置）。切换 MySQL：export DB_ENGINE=mysql 后运行，
+# 并确认下方账号/密码与服务器实际一致。
+DB_ENGINE="${DB_ENGINE:-sqlite}"   # sqlite | mysql
 DB_USER="root"
 DB_PASSWORD="password"
 DB_NAME="techhub"
@@ -26,17 +44,12 @@ DB_PORT="3306"
 # ---------- 架构检测 ----------
 ARCH="$(uname -m)"
 case "$ARCH" in
-  x86_64|amd64)  ARCH_LABEL="x86_64";  PY_ARCH="x86_64" ;;
-  aarch64|arm64) ARCH_LABEL="arm64";   PY_ARCH="aarch64" ;;
-  *)             ARCH_LABEL="$ARCH";   PY_ARCH="$ARCH" ;;
+  x86_64|amd64)  ARCH_LABEL="x86_64" ;;
+  aarch64|arm64) ARCH_LABEL="arm64" ;;
+  *)             ARCH_LABEL="$ARCH" ;;
 esac
-echo "[TechHub] 检测到 CPU 架构: $ARCH_LABEL"
-
-# ---------- 颜色输出 ----------
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; }
+info "检测到 CPU 架构: $ARCH_LABEL"
+info "数据库引擎: $DB_ENGINE"
 
 # ---------- 依赖检查：系统包 ----------
 check_system_deps() {
@@ -46,23 +59,29 @@ check_system_deps() {
   # Python 3
   if ! command -v python3 >/dev/null 2>&1; then missing+=(python3); fi
 
-  # MariaDB/MySQL 服务端（Debian/Ubuntu 系为 mariadb-server）
-  if ! systemctl is-active --quiet mariadb 2>/dev/null && \
-     ! systemctl is-active --quiet mysql 2>/dev/null; then
-    missing+=(mariadb-server)
+  # MariaDB/MySQL 服务端（仅 MySQL 模式需要）
+  if [ "$DB_ENGINE" = "mysql" ]; then
+    if ! systemctl is-active --quiet mariadb 2>/dev/null && \
+       ! systemctl is-active --quiet mysql 2>/dev/null && \
+       ! command -v mysqld >/dev/null 2>&1 && \
+       ! command -v mariadbd >/dev/null 2>&1; then
+      missing+=(mariadb-server)
+    fi
   fi
 
-  # Node.js (前端需要 18+)
+  # Node.js（前端需要 18+）
   if ! command -v node >/dev/null 2>&1; then missing+=(nodejs npm); fi
 
   if [ ${#missing[@]} -gt 0 ]; then
-    warn "缺少系统包: ${missing[*]}，尝试安装..."
+    warn "缺少系统包: ${missing[*]}，尝试安装（需要 root/sudo 权限）..."
     if command -v apt-get >/dev/null 2>&1; then
       sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
         "${missing[@]}" python3-venv python3-pip curl
     elif command -v yum >/dev/null 2>&1; then
-      sudo yum install -y "${missing[@]}" python3-pip nodejs npm
+      sudo yum install -y "${missing[@]}" python3-venv python3-pip nodejs npm
+    elif command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y "${missing[@]}" python3-venv python3-pip nodejs npm
     else
       error "不支持的包管理器，请手动安装: ${missing[*]}"
       exit 1
@@ -71,25 +90,34 @@ check_system_deps() {
   info "系统依赖 OK"
 }
 
-# ---------- 数据库初始化 ----------
+# ---------- 数据库初始化（仅 MySQL 模式） ----------
 setup_database() {
+  if [ "$DB_ENGINE" != "mysql" ]; then
+    info "使用 SQLite，跳过数据库服务检查"
+    return 0
+  fi
+
   info "检查 MariaDB/MySQL 服务..."
   if ! systemctl is-active --quiet mariadb 2>/dev/null && \
      ! systemctl is-active --quiet mysql 2>/dev/null; then
-    sudo systemctl start mariadb 2>/dev/null || sudo systemctl start mysql 2>/dev/null
+    sudo systemctl start mariadb 2>/dev/null || sudo systemctl start mysql 2>/dev/null || true
     sleep 2
   fi
 
   info "初始化数据库 ${DB_NAME} ..."
-  # 使用 unix_socket 认证的 root 执行（Debian/Ubuntu 默认）
+  # 优先尝试 unix_socket 认证的 root（Debian/Ubuntu 默认）
   if sudo mysql -e "SELECT 1" >/dev/null 2>&1; then
-    # 设置 root 密码（若尚未设置）
     sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}'; FLUSH PRIVILEGES;" 2>/dev/null || true
     sudo mysql -e "CREATE DATABASE IF NOT EXISTS ${DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+  elif mysql -u"$DB_USER" -p"$DB_PASSWORD" -h"$DB_HOST" -P"$DB_PORT" -e "SELECT 1" >/dev/null 2>&1; then
+    mysql -u"$DB_USER" -p"$DB_PASSWORD" -h"$DB_HOST" -P"$DB_PORT" \
+      -e "CREATE DATABASE IF NOT EXISTS ${DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
   else
-    # root 已设密码，直接用密码连接
-    mysql -u"$DB_USER" -p"$DB_PASSWORD" -h"$DB_HOST" -e "CREATE DATABASE IF NOT EXISTS ${DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null || \
-    error "无法连接数据库，请手动检查 MariaDB 状态"
+    error "无法连接数据库。请确认："
+    error "  1. MariaDB/MySQL 已安装并启动"
+    error "  2. 脚本顶部的 DB_USER / DB_PASSWORD 与实际一致（当前: ${DB_USER}/${DB_PASSWORD}）"
+    error "  或改用 SQLite：DB_ENGINE=sqlite bash start.sh"
+    exit 1
   fi
   info "数据库 ${DB_NAME} 就绪"
 }
@@ -105,22 +133,27 @@ setup_backend() {
     python3 -m venv .venv
   fi
 
-  # 使用阿里云镜像安装依赖（树莓派/国内网络友好）
+  # 安装依赖（阿里云镜像，国内友好）
   info "安装后端依赖（阿里云镜像）..."
   .venv/bin/pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/ -q
   .venv/bin/pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ -q
-  # MySQL 驱动 + alembic（requirements 之外的运行时依赖）
-  .venv/bin/pip install pymysql alembic -i https://mirrors.aliyun.com/pypi/simple/ -q
 
-  # 写入 .env（不存在时）
+  # 确定 DATABASE_URL
+  if [ "$DB_ENGINE" = "mysql" ]; then
+    DATABASE_URL_VALUE="mysql+pymysql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?charset=utf8mb4"
+  else
+    DATABASE_URL_VALUE="sqlite:///./techhub.db"
+  fi
+
+  # 生成 .env（不存在时）；已存在则尊重用户已有配置
   if [ ! -f "$ENV_FILE" ]; then
-    warn "未找到 .env，基于模板生成..."
+    warn "未找到 .env，基于当前配置生成..."
     cat > "$ENV_FILE" <<EOF
 # 运行环境：development / production
 ENV=development
 
-# 数据库连接串 (MySQL)
-DATABASE_URL=mysql+pymysql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?charset=utf8mb4
+# 数据库连接串
+DATABASE_URL=${DATABASE_URL_VALUE}
 
 # JWT 签名密钥
 SECRET_KEY=techhub-dev-secret-key-2026
@@ -134,14 +167,42 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://0.0.0.0:5173
 MAX_UPLOAD_SIZE=20971520
 EOF
     info ".env 已生成"
+  else
+    DATABASE_URL_VALUE="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+    info "使用已有 .env 配置（DATABASE_URL=$DATABASE_URL_VALUE）"
+  fi
+  export DATABASE_URL="$DATABASE_URL_VALUE"
+
+  info "后端依赖 OK"
+}
+
+# ---------- 数据库迁移 + 首次 seed ----------
+migrate_and_seed() {
+  cd "$BACKEND_DIR"
+  info "执行数据库迁移 (alembic upgrade head)..."
+  if ! .venv/bin/python -m alembic upgrade head; then
+    error "数据库迁移失败，无法连接数据库。请检查: $DATABASE_URL"
+    error "  - SQLite：确认 backend/ 目录可写"
+    error "  - MySQL：确认服务已启动、账号密码正确"
+    exit 1
   fi
 
-  # 检查 .env 中的 DATABASE_URL 是否仍是 SQLite（若是则替换为 MySQL）
-  if grep -q "sqlite:///" "$ENV_FILE" 2>/dev/null; then
-    warn "检测到 .env 仍使用 SQLite，切换为 MySQL..."
-    sed -i "s|^DATABASE_URL=.*|DATABASE_URL=mysql+pymysql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?charset=utf8mb4|" "$ENV_FILE"
-  fi
-  info "后端依赖 OK"
+  info "检查演示数据..."
+  .venv/bin/python - <<'PYEOF'
+from app.database import SessionLocal
+from app.models import User
+
+db = SessionLocal()
+try:
+    if db.query(User).count() == 0:
+        from app.seed import seed_all
+        seed_all()
+        print("[seed] 已初始化演示数据（admin/admin123, teacher/123456 等）")
+    else:
+        print("[seed] 数据库已有数据，跳过初始化")
+finally:
+    db.close()
+PYEOF
 }
 
 # ---------- esbuild 原生二进制完整性检查 ----------
@@ -151,7 +212,6 @@ EOF
 check_esbuild_binary() {
   cd "$FRONTEND_DIR"
 
-  # 平台包名映射：x86_64 -> @esbuild/linux-x64，arm64 -> @esbuild/linux-arm64
   local esbuild_pkg=""
   case "$ARCH_LABEL" in
     x86_64) esbuild_pkg="@esbuild/linux-x64" ;;
@@ -162,7 +222,6 @@ check_esbuild_binary() {
   local pkg_dir="node_modules/$esbuild_pkg"
   local bin_path="$pkg_dir/bin/esbuild"
 
-  # 检查二进制是否真实存在且为 ELF 可执行文件
   local binary_ok=false
   if [ -f "$bin_path" ]; then
     local magic
@@ -186,7 +245,6 @@ check_esbuild_binary() {
   tmp_dir="$(mktemp -d)"
   local tgz_path="$tmp_dir/pkg.tgz"
 
-  # 从官方 npm registry 下载对应平台 + 版本的原生包（镜像源可能缺失二进制）
   if command -v npm >/dev/null 2>&1; then
     (cd "$tmp_dir" && npm pack "$esbuild_pkg@$esbuild_version" \
       --registry=https://registry.npmjs.org >/dev/null 2>&1 && \
@@ -202,7 +260,6 @@ check_esbuild_binary() {
     return 1
   fi
 
-  # 用下载的真实 ELF 二进制覆盖缺失的包装脚本
   if [ -f "$tmp_dir/package/bin/esbuild" ]; then
     mkdir -p "$pkg_dir/bin"
     cp "$tmp_dir/package/bin/esbuild" "$bin_path"
@@ -236,7 +293,6 @@ setup_frontend() {
     npm install --registry=https://registry.npmmirror.com
   fi
 
-  # 检查并修复 esbuild 原生二进制（vite 启动的前提）
   check_esbuild_binary
   info "前端依赖 OK"
 }
@@ -250,21 +306,21 @@ start_services() {
 
   info "启动后端 (uvicorn :8080)..."
   cd "$BACKEND_DIR"
-  nohup .venv/bin/python run.py > /tmp/techhub_backend.log 2>&1 &
-  BACKEND_PID=$!
-  echo "  后端 PID: $BACKEND_PID，日志: /tmp/techhub_backend.log"
+  nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 > /tmp/techhub_backend.log 2>&1 &
+  echo "  后端日志: /tmp/techhub_backend.log"
 
   info "启动前端 (vite :5173)..."
   cd "$FRONTEND_DIR"
   nohup npm run dev -- --host 0.0.0.0 > /tmp/techhub_frontend.log 2>&1 &
-  FRONTEND_PID=$!
-  echo "  前端 PID: $FRONTEND_PID，日志: /tmp/techhub_frontend.log"
+  echo "  前端日志: /tmp/techhub_frontend.log"
 
   # 等待端口就绪
   info "等待服务启动..."
-  for i in $(seq 1 30); do
+  local ok=0
+  for ((i=0; i<30; i++)); do
     if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1 && \
        curl -sf -o /dev/null http://127.0.0.1:5173/ >/dev/null 2>&1; then
+      ok=1
       break
     fi
     sleep 1
@@ -272,16 +328,22 @@ start_services() {
 
   echo ""
   echo "======================================================"
-  echo "  TechHub 启动完成!"
-  echo "  前端:  http://localhost:5173/   (局域网: http://<本机IP>:5173/)"
-  echo "  后端:  http://localhost:8080/   (API 文档: /docs)"
-  echo "  数据库: ${DB_NAME} (${DB_USER}/${DB_PASSWORD})"
+  if [ "$ok" = "1" ]; then
+    echo "  TechHub 启动完成!"
+    echo "  前端:  http://localhost:5173/   (局域网: http://<本机IP>:5173/)"
+    echo "  后端:  http://localhost:8080/   (API 文档: /docs)"
+    echo "  数据库: $DB_ENGINE ($DATABASE_URL)"
+    echo ""
+    echo "  登录账号（seed 数据）："
+    echo "    管理员 admin / admin123"
+    echo "    教师   teacher / 123456"
+    echo "    学生   班级+姓名 / 123456"
+  else
+    echo "  服务可能未就绪，请查看日志排查："
+    echo "    后端: tail -50 /tmp/techhub_backend.log"
+    echo "    前端: tail -50 /tmp/techhub_frontend.log"
+  fi
   echo "======================================================"
-  echo ""
-  echo "  登录账号（seed 数据）："
-  echo "    管理员 admin / admin123"
-  echo "    教师   teacher / 123456"
-  echo "    学生   班级+姓名 / 123456"
   echo ""
 }
 
@@ -290,6 +352,7 @@ main() {
   check_system_deps
   setup_database
   setup_backend
+  migrate_and_seed
   setup_frontend
 
   if [ "${1:-}" = "--install-only" ]; then
