@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.database import Base, engine, run_migrations
+from app.database import run_migrations
 from app.routers import admin, attendance, auth, classlog, homework, meta, mobile, students, uploads, workbench
 
 # 基础日志配置
@@ -59,9 +59,8 @@ app.include_router(classlog.router)
 app.include_router(admin.router)
 app.include_router(uploads.router)
 
-# 启动时自动建表
-Base.metadata.create_all(bind=engine)
-# 执行增量迁移（新增字段/表）
+# 数据库迁移：Alembic 是 schema 的唯一来源，启动时迁移到最新版本。
+# 不再用 create_all 兜底建表，避免与 Alembic 交叉导致版本号/表结构不一致。
 run_migrations()
 
 

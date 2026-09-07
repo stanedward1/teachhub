@@ -16,22 +16,19 @@ Base = declarative_base()
 
 
 def run_migrations() -> None:
-    """执行 Alembic 增量迁移（若尚无迁移记录则跳过，交由 create_all 建表）。"""
-    try:
-        from alembic import command
-        from alembic.config import Config
+    """执行 Alembic 迁移到最新版本（schema 的唯一来源，失败即抛错）。
 
-        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        cfg = Config(os.path.join(backend_dir, "alembic.ini"))
-        cfg.set_main_option("script_location", os.path.join(backend_dir, "alembic"))
-        cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
-        command.upgrade(cfg, "head")
-    except Exception as e:  # noqa: BLE001 - 迁移失败不应阻断启动
-        import logging
+    注意：不再用 create_all 兜底建表。数据库 schema 由 Alembic 迁移链全权管理，
+    迁移失败会直接抛异常让启动失败（fail-fast），避免版本号与实际表结构不一致。
+    """
+    from alembic import command
+    from alembic.config import Config
 
-        logging.getLogger("techhub").warning(
-            "Alembic migration skipped/failed (will rely on create_all): %s", e
-        )
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg = Config(os.path.join(backend_dir, "alembic.ini"))
+    cfg.set_main_option("script_location", os.path.join(backend_dir, "alembic"))
+    cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+    command.upgrade(cfg, "head")
 
 
 def get_db():
