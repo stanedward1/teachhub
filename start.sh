@@ -69,8 +69,7 @@ check_system_deps() {
     fi
   fi
 
-  # Node.js（前端需要 18+）
-  if ! command -v node >/dev/null 2>&1; then missing+=(nodejs npm); fi
+  # Node.js 由 check_nodejs 单独处理（需用 nodesource 装高版本，apt 默认源版本过低）
 
   if [ ${#missing[@]} -gt 0 ]; then
     warn "缺少系统包: ${missing[*]}，尝试安装（需要 root/sudo 权限）..."
@@ -88,6 +87,51 @@ check_system_deps() {
     fi
   fi
   info "系统依赖 OK"
+}
+
+# ---------- Node.js 检查/安装（前端需要 18+，用 nodesource 装 20 LTS） ----------
+check_nodejs() {
+  local need_install=false
+  local node_major=0
+
+  # 检测 node + npm 是否都存在，且主版本 >= 18
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    need_install=true
+  else
+    node_major="$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+    if ! [[ "$node_major" =~ ^[0-9]+$ ]] || [ "$node_major" -lt 18 ]; then
+      need_install=true
+    fi
+  fi
+
+  if [ "$need_install" = true ]; then
+    warn "Node.js 缺失或版本过低（需要 18+），尝试安装 Node 20 LTS（需要 sudo 权限）..."
+    if command -v apt-get >/dev/null 2>&1; then
+      # Debian/Ubuntu
+      sudo apt-get update -y
+      sudo apt-get install -y curl ca-certificates
+      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+      sudo apt-get install -y nodejs
+    elif command -v dnf >/dev/null 2>&1; then
+      # Fedora / RHEL 8+
+      curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+      sudo dnf install -y nodejs
+    elif command -v yum >/dev/null 2>&1; then
+      # CentOS / RHEL 7
+      curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+      sudo yum install -y nodejs
+    else
+      error "无法自动安装 Node.js，请手动安装 Node 18+ 后重试"
+      exit 1
+    fi
+  fi
+
+  # 最终校验
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    error "Node.js 安装失败，请手动安装 Node 18+ 后重试"
+    exit 1
+  fi
+  info "Node.js $(node -v) / npm $(npm -v) OK"
 }
 
 # ---------- 数据库初始化（仅 MySQL 模式） ----------
@@ -299,10 +343,16 @@ setup_frontend() {
 
 # ---------- 启动服务 ----------
 start_services() {
-  # 清理旧进程
-  pkill -f "uvicorn.*8080" 2>/dev/null || true
-  pkill -f "vite.*5173" 2>/dev/null || true
-  sleep 1
+  # 清理旧进程（按进程名 + 端口多管齐下，避免端口被残留进程占用导致换端口/绑定失败）
+  pkill -f "uvicorn" 2>/dev/null || true
+  pkill -f "run.py" 2>/dev/null || true
+  pkill -f "vite" 2>/dev/null || true
+  pkill -f "npm run dev" 2>/dev/null || true
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k 8080/tcp 2>/dev/null || true
+    fuser -k 5173/tcp 2>/dev/null || true
+  fi
+  sleep 2
 
   info "启动后端 (uvicorn :8080)..."
   cd "$BACKEND_DIR"
@@ -350,6 +400,7 @@ start_services() {
 # ---------- 主流程 ----------
 main() {
   check_system_deps
+  check_nodejs
   setup_database
   setup_backend
   migrate_and_seed
