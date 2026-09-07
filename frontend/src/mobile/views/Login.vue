@@ -29,7 +29,7 @@
         </van-button>
       </div>
     </van-form>
-    <div class="m-login-hint">默认账号 admin / admin123</div>
+    <!-- <div class="m-login-hint">默认账号 admin / admin123</div> -->
   </div>
 </template>
 
