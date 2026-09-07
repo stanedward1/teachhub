@@ -13,6 +13,12 @@
       </div>
       <el-divider />
       <Markdown :content="assignment.content" />
+      <div v-if="assignment.attachments && assignment.attachments.length" class="attach-box">
+        <span class="attach-label">任务附件：</span>
+        <div v-for="(att, i) in assignment.attachments" :key="i" class="attach-link">
+          <el-link type="primary" :href="'/uploads/' + att.filepath" target="_blank">{{ att.filename }}</el-link>
+        </div>
+      </div>
     </div>
 
     <div class="page-card submit-card">
@@ -117,5 +123,19 @@ async function submit() {
 }
 .actions {
   text-align: right;
+}
+.attach-box {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+.attach-label {
+  color: #6b7280;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.attach-link {
+  margin: 4px 0;
 }
 </style>

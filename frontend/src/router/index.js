@@ -132,18 +132,17 @@ router.beforeEach((to) => {
     return { path: '/m/home' }
   }
 
-  // 学生端访问控制
-  if (to.meta.requiresStudent && (!hasToken || !isStudent())) {
+  // 学生端访问控制（教师/管理员可预览学生端，学生需登录）
+  if (to.meta.requiresStudent && (!hasToken || (!isStudent() && !isTeacher()))) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
   if (to.path === '/login' && hasToken && isStudent()) {
     return { path: '/' }
   }
-
-  // 已登录教师访问学生端时，跳转到后台
-  if (hasToken && isTeacher() && !to.path.startsWith('/admin') && !to.path.startsWith('/m')) {
+  if (to.path === '/login' && hasToken && isTeacher()) {
     return { path: '/admin' }
   }
+
   // 已登录学生访问后台/移动端时，跳转到学生端
   if (hasToken && isStudent() && (to.path.startsWith('/admin') || to.path.startsWith('/m'))) {
     return { path: '/' }

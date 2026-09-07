@@ -43,6 +43,17 @@
         <el-form-item label="内容" required>
           <MarkdownEditor v-model="form.content" :rows="8" />
         </el-form-item>
+        <el-form-item label="附件">
+          <div style="width: 100%">
+            <el-upload :show-file-list="false" :http-request="doUpload" multiple>
+              <el-button>上传附件</el-button>
+            </el-upload>
+            <div v-for="(att, i) in form.attachments" :key="i" class="attach-item">
+              <el-link type="primary" :href="'/uploads/' + att.filepath" target="_blank">{{ att.filename }}</el-link>
+              <el-button link type="danger" @click="removeAttachment(i)">移除</el-button>
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
@@ -56,7 +67,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
-import { homeworkApi, metaApi } from '../../api'
+import { homeworkApi, metaApi, uploadFile } from '../../api'
 
 const items = ref([])
 const classes = ref([])
@@ -65,7 +76,7 @@ const loading = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
-const form = reactive({ title: '', description: '', content: '', deadline: null, class_id: null, short_name: '' })
+const form = reactive({ title: '', description: '', content: '', deadline: null, class_id: null, short_name: '', attachments: [] })
 
 onMounted(async () => {
   const res = await metaApi.classes()
@@ -86,7 +97,7 @@ async function load() {
 
 function openCreate() {
   editing.value = null
-  Object.assign(form, { title: '', description: '', content: '', deadline: null, class_id: classId.value, short_name: '' })
+  Object.assign(form, { title: '', description: '', content: '', deadline: null, class_id: classId.value, short_name: '', attachments: [] })
   dialog.value = true
 }
 
@@ -98,9 +109,20 @@ function openEdit(row) {
     content: row.content,
     deadline: row.deadline,
     class_id: row.class_id,
-    short_name: row.short_name
+    short_name: row.short_name,
+    attachments: (row.attachments || []).map(a => ({ filename: a.filename, filepath: a.filepath }))
   })
   dialog.value = true
+}
+
+async function doUpload({ file }) {
+  const res = await uploadFile(file)
+  form.attachments.push({ filename: res.filename, filepath: res.filepath })
+  ElMessage.success('附件上传成功')
+}
+
+function removeAttachment(i) {
+  form.attachments.splice(i, 1)
 }
 
 async function save() {
@@ -129,3 +151,12 @@ async function remove(row) {
   load()
 }
 </script>
+
+<style scoped>
+.attach-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+</style>

@@ -7,6 +7,7 @@ from app.database import get_db
 from app.deps import get_current_user, require_student, require_teacher
 from app.models import (
     Assignment,
+    AssignmentAttachment,
     Classroom,
     ExcellentWork,
     Student,
@@ -54,6 +55,24 @@ def _ensure_submission_operable(db: Session, submission: Submission):
             ensure_student_operable(db, student.id)
 
 
+def _attachments_out(a: Assignment) -> list:
+    """把作业附件转成对外结构 [{id, filename, filepath}]。"""
+    return [
+        {"id": att.id, "filename": att.filename, "filepath": att.filepath}
+        for att in a.attachments
+    ]
+
+
+def _sync_attachments(a: Assignment, attachments) -> None:
+    """同步作业附件（传入 [{filename, filepath}, ...]，整体替换旧附件）。"""
+    a.attachments.clear()
+    for att in attachments or []:
+        if isinstance(att, dict) and att.get("filename") and att.get("filepath"):
+            a.attachments.append(
+                AssignmentAttachment(filename=att["filename"], filepath=att["filepath"])
+            )
+
+
 # ---------------- 作业任务 ----------------
 @router.get("/assignments")
 def list_assignments(
@@ -78,6 +97,7 @@ def list_assignments(
         creator = db.get(User, a.created_by)
         d["class_name"] = cls.name if cls else None
         d["creator_name"] = creator.name if creator else None
+        d["attachment_count"] = len(a.attachments)
         d["submission_count"] = (
             db.query(Submission).filter(Submission.assignment_id == a.id).count()
         )
@@ -108,6 +128,7 @@ def get_assignment(
     creator = db.get(User, a.created_by)
     d["class_name"] = cls.name if cls else None
     d["creator_name"] = creator.name if creator else None
+    d["attachments"] = _attachments_out(a)
     return d
 
 
@@ -135,11 +156,14 @@ def create_assignment(payload: dict, user: User = Depends(require_teacher), db: 
         class_id=class_id,
         short_name=payload.get("short_name") or title,
     )
+    _sync_attachments(a, payload.get("attachments"))
     db.add(a)
     audit(db, user, "create_assignment", target=f"布置作业", class_id=class_id)
     db.commit()
     db.refresh(a)
-    return to_dict(a)
+    d = to_dict(a)
+    d["attachments"] = _attachments_out(a)
+    return d
 
 
 @router.put("/assignments/{assignment_id}")
@@ -154,6 +178,8 @@ def update_assignment(
     for field in ("title", "description", "content", "deadline", "short_name"):
         if field in payload and payload[field] is not None:
             setattr(a, field, payload[field])
+    if "attachments" in payload:
+        _sync_attachments(a, payload["attachments"])
     if payload.get("class_id") and db.get(Classroom, payload["class_id"]):
         # 毕业限制：不可将作业转移到已毕业班级
         ensure_class_operable(db, payload["class_id"])
@@ -161,7 +187,9 @@ def update_assignment(
     audit(db, user, "update_assignment", target=f"作业#{assignment_id}", class_id=a.class_id)
     db.commit()
     db.refresh(a)
-    return to_dict(a)
+    d = to_dict(a)
+    d["attachments"] = _attachments_out(a)
+    return d
 
 
 @router.delete("/assignments/{assignment_id}")
