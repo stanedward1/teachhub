@@ -160,7 +160,7 @@ docs: 补充架构设计文档
 
 - [ ] 代码可无报错运行（后端 `pytest`，前端 `npm run build`）
 - [ ] 无硬编码密钥、密码
-- [ ] 涉及数据库的改动已更新 `run_migrations()`
+- [ ] 涉及数据库的改动已新增 Alembic 迁移（`backend/alembic/versions/`）
 - [ ] 新增接口已挂权限依赖
 - [ ] 新增前端页面已在路由中注册
 

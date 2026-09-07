@@ -29,6 +29,7 @@ TechHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 - 班主任与科任老师在**学生管理、成绩、积分、考勤、家校沟通、谈心、返校、表现、评语、课表、活动、座位、周报、看板、作业提交**中，均可查看/操作**自己所属班级**的数据
 - 教师只能查看/批改自己所属班级的作业与提交，管理员可查看所有班级的作业与提交
 - 教师不能修改其他教师/管理员的姓名、角色、班级归属，不能重置其密码、删除其账号
+- 账号管理与数据看板对教师展示**班主任/科任身份标识**；审计日志按「管理员全部 / 班主任本班 / 科任不可见」分级
 - 管理员拥有全部权限，可管理所有班级和学生，并可给班级配置班主任与科任老师
 
 ### 🎯 班级联动筛选
@@ -41,7 +42,7 @@ TechHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 
 **1. 在线作业提交平台（学生端）**
 - 学生登录（班级 + 姓名 + 密码）/ 自助注册
-- 查看教师布置的 Markdown 任务，截止时间提醒
+- 查看教师布置的 Markdown 任务，截止时间提醒；任务附件（多个）在线下载
 - 提交作业：Markdown 即时渲染编辑器 + 附件上传
 - 优秀作品墙：教师评选优秀作品，学生互评，分页展示
 - 编程练习推荐：热门 OJ 平台 + C 语言入门教程
@@ -122,10 +123,10 @@ techhub/
 │   │   ├── utils.py            # 工具函数
 │   │   ├── audit.py            # 操作审计日志 + 批量查询
 │   │   ├── seed.py             # 假数据种子（52 学生 + 完整业务数据）
-│   │   ├── models/             # 数据模型（按域分组，33 张表）
+│   │   ├── models/             # 数据模型（按域分组，34 张表）
 │   │   │   ├── user.py         #   User
 │   │   │   ├── school.py       #   School / Classroom / ClassTeacher / Student
-│   │   │   ├── homework.py     #   Assignment / Submission / ExcellentWork / WorkComment
+│   │   │   ├── homework.py     #   Assignment / AssignmentAttachment / Submission / ExcellentWork / WorkComment / SubmissionComment
 │   │   │   ├── workbench.py    #   Score / Leave / Point / Communication / Resource / Exam / Seat / Setting / ImportHistory / StudentProfileTag / WeeklyReport / StudentBoardHistory
 │   │   │   ├── classlog.py     #   WorkLog / Plan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
 │   │   │   └── operation_log.py
@@ -213,7 +214,7 @@ docker compose down -v         # 停止并删除数据卷（清空数据）
 
 ### 🚀 一键启动（Linux 本机）
 
-项目根目录提供 `start.sh` 一键脚本，自动完成：**架构检测（x86_64 / arm64）→ 安装系统依赖 → 初始化 MySQL/MariaDB → 安装后端依赖（阿里云镜像）→ 安装前端依赖（npmmirror 镜像）→ 启动前后端服务**。
+项目根目录提供 `start.sh` 一键脚本，自动完成：**架构检测（x86_64 / arm64）→ 安装系统依赖与 Node.js → 初始化数据库（默认 SQLite，可切 MySQL）→ 安装后端依赖（阿里云镜像）→ 安装前端依赖（npmmirror 镜像）→ 数据库迁移与首次 seed → 启动前后端服务**。
 
 ```bash
 cd techhub
@@ -228,10 +229,11 @@ cd techhub
 启动完成后：
 - 前端：http://localhost:5173 （局域网设备用 `http://<本机IP>:5173/`）
 - 后端 API 文档：http://localhost:8080/docs
-- 数据库：默认 `techhub`，账号 `root / longbiu20260824`（可在 `start.sh` 顶部修改）
+- 数据库：默认 **SQLite**（`backend/techhub.db`，零配置）；如需 MySQL/MariaDB，运行 `DB_ENGINE=mysql bash start.sh` 并在 `start.sh` 顶部配置账号密码
 
-> **说明**：`start.sh` 使用 MariaDB 作为 MySQL 兼容数据库（Debian/Ubuntu 默认包），并自动处理
-> Python 虚拟环境、`.env` 配置（MySQL 连接串）、前端 node_modules 平台差异（x86/ARM 原生二进制）。
+> **说明**：`start.sh` 自动检测 CPU 架构（x86_64 / arm64）、安装系统依赖与 Node.js 20、
+> 创建 Python 虚拟环境、生成 `.env`、执行数据库迁移（Alembic）与首次 seed、最后启动前后端；
+> 前端 node_modules 平台差异（x86/ARM esbuild 原生二进制）自动修复。
 
 ### 环境要求
 

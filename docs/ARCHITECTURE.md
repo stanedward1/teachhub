@@ -1,6 +1,6 @@
 # TechHub 架构设计文档
 
-> 版本：2.0 ｜ 更新：2026-08-24 ｜ 适用对象：后端 / 前端 / 测试 / 运维
+> 版本：2.1 ｜ 更新：2026-09-07 ｜ 适用对象：后端 / 前端 / 测试 / 运维
 
 ## 1. 项目定位
 
@@ -50,7 +50,7 @@ techhub/
 │   │   ├── models/            # SQLAlchemy 模型（按域分组）
 │   │   │   ├── user.py        #   User
 │   │   │   ├── school.py      #   School / Classroom / ClassTeacher / Student
-│   │   │   ├── homework.py    #   Assignment / Submission / ExcellentWork / WorkComment
+│   │   │   ├── homework.py    #   Assignment / AssignmentAttachment / Submission / ExcellentWork / WorkComment / SubmissionComment
 │   │   │   ├── workbench.py   #   Score / Leave / Point / Communication / Resource / Exam / Seat / Setting / ImportHistory
 │   │   │   ├── classlog.py    #   WorkLog / ClassPlan / TeacherPlan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
 │   │   │   └── operation_log.py
@@ -115,13 +115,13 @@ techhub/
 
 ## 5. 数据模型概览
 
-### 5.1 表清单（33 张表）
+### 5.1 表清单（34 张表）
 
 | 域 | 表 | 关键字段 |
 | --- | --- | -------- |
 | 认证 | `users` | username、password_hash、role、class_id、name |
 | 基础 | `schools` / `classrooms` / `class_teachers` / `students` | 学校/班级/班级教师（班主任+科任）/学生档案（student_type 通学/寄宿） |
-| 作业 | `assignments` / `submissions` / `submission_comments` / `excellent_works` / `work_comments` | 任务/提交/提交点评/优秀/评论 |
+| 作业 | `assignments` / `assignment_attachments` / `submissions` / `submission_comments` / `excellent_works` / `work_comments` | 任务/任务附件（一对多）/提交/提交点评/优秀/评论 |
 | 工作台 | `scores` / `leaves` / `attendance` / `points` / `communications` / `resources` / `exams` / `seats` / `settings` / `student_profile_tags` / `weekly_reports` / `student_board_history` | 成绩/请假/考勤点名/积分/沟通/资源/试卷/座位/设置/画像标签/周报/住宿历史 |
 | 日志 | `work_logs` / `class_plans` / `teacher_plans` / `schedules` / `activities` / `talks` / `return_records` / `performances` / `student_comments` | 日志/计划/课表/活动/谈心/返校/表现/评语 |
 | 审计 | `operation_logs` | 操作审计日志（含 class_id 班级维度） |
@@ -135,7 +135,7 @@ techhub/
 - `users.class_id + users.name` → 学生账号唯一标识（取代原 username 唯一约束）
 - `import_history.user_id` → `users.id`：导入操作人追溯
 
-> 说明：模型刻意**不定义 ORM relationship**，关联查询通过 `db.get()` / `filter()` 手动完成，以避免模块间循环 import。
+> 说明：模型大多**不定义 ORM relationship**，关联查询通过 `db.get()` / `filter()` 手动完成，以避免模块间循环 import；唯一例外是同文件内的 `Assignment ↔ AssignmentAttachment`（一对多，用 `relationship` + `cascade="all, delete-orphan"` 实现附件级联删除）。
 
 ## 6. API 约定
 
@@ -207,7 +207,7 @@ docker compose up -d --build
 ## 9. 数据库迁移策略
 
 - **Alembic 为 schema 唯一来源**：`alembic upgrade head` 一次性完成建表/加列/加索引
-- 本地启动 `main.py` 时会 `create_all`（兜底建表）+ `run_migrations()`（执行 `alembic upgrade head`）
+- 本地启动 `main.py` 时执行 `run_migrations()`（`alembic upgrade head`，失败即抛错 fail-fast）；**不再**用 `create_all` 兜底建表，避免与 Alembic 交叉导致版本号/表结构不一致
 - Docker 启动由 `docker-entrypoint.py` 显式先跑 `alembic upgrade head`，再按需 seed
 - 模型变更必须配套新增 Alembic revision（`backend/alembic/versions/`），保证「迁移链 = 模型 schema」
 - 新增字段/表后，用 `alembic revision --autogenerate` 生成迁移脚本并人工核对
@@ -218,7 +218,7 @@ docker compose up -d --build
 | ---- | ---- | ---- |
 | 后端框架 | FastAPI（弃用原 Express） | 原生 OpenAPI、类型提示、异步支持 |
 | 前端框架 | Vue3（弃用原 React） | 与班级日志系统一致，Element Plus 生态成熟 |
-| ORM 无 relationship | 手动查询 | 避免循环 import，换取模型文件解耦 |
+| ORM 尽量无 relationship | 手动查询 | 避免循环 import，换取模型文件解耦（仅同文件的 Assignment↔Attachment 用 relationship） |
 | 数据库 | SQLite | 单文件易备份，满足单校规模；预留迁移路径 |
 | 认证 | JWT + bcrypt | 无状态、前后端分离友好 |
 | 密码哈希 | bcrypt（弃用 passlib） | 规避 passlib/bcrypt 4.x 兼容问题 |
