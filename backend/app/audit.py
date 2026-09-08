@@ -3,6 +3,7 @@
 - 批量查询：消除列表接口的 N+1 问题（一次 IN 查询，替代循环内逐条 db.get）。
 - 审计：关键写操作记录到 operation_logs 表。
 """
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.models import Classroom, OperationLog, Student, User
@@ -17,6 +18,26 @@ def active_student_id_query(db: Session):
 def active_classroom_id_query(db: Session):
     """未毕业班级 id 子查询，供 `Model.class_id.in_(...)` 过滤使用。"""
     return db.query(Classroom.id).filter(Classroom.is_graduated.is_(False))
+
+
+def batch_student_avatar_map(db: Session, student_ids) -> dict:
+    """{student_id: avatar}，一次 join 查询避免 N+1。
+
+    头像统一存于 users.avatar（学生登录账号），通过 class_id + name 关联到学生档案。
+    """
+    ids = [i for i in (student_ids or []) if i is not None]
+    if not ids:
+        return {}
+    rows = (
+        db.query(Student.id, User.avatar)
+        .join(
+            User,
+            and_(User.class_id == Student.class_id, User.name == Student.name, User.role == "student"),
+        )
+        .filter(Student.id.in_(ids))
+        .all()
+    )
+    return {sid: avatar for sid, avatar in rows}
 
 
 def batch_student_map(db: Session, student_ids) -> dict:

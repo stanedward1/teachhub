@@ -20,8 +20,9 @@ from app.models import (
     Submission,
     User,
 )
-from app.permissions import filter_students_by_teacher, get_student_account, is_any_admin, is_student_in_teacher_classes
-from app.routers.students import _student_out
+from app.permissions import filter_students_by_teacher, is_any_admin, is_student_in_teacher_classes
+from app.routers.students import _student_out, _students_out
+from app.utils import clamp_score
 
 router = APIRouter(tags=["移动端"])
 
@@ -58,7 +59,7 @@ def mobile_students(
             Student.name.contains(keyword) | Student.student_no.contains(keyword)
         )
     rows = q.order_by(Student.id).limit(200).all()
-    items = [_light_student(_student_out(db, s)) for s in rows]
+    items = [_light_student(d) for d in _students_out(db, rows)]
     return {"items": items, "total": len(items)}
 
 
@@ -124,29 +125,25 @@ def mobile_student_overview(
         ],
     }
 
-    # 作业（技能维度优秀率）
-    student_user = get_student_account(db, student.class_id, student.name)
-    if student_user:
-        submissions = db.query(Submission).filter(Submission.student_id == student_user.id).all()
-        sub_ids = [s.id for s in submissions]
-        excellent_ids = {
-            ew.submission_id
-            for ew in db.query(ExcellentWork.submission_id)
-            .filter(ExcellentWork.submission_id.in_(sub_ids))
-            .all()
-        }
-        excellent_count = sum(1 for s in submissions if s.id in excellent_ids)
-        skill = round(excellent_count / len(submissions) * 100, 1) if submissions else 0
-    else:
-        skill = 0
+    # 作业（技能维度优秀率）：submissions.student_id 指向 students.id，直接用 student.id
+    submissions = db.query(Submission).filter(Submission.student_id == student.id).all()
+    sub_ids = [s.id for s in submissions]
+    excellent_ids = {
+        ew.submission_id
+        for ew in db.query(ExcellentWork.submission_id)
+        .filter(ExcellentWork.submission_id.in_(sub_ids))
+        .all()
+    }
+    excellent_count = sum(1 for s in submissions if s.id in excellent_ids)
+    skill = round(excellent_count / len(submissions) * 100, 1) if submissions else 0
 
     # 五维雷达（与桌面端画像同口径）
     radar = {
-        "academic": min(100, round(avg, 1)) if scores else 50,
-        "moral": min(100, round(50 + point_summary["total"] * 2, 1)) if points else 50,
-        "attendance": min(100, round(100 - leave_summary["total"] * 5, 1)),
-        "activity": min(100, round(50 + performance_summary["positive"] * 5, 1)),
-        "skill": min(100, round(skill, 1)),
+        "academic": clamp_score(round(avg, 1)) if scores else 50,
+        "moral": clamp_score(round(50 + point_summary["total"] * 2, 1)) if points else 50,
+        "attendance": clamp_score(round(100 - leave_summary["total"] * 5, 1)),
+        "activity": clamp_score(round(50 + performance_summary["positive"] * 5, 1)),
+        "skill": clamp_score(round(skill, 1)),
     }
 
     tags = [

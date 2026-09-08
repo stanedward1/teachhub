@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -12,7 +12,7 @@ class WorkLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
-    date = Column(String(20))
+    date = Column(Date)
     content = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -96,7 +96,7 @@ class ReturnRecord(Base):
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
-    return_date = Column(String(20))
+    return_date = Column(Date)
     reason = Column(String(255))
     note = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

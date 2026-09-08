@@ -10,7 +10,7 @@
 
 import json
 import random
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from faker import Faker
 
@@ -209,7 +209,7 @@ def seed_all():
                     class_id=classroom.id,
                     name=name,
                     gender=gender,
-                    birth_date=f"20{random.randint(6, 9):02d}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}",
+                    birth_date=date(2000 + random.randint(6, 9), random.randint(1, 12), random.randint(1, 28)),
                     student_no=student_no,
                     major=classroom.major,
                     parent_name=fake.name(),
@@ -336,15 +336,15 @@ def seed_all():
                 db.add(Leave(
                     student_id=s.id,
                     reason=random.choice(LEAVE_REASONS),
-                    start_date=leave_date.strftime("%Y-%m-%d"),
-                    end_date=(leave_date + timedelta(days=random.randint(0, 2))).strftime("%Y-%m-%d"),
+                    start_date=leave_date.date(),
+                    end_date=(leave_date + timedelta(days=random.randint(0, 2))).date(),
                     status=random.choice(["登记", "已销假"]),
                     created_at=leave_date,
                 ))
         # 近 7 天每日请假（确保看板折线图有数据）
         for day_offset in range(7):
             day = now - timedelta(days=day_offset)
-            day_str = day.strftime("%Y-%m-%d")
+            day_str = day.date()
             count = random.randint(0, 3)
             for _ in range(count):
                 s = random.choice(students)
@@ -456,7 +456,7 @@ def seed_all():
             day = now - timedelta(days=i)
             db.add(WorkLog(
                 teacher_id=teacher.id if i < 20 else teacher2.id,
-                date=day.strftime("%Y-%m-%d"),
+                date=day.date(),
                 content=f"## 今日工作\n\n- 批改作业（{random.randint(8, 15)} 份）\n- 与 {random.randint(1, 3)} 名学生谈心\n- 备课：{random.choice(SUBJECTS)}\n\n## 班级情况\n\n- 出勤：正常\n- 卫生：{random.choice(['良好','优秀','合格'])}\n\n## 明日计划\n\n- 检查班级卫生\n- {random.choice(['组织主题班会','批改单元测验','准备技能竞赛','整理班级档案'])}",
             ))
         db.commit()
@@ -514,7 +514,7 @@ def seed_all():
             days_ago = random.randint(1, 30)
             db.add(ReturnRecord(
                 student_id=s.id,
-                return_date=(now - timedelta(days=days_ago)).strftime("%Y-%m-%d"),
+                return_date=(now - timedelta(days=days_ago)).date(),
                 reason=random.choice(["周末返校", "假期返校", "实习返校"]),
                 note=random.choice(["正常", "按时到校", "略有延迟"]),
             ))
@@ -570,8 +570,8 @@ def seed_all():
         # ===== 周报 =====
         for classroom in classrooms[:2]:
             for week_offset in range(3):
-                week_start = (now - timedelta(days=7 * (week_offset + 1))).strftime("%Y-%m-%d")
-                week_end = (now - timedelta(days=7 * week_offset)).strftime("%Y-%m-%d")
+                week_start = (now - timedelta(days=7 * (week_offset + 1))).date()
+                week_end = (now - timedelta(days=7 * week_offset)).date()
                 class_students = [s for s in students if s.class_id == classroom.id]
                 top_names = ", ".join(random.sample([s.name for s in class_students], min(3, len(class_students))))
                 content = f"""# {classroom.name} 班级周报

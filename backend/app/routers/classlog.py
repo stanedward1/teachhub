@@ -25,7 +25,7 @@ from app.audit import (
     active_student_id_query,
     active_classroom_id_query,
 )
-from app.utils import to_dict, normalize_page
+from app.utils import to_dict, normalize_page, parse_date
 from app.permissions import (
     is_any_admin,
     get_teacher_class_ids,
@@ -87,7 +87,7 @@ def list_work_logs(page: int = 1, page_size: int = 20, user: User = Depends(get_
 def create_work_log(payload: dict, user=Depends(dep), db: Session = Depends(get_db)):
     x = WorkLog(
         teacher_id=user.id,
-        date=payload.get("date"),
+        date=parse_date(payload.get("date")),
         content=payload.get("content", ""),
     )
     db.add(x)
@@ -104,9 +104,10 @@ def update_work_log(log_id: int, payload: dict, user: User = Depends(get_current
         raise HTTPException(status_code=404, detail="记录不存在")
     if not is_any_admin(user) and x.teacher_id != user.id:
         raise HTTPException(status_code=403, detail="无权操作他人的日志")
-    for f in ("date", "content"):
-        if f in payload and payload[f] is not None:
-            setattr(x, f, payload[f])
+    if payload.get("date") is not None:
+        x.date = parse_date(payload["date"])
+    if payload.get("content") is not None:
+        x.content = payload["content"]
     audit(db, user, "update_work_log", target=f"日志#{log_id}")
     db.commit()
     db.refresh(x)
@@ -388,7 +389,7 @@ def create_return_record(payload: dict, user: User = Depends(get_current_user), 
     _check_student_permission(db, user, payload["student_id"])
     x = ReturnRecord(
         student_id=payload["student_id"],
-        return_date=payload.get("return_date"),
+        return_date=parse_date(payload.get("return_date")),
         reason=payload.get("reason"),
         note=payload.get("note"),
     )

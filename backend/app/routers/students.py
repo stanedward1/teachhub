@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user, require_teacher
-from app.audit import audit
+from app.audit import audit, batch_student_avatar_map
 from app.models import Classroom, ClassTeacher, School, Student, StudentBoardHistory, User
 from app.security import hash_password, validate_password_strength
-from app.utils import to_dict, normalize_page
+from app.utils import to_dict, normalize_page, parse_date
 from app.permissions import (
     is_any_admin,
     is_platform_admin,
@@ -29,14 +29,28 @@ from app.permissions import (
 router = APIRouter(tags=["基础数据"])
 
 
+def _students_out(db: Session, rows: list) -> list:
+    """批量序列化学生：一次查班级名 + 一次查头像，避免 N+1。"""
+    if not rows:
+        return []
+    class_ids = {s.class_id for s in rows if s.class_id}
+    class_map = (
+        {c.id: c.name for c in db.query(Classroom).filter(Classroom.id.in_(class_ids)).all()}
+        if class_ids else {}
+    )
+    avatar_map = batch_student_avatar_map(db, [s.id for s in rows])
+    items = []
+    for s in rows:
+        d = to_dict(s)
+        d["class_name"] = class_map.get(s.class_id)
+        d["avatar"] = avatar_map.get(s.id)
+        items.append(d)
+    return items
+
+
 def _student_out(db: Session, s: Student) -> dict:
-    d = to_dict(s)
-    cls = db.get(Classroom, s.class_id) if s.class_id else None
-    d["class_name"] = cls.name if cls else None
-    # 附加学生头像（从 User 表获取）
-    user = get_student_account(db, s.class_id, s.name)
-    d["avatar"] = user.avatar if user else None
-    return d
+    """单个学生序列化（含班级名 + 头像）。"""
+    return _students_out(db, [s])[0]
 
 
 # ---------------- 学校 ----------------
@@ -359,7 +373,7 @@ def list_students(
         .limit(page_size)
         .all()
     )
-    return {"items": [_student_out(db, s) for s in rows], "total": total}
+    return {"items": _students_out(db, rows), "total": total}
 
 
 @router.post("/api/students")
@@ -392,7 +406,7 @@ def create_student(payload: dict, user: User = Depends(require_teacher), db: Ses
         class_id=class_id,
         name=name,
         gender=payload.get("gender", "男"),
-        birth_date=payload.get("birth_date"),
+        birth_date=parse_date(payload.get("birth_date")),
         student_no=student_no,
         major=payload.get("major"),
         parent_name=payload.get("parent_name"),
@@ -443,7 +457,7 @@ def update_student(student_id: int, payload: dict, user: User = Depends(get_curr
         if f in payload and payload[f] is not None:
             if f == "class_id" and not is_any_admin(user):
                 raise HTTPException(status_code=403, detail="教师无权修改学生班级")
-            setattr(s, f, payload[f])
+            setattr(s, f, parse_date(payload[f]) if f == "birth_date" else payload[f])
     # 记录寄宿/通学状态变更
     new_type = payload.get("student_type")
     if new_type and new_type != old_type:
@@ -594,8 +608,8 @@ def board_type_stats(class_id: int | None = None, user: User = Depends(get_curre
     return {
         "day_count": len(day),
         "boarding_count": len(boarding),
-        "day": [_student_out(db, s) for s in day],
-        "boarding": [_student_out(db, s) for s in boarding],
+        "day": _students_out(db, day),
+        "boarding": _students_out(db, boarding),
     }
 
 

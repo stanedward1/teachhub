@@ -356,12 +356,7 @@ def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
                 class_name = cls.name if cls else ""
             duration = 1
             if l.start_date and l.end_date:
-                try:
-                    s = datetime.strptime(l.start_date, "%Y-%m-%d")
-                    e = datetime.strptime(l.end_date, "%Y-%m-%d")
-                    duration = (e - s).days + 1
-                except ValueError:
-                    pass
+                duration = (l.end_date - l.start_date).days + 1
             items.append({
                 "name": stu.name if stu else "未知",
                 "class_name": class_name,
@@ -478,7 +473,7 @@ def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
         "total": att_total,
         "trend": [
             {
-                "date": d[5:],
+                "date": d.strftime("%m-%d"),
                 "rate": round(day["出勤"] / sum(day.values()) * 100, 1) if sum(day.values()) else 0,
             }
             for d, day in sorted(att_trend_map.items())

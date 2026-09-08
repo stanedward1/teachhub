@@ -181,6 +181,28 @@ def get_student_account(db: Session, class_id: int, name: str) -> Optional[User]
     )
 
 
+def get_student_by_account(db: Session, user: User) -> Optional[Student]:
+    """通过学生登录账号（User）定位其学生档案（Student），不存在返回 None。"""
+    if not user or user.class_id is None:
+        return None
+    return (
+        db.query(Student)
+        .filter(Student.class_id == user.class_id, Student.name == user.name)
+        .first()
+    )
+
+
+def get_student_avatar(db: Session, student) -> Optional[str]:
+    """通过学生档案定位其登录账号头像（users.avatar），不存在返回 None。
+
+    头像统一存于 users.avatar，students 表不再冗余存储。
+    """
+    if not student:
+        return None
+    u = get_student_account(db, student.class_id, student.name)
+    return u.avatar if u else None
+
+
 def ensure_student_access(db: Session, user: User, student_id: int) -> None:
     """校验当前用户可操作某学生：管理员放行，教师须为该生所属班级的班主任/科任。"""
     if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):

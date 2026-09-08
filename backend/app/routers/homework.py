@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.audit import batch_user_map, audit
+from app.audit import batch_student_avatar_map, batch_student_map, audit
 from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user, require_student, require_teacher
@@ -23,6 +23,8 @@ from app.permissions import (
     is_any_admin,
     ensure_class_operable,
     ensure_student_operable,
+    get_student_avatar,
+    get_student_by_account,
     get_teacher_class_ids,
     is_teacher_class_owner,
 )
@@ -46,17 +48,7 @@ def _check_teacher_assignment_access(db: Session, user: User, assignment: Assign
 
 def _ensure_submission_operable(db: Session, submission: Submission):
     """校验提交对应的学生是否可被教师操作（退学/毕业限制）。"""
-    stu_user = db.get(User, submission.student_id)
-    assignment = db.get(Assignment, submission.assignment_id)
-    class_id = assignment.class_id if assignment else None
-    if stu_user and class_id:
-        student = (
-            db.query(Student)
-            .filter(Student.class_id == class_id, Student.name == stu_user.name)
-            .first()
-        )
-        if student:
-            ensure_student_operable(db, student.id)
+    ensure_student_operable(db, submission.student_id)
 
 
 def _attachments_out(a: Assignment) -> list:
@@ -103,6 +95,8 @@ def list_assignments(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # 学生角色：预取学生档案，用于判断是否已提交
+    stu = get_student_by_account(db, user) if user.role == "student" else None
     q = db.query(Assignment)
     if user.role == "student":
         q = q.filter(Assignment.class_id == user.class_id)
@@ -124,10 +118,10 @@ def list_assignments(
         d["submission_count"] = (
             db.query(Submission).filter(Submission.assignment_id == a.id).count()
         )
-        if user.role == "student":
+        if stu:
             d["my_submitted"] = (
                 db.query(Submission)
-                .filter(Submission.assignment_id == a.id, Submission.student_id == user.id)
+                .filter(Submission.assignment_id == a.id, Submission.student_id == stu.id)
                 .count()
                 > 0
             )
@@ -251,10 +245,14 @@ def list_submissions(
     _check_teacher_assignment_access(db, user, a)
     q = db.query(Submission).filter(Submission.assignment_id == assignment_id)
     if user.role == "student":
-        q = q.filter(Submission.student_id == user.id)
+        stu = get_student_by_account(db, user)
+        if not stu:
+            return {"items": [], "total": 0}
+        q = q.filter(Submission.student_id == stu.id)
     rows = q.order_by(Submission.created_at.desc(), Submission.id.desc()).all()
-    # 批量查询，避免 N+1
-    uid_map = batch_user_map(db, [s.student_id for s in rows])
+    # 批量查询，避免 N+1（姓名/学号 + 头像各一次）
+    stu_map = batch_student_map(db, [s.student_id for s in rows])
+    avatar_map = batch_student_avatar_map(db, [s.student_id for s in rows])
     sid_list = [s.id for s in rows]
     excellent_ids = {
         e.submission_id
@@ -265,9 +263,9 @@ def list_submissions(
     items = []
     for s in rows:
         d = to_dict(s)
-        info = uid_map.get(s.student_id)
+        info = stu_map.get(s.student_id)
         d["student_name"] = info["name"] if info else None
-        d["student_avatar"] = info["avatar"] if info else None
+        d["student_avatar"] = avatar_map.get(s.student_id)
         d["is_excellent"] = s.id in excellent_ids
         items.append(d)
     return {"items": items, "total": len(items)}
@@ -286,13 +284,15 @@ def get_submission(
     a = db.get(Assignment, s.assignment_id)
     _check_student_access(a, user)
     _check_teacher_assignment_access(db, user, a)
-    if user.role == "student" and s.student_id != user.id:
-        raise HTTPException(status_code=403, detail="无权查看该提交")
+    if user.role == "student":
+        stu_me = get_student_by_account(db, user)
+        if not stu_me or s.student_id != stu_me.id:
+            raise HTTPException(status_code=403, detail="无权查看该提交")
 
     d = to_dict(s)
-    stu = db.get(User, s.student_id)
+    stu = db.get(Student, s.student_id)
     d["student_name"] = stu.name if stu else None
-    d["student_avatar"] = stu.avatar if stu else None
+    d["student_avatar"] = get_student_avatar(db, stu)
     d["is_excellent"] = (
         db.query(ExcellentWork).filter(ExcellentWork.submission_id == submission_id).first() is not None
     )
@@ -342,7 +342,7 @@ def add_submission_comment(
         score=score,
     )
     db.add(c)
-    stu = db.get(User, s.student_id)
+    stu = db.get(Student, s.student_id)
     stu_name = stu.name if stu else ""
     audit(db, user, "add_submission_comment", target=f"点评-{stu_name}", student_id=s.student_id)
     db.commit()
@@ -372,7 +372,7 @@ def delete_submission_comment(
     _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
     _ensure_submission_operable(db, s)
     db.delete(c)
-    stu = db.get(User, s.student_id) if s else None
+    stu = db.get(Student, s.student_id) if s else None
     stu_name = stu.name if stu else ""
     audit(db, user, "delete_submission_comment", target=f"删除点评-{stu_name}", student_id=s.student_id)
     db.commit()
@@ -390,6 +390,10 @@ def submit(
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
     _check_student_access(a, user)
+    # 学生档案定位（submissions.student_id 指向 students.id）
+    stu = get_student_by_account(db, user)
+    if not stu:
+        raise HTTPException(status_code=404, detail="学生档案不存在")
     content = (payload.get("content") or "").strip()
     filepath = payload.get("filepath")
     filename = payload.get("filename")
@@ -398,7 +402,7 @@ def submit(
 
     existing = (
         db.query(Submission)
-        .filter(Submission.assignment_id == assignment_id, Submission.student_id == user.id)
+        .filter(Submission.assignment_id == assignment_id, Submission.student_id == stu.id)
         .first()
     )
     if existing:
@@ -415,7 +419,7 @@ def submit(
 
     s = Submission(
         assignment_id=assignment_id,
-        student_id=user.id,
+        student_id=stu.id,
         content=content,
         filename=filename,
         filepath=filepath,
@@ -428,9 +432,12 @@ def submit(
 
 @router.get("/my-submissions")
 def my_submissions(user: User = Depends(require_student), db: Session = Depends(get_db)):
+    stu = get_student_by_account(db, user)
+    if not stu:
+        return {"items": [], "total": 0}
     rows = (
         db.query(Submission)
-        .filter(Submission.student_id == user.id)
+        .filter(Submission.student_id == stu.id)
         .order_by(Submission.created_at.desc())
         .all()
     )
@@ -527,7 +534,8 @@ def list_excellent(
     assign_ids = {s.assignment_id for s in subs.values() if s.assignment_id}
     assigns = {a.id: a for a in db.query(Assignment).filter(Assignment.id.in_(assign_ids)).all()} if assign_ids else {}
     stu_ids = {s.student_id for s in subs.values() if s.student_id}
-    users = {u.id: u for u in db.query(User).filter(User.id.in_(stu_ids)).all()} if stu_ids else {}
+    students = {st.id: st for st in db.query(Student).filter(Student.id.in_(stu_ids)).all()} if stu_ids else {}
+    avatar_map = batch_student_avatar_map(db, stu_ids)
     cls_ids = {a.class_id for a in assigns.values() if a.class_id}
     classes = {c.id: c for c in db.query(Classroom).filter(Classroom.id.in_(cls_ids)).all()} if cls_ids else {}
     comment_counts = dict(
@@ -543,7 +551,7 @@ def list_excellent(
         if not s:
             continue
         a = assigns.get(s.assignment_id)
-        stu = users.get(s.student_id)
+        stu = students.get(s.student_id)
         cls = classes.get(a.class_id) if a else None
         items.append(
             {
@@ -554,7 +562,7 @@ def list_excellent(
                 "assignment_title": a.title if a else None,
                 "assignment_id": a.id if a else None,
                 "student_name": stu.name if stu else None,
-                "student_avatar": stu.avatar if stu else None,
+                "student_avatar": avatar_map.get(s.student_id),
                 "class_name": cls.name if cls else None,
                 "comment_count": comment_counts.get(e.id, 0),
             }
@@ -573,7 +581,7 @@ def get_excellent(
         raise HTTPException(status_code=404, detail="作品不存在")
     s = db.get(Submission, e.submission_id)
     a = db.get(Assignment, s.assignment_id) if s else None
-    stu = db.get(User, s.student_id) if s else None
+    stu = db.get(Student, s.student_id) if s else None
     cls = db.get(Classroom, a.class_id) if a else None
     comments = (
         db.query(WorkComment)
@@ -596,7 +604,7 @@ def get_excellent(
         "assignment_title": a.title if a else None,
         "assignment_id": a.id if a else None,
         "student_name": stu.name if stu else None,
-        "student_avatar": stu.avatar if stu else None,
+        "student_avatar": get_student_avatar(db, stu),
         "class_name": cls.name if cls else None,
         "comments": comment_items,
     }

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -27,8 +27,8 @@ class Leave(Base):
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     reason = Column(String(255))
-    start_date = Column(String(20))
-    end_date = Column(String(20))
+    start_date = Column(Date)
+    end_date = Column(Date)
     status = Column(String(20), default="登记")  # 登记 / 已销假
     image = Column(String(500))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -159,8 +159,8 @@ class WeeklyReport(Base):
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
-    week_start = Column(String(20))
-    week_end = Column(String(20))
+    week_start = Column(Date)
+    week_end = Column(Date)
     content = Column(Text)
     data_snapshot = Column(Text)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -194,7 +194,7 @@ class Attendance(Base):
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
-    date = Column(String(20), nullable=False, index=True)  # YYYY-MM-DD
+    date = Column(Date, nullable=False, index=True)  # YYYY-MM-DD
     status = Column(String(20), default="出勤")  # 出勤 / 缺勤 / 请假 / 迟到
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

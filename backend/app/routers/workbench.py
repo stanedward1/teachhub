@@ -13,6 +13,7 @@ from app.models import (
     Classroom,
     Communication,
     Exam,
+    ExcellentWork,
     ImportHistory,
     Leave,
     Point,
@@ -21,6 +22,7 @@ from app.models import (
     Seat,
     Student,
     StudentProfileTag,
+    Submission,
     User,
     WeeklyReport,
 )
@@ -34,7 +36,7 @@ from app.audit import (
 )
 from app.config import settings
 from app.security import hash_password
-from app.utils import safe_filename, to_dict, normalize_page
+from app.utils import safe_filename, to_dict, normalize_page, parse_date, clamp_score
 from app.permissions import (
     is_any_admin,
     get_student_account,
@@ -44,6 +46,7 @@ from app.permissions import (
     ensure_student_operable,
     ensure_class_operable,
 )
+from app.routers.students import _student_out
 import uuid
 
 router = APIRouter(tags=["教师工作台"])
@@ -262,8 +265,8 @@ def create_leave(payload: dict, user: User = Depends(get_current_user), db: Sess
     x = Leave(
         student_id=payload["student_id"],
         reason=payload.get("reason"),
-        start_date=payload.get("start_date"),
-        end_date=payload.get("end_date"),
+        start_date=parse_date(payload.get("start_date")),
+        end_date=parse_date(payload.get("end_date")),
         status=payload.get("status", "登记"),
         image=payload.get("image"),
     )
@@ -286,7 +289,7 @@ def update_leave(leave_id: int, payload: dict, user: User = Depends(get_current_
         raise HTTPException(status_code=403, detail="无权修改该请假")
     for f in ("reason", "start_date", "end_date", "status", "image"):
         if f in payload and payload[f] is not None:
-            setattr(x, f, payload[f])
+            setattr(x, f, parse_date(payload[f]) if f in ("start_date", "end_date") else payload[f])
     audit(db, user, "update_leave", target=f"请假#{leave_id}-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"事由：{x.reason or '未填写'}；时间：{x.start_date or ''} ~ {x.end_date or ''}")
     db.commit()
     db.refresh(x)
@@ -783,7 +786,7 @@ async def import_students(
                 class_id=class_id,
                 school_id=class_school.get(class_id),
                 major=data["major"],
-                birth_date=data["birth_date"],
+                birth_date=parse_date(data["birth_date"]),
                 parent_name=data["parent_name"],
                 parent_phone=data["parent_phone"],
                 student_type=data["student_type"],
@@ -1006,26 +1009,20 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
         "recent": [{"ptype": p.ptype, "content": p.content, "date": str(p.created_at)[:10]} for p in sorted(performances, key=lambda x: x.created_at, reverse=True)[:10]],
     }
 
-    # 作业统计
-    from app.models import Submission, ExcellentWork
-    # Submission.student_id 引用 users.id，需通过学生姓名+班级查找对应 user
-    student_user = db.query(User).filter(
-        User.role == "student", User.name == student.name, User.class_id == student.class_id
-    ).first()
-    user_id = student_user.id if student_user else None
-    if user_id:
-        submissions = db.query(Submission).filter(Submission.student_id == user_id).all()
-        excellent_ids = {ew.submission_id for ew in db.query(ExcellentWork.submission_id).filter(
-            ExcellentWork.submission_id.in_([s.id for s in submissions])
-        ).all()}
-        excellent_count = sum(1 for s in submissions if s.id in excellent_ids)
-        submission_summary = {
-            "total": len(submissions),
-            "excellent": excellent_count,
-            "rate": round(excellent_count / len(submissions) * 100, 1) if submissions else 0,
-        }
-    else:
-        submission_summary = {"total": 0, "excellent": 0, "rate": 0}
+    # 作业统计（submissions.student_id 指向 students.id，直接用 student_id）
+    submissions = db.query(Submission).filter(Submission.student_id == student_id).all()
+    excellent_ids = {
+        ew.submission_id
+        for ew in db.query(ExcellentWork.submission_id)
+        .filter(ExcellentWork.submission_id.in_([s.id for s in submissions]))
+        .all()
+    }
+    excellent_count = sum(1 for s in submissions if s.id in excellent_ids)
+    submission_summary = {
+        "total": len(submissions),
+        "excellent": excellent_count,
+        "rate": round(excellent_count / len(submissions) * 100, 1) if submissions else 0,
+    }
 
     # 标签
     tags = db.query(StudentProfileTag).filter(StudentProfileTag.student_id == student_id).all()
@@ -1033,11 +1030,11 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
 
     # 五维雷达得分
     radar = {
-        "academic": min(100, round(score_summary["avg"] if scores else 50, 1)),
-        "moral": min(100, round(50 + point_summary["total"] * 2, 1)) if points else 50,
-        "attendance": min(100, round(100 - leave_summary["total"] * 5, 1)),
-        "activity": min(100, round(50 + performance_summary["positive"] * 5, 1)),
-        "skill": min(100, round(submission_summary["rate"], 1)),
+        "academic": clamp_score(round(score_summary["avg"] if scores else 50, 1)),
+        "moral": clamp_score(round(50 + point_summary["total"] * 2, 1)) if points else 50,
+        "attendance": clamp_score(round(100 - leave_summary["total"] * 5, 1)),
+        "activity": clamp_score(round(50 + performance_summary["positive"] * 5, 1)),
+        "skill": clamp_score(round(submission_summary["rate"], 1)),
     }
 
     # 每个评价维度的评价依据说明：数据来源 / 计算方法 / 相关指标
@@ -1112,14 +1109,6 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
         "submission_summary": submission_summary,
         "tags": tag_list,
     }
-
-
-def _student_out(db: Session, s: Student) -> dict:
-    from app.models import Classroom
-    d = to_dict(s)
-    cls = db.get(Classroom, s.class_id) if s.class_id else None
-    d["class_name"] = cls.name if cls else None
-    return d
 
 
 @router.post("/api/students/{student_id}/tags")
@@ -1330,8 +1319,8 @@ def save_report(payload: dict, user=Depends(dep), db: Session = Depends(get_db))
         r = WeeklyReport(
             class_id=class_id,
             title=title,
-            week_start=payload.get("week_start"),
-            week_end=payload.get("week_end"),
+            week_start=parse_date(payload.get("week_start")),
+            week_end=parse_date(payload.get("week_end")),
             content=payload.get("content", ""),
             data_snapshot=json.dumps(payload.get("data_snapshot", {}), ensure_ascii=False),
             created_by=user.id,

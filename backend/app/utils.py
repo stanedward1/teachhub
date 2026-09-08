@@ -1,6 +1,6 @@
 import re
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 
 def gen_student_no(db, student_model) -> str:
@@ -30,6 +30,31 @@ def normalize_page(page, page_size, max_size: int = 200):
     except (TypeError, ValueError):
         page_size = 20
     return max(1, page), min(max(1, page_size), max_size)
+
+
+def parse_date(value):
+    """把前端传入的日期归一化为 `date` 对象，供 `Date` 列写入。
+
+    - `None` / 空串 → `None`
+    - `date` 对象 → 原样返回
+    - `'YYYY-MM-DD'` 字符串 → `date`
+    - 其他格式 → 抛 `ValueError`（由调用方转为 400）
+    """
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    raise ValueError(f"无法解析的日期: {value!r}")
+
+
+def clamp_score(value, lo: float = 0.0, hi: float = 100.0) -> float:
+    """把数值钳制到 [lo, hi] 区间（用于雷达分数等 0-100 指标，避免出现负分）。"""
+    return max(lo, min(hi, value))
 
 
 def safe_filename(name: str) -> str:

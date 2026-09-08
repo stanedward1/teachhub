@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -53,13 +53,12 @@ class Student(Base):
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=True)
     name = Column(String(50), nullable=False)
     gender = Column(String(10), default="男")
-    birth_date = Column(String(50))
+    birth_date = Column(Date)
     student_no = Column(String(50), unique=True, nullable=False, index=True)
     major = Column(String(100))
     parent_name = Column(String(50))
     parent_phone = Column(String(20))
     student_type = Column(String(20), default="day")  # day 通学生 / boarding 寄宿生
-    avatar = Column(String(255))
     status = Column(String(20), default="active")
     is_dropped_out = Column(Boolean, nullable=False, default=False, server_default="0")  # 是否退学
     created_at = Column(DateTime(timezone=True), server_default=func.now())

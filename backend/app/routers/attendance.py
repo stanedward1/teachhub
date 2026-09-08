@@ -7,6 +7,7 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.models import Attendance, Student, User
 from app.permissions import ensure_class_operable, is_any_admin, is_teacher_class_owner
+from app.utils import parse_date
 
 router = APIRouter(tags=["考勤"])
 
@@ -59,6 +60,10 @@ def checkin(payload: dict, user: User = Depends(get_current_user), db: Session =
         raise HTTPException(status_code=400, detail="请提供班级、日期和点名记录")
     if not isinstance(records, list):
         raise HTTPException(status_code=400, detail="点名记录格式错误")
+    try:
+        date = parse_date(date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD")
 
     # 毕业班级不可再点名
     ensure_class_operable(db, class_id)

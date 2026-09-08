@@ -144,7 +144,7 @@ techhub/
 
 > 说明一：模型大多**不定义 ORM relationship**，关联查询通过 `db.get()` / `filter()` 手动完成，以避免模块间循环 import；唯一例外是同文件内的 `Assignment ↔ AssignmentAttachment`（一对多，用 `relationship` + `cascade="all, delete-orphan"` 实现附件级联删除）。
 
-> 说明二（`student_id` 语义歧义）：`submissions.student_id` 指向 `users.id`（学生登录账号），而 `scores` / `talks` / `performances` 等业务表的 `student_id` 指向 `students.id`（学生档案）。关联作业数据时需通过「班级 + 姓名」先查 User 再映射，勿混用。
+> 说明二（`student_id` 语义统一）：所有业务表的 `student_id` 均指向 `students.id`（学生档案），包括 `submissions` / `scores` / `talks` / `performances` / `points` / `leaves` / `communications` / `return_records` / `student_comments` / `attendance` / `student_board_history` / `student_profile_tags`。学生登录账号（`users.id`）与学生档案通过「`class_id + name`」关联，由 `permissions.get_student_by_account()` 定位。
 
 ## 6. API 约定
 
