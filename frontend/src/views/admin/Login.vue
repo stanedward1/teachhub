@@ -10,6 +10,18 @@
       </div>
       <el-form @submit.prevent="doLogin">
         <el-form-item>
+          <el-select
+            v-model="schoolId"
+            placeholder="选择学校（平台超管可留空）"
+            size="large"
+            clearable
+            filterable
+            style="width: 100%"
+          >
+            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item>
           <el-input v-model="form.username" placeholder="用户名" size="large">
             <template #prefix><el-icon><User /></el-icon></template>
           </el-input>
@@ -24,8 +36,8 @@
         </el-button>
       </el-form>
       <div class="hint">
-        <div>默认账号：admin / admin123</div>
-        <div>教师账号：teacher / 123456</div>
+        <!-- <div>默认账号：admin / admin123</div>
+        <div>教师账号：teacher / 123456</div> -->
         <router-link to="/">返回学生端</router-link>
       </div>
     </div>
@@ -33,21 +45,35 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authApi } from '../../api'
-import { setAuth } from '../../utils/auth'
+import { getLastSchoolId, setAuth, setLastSchoolId } from '../../utils/auth'
 
 const router = useRouter()
 const loading = ref(false)
+const schools = ref([])
+const schoolId = ref(getLastSchoolId())
 const form = reactive({ username: '', password: '' })
+
+onMounted(async () => {
+  try {
+    const res = await authApi.publicSchools()
+    schools.value = res.items || []
+  } catch (e) {}
+})
+
+watch(schoolId, (v) => setLastSchoolId(v))
 
 async function doLogin() {
   if (!form.username || !form.password) return ElMessage.warning('请输入用户名和密码')
   loading.value = true
   try {
-    const res = await authApi.login(form)
+    const res = await authApi.login({
+      ...form,
+      school_id: schoolId.value || undefined
+    })
     if (res.user.role === 'student') {
       return ElMessage.error('学生账号请从学生端登录')
     }

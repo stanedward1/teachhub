@@ -1,6 +1,6 @@
 # TechHub
 
-> 教学与班主任一体化工作平台 —— 一个账号，三种身份，覆盖「在线作业提交、班级日志、教师工作台」三大场景。
+> 教学与班主任一体化工作平台 —— 一个账号，四种身份，覆盖「在线作业提交、班级日志、教师工作台」三大场景。
 
 TechHub 将**在线作业提交平台**、**班级日志管理系统**、**教师工作台**三个项目合并重构为**一套前后端分离**的应用，统一使用 **FastAPI + Vue 3** 技术栈，实现清晰的**角色权限隔离**。
 
@@ -8,8 +8,8 @@ TechHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 
 | 文档 | 说明 |
 | ---- | ---- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、部署架构、设计决策 |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、Git 规范、测试规范、发布流程 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、设计决策 |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、权限与多租户隔离规范、Git 规范、测试规范、发布流程 |
 
 ## 核心特性
 
@@ -17,9 +17,12 @@ TechHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 
 | 角色 | 登录入口 | 可访问范围 |
 | ---- | -------- | ---------- |
-| 学生 `student` | 学生端 `/` | 在线作业提交平台（查看/提交作业、优秀作品、编程练习、个人资料） |
-| 教师 `teacher` | 管理端 `/admin` | **自己所属班级（班主任或科任）**：学生/成绩/积分/考勤/沟通/谈心/表现/评语/课表/活动/座位/周报 + 在线作业 + 班级日志 |
-| 管理员 `admin` | 管理端 `/admin` | 全部班级 + 全部学生 + 系统管理（学校/班级/账号 CRUD + 年级升级 + 班级教师配置） |
+| 学生 `student` | 学生端 `/`（选择学校 → 班级 + 姓名） | 在线作业提交平台（查看/提交作业、优秀作品、编程练习、个人资料） |
+| 教师 `teacher` | 管理端 `/admin`（选择学校 → 用户名） | **自己所属班级（班主任或科任）**：学生/成绩/积分/考勤/沟通/谈心/表现/评语/课表/活动/座位/周报 + 在线作业 + 班级日志 |
+| 学校管理员 `school_admin` | 管理端 `/admin` | **本校全部**班级 + 学生 + 系统管理（班级/账号 CRUD + 年级升级 + 班级教师配置） |
+| 平台超管 `super_admin` | 管理端 `/admin`（独立用户名） | **跨学校**：学校开通/启停、全局概览、所有租户数据 |
+
+> 多租户：每所学校是独立租户，通过 `school_id` 在**接口层 + ORM 层**双重隔离，跨校访问一律返回 404/403。
 
 学生账号**无法**访问后台接口（返回 403），权限在前后端双重校验。
 
@@ -113,33 +116,39 @@ TechHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 techhub/
 ├── backend/                    # FastAPI 后端
 │   ├── app/
-│   │   ├── main.py             # 应用入口（路由挂载、CORS、建表、迁移）
+│   │   ├── main.py             # 应用入口（路由挂载、CORS、迁移、租户中间件）
 │   │   ├── config.py           # 配置（env 驱动）
-│   │   ├── database.py         # SQLAlchemy 连接 + 增量迁移 + 数据库切换指南
+│   │   ├── database.py         # SQLAlchemy 连接 + Alembic 迁移
 │   │   ├── security.py         # JWT + bcrypt 密码哈希
-│   │   ├── deps.py             # 依赖注入（角色权限校验）
-│   │   ├── permissions.py      # 班级权限隔离（班主任制：教师仅可管理自己班级）
+│   │   ├── deps.py             # 依赖注入（角色权限 + 停用学校拦截）
+│   │   ├── tenant.py           # 多租户核心：ORM 层 school_id 自动隔离
+│   │   ├── permissions.py      # 班级权限 + 租户辅助（班主任/科任 + 管理员）
 │   │   ├── schemas.py          # Pydantic 校验模型
-│   │   ├── utils.py            # 工具函数
+│   │   ├── utils.py            # 工具函数（to_dict / gen_student_no / normalize_page）
 │   │   ├── audit.py            # 操作审计日志 + 批量查询
-│   │   ├── seed.py             # 假数据种子（52 学生 + 完整业务数据）
+│   │   ├── seed.py             # 假数据种子（默认校 + 第二校，多租户）
 │   │   ├── models/             # 数据模型（按域分组，34 张表）
 │   │   │   ├── user.py         #   User
 │   │   │   ├── school.py       #   School / Classroom / ClassTeacher / Student
 │   │   │   ├── homework.py     #   Assignment / AssignmentAttachment / Submission / ExcellentWork / WorkComment / SubmissionComment
 │   │   │   ├── workbench.py    #   Score / Leave / Point / Communication / Resource / Exam / Seat / Setting / ImportHistory / StudentProfileTag / WeeklyReport / StudentBoardHistory
-│   │   │   ├── classlog.py     #   WorkLog / Plan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
+│   │   │   ├── classlog.py     #   WorkLog / ClassPlan / TeacherPlan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
 │   │   │   └── operation_log.py
 │   │   └── routers/            # API 路由（按业务域分组）
-│   │       ├── auth.py         #   登录/注册/密码/头像上传
+│   │       ├── auth.py         #   登录/注册/密码/头像上传/学校下拉
 │   │       ├── meta.py         #   班级选项、编程练习
 │   │       ├── homework.py     #   作业/提交/优秀作品/评论
 │   │       ├── students.py     #   学校/班级/学生 CRUD + 导出 + 密码管理 + 通宿生统计 + 住宿历史
 │   │       ├── workbench.py    #   成绩/考勤/积分/沟通/资源/试卷/座位 + 批量导入 + 画像 + 周报
 │   │       ├── classlog.py     #   日志/计划/课表/活动/谈心/返校/表现/评语
-│   │       ├── admin.py        #   账号管理 / 系统设置 / 数据看板
+│   │       ├── attendance.py   #   考勤点名 + 出勤率统计
+│   │       ├── mobile.py       #   移动端轻量接口
+│   │       ├── admin.py        #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览
 │   │       └── uploads.py      #   通用文件上传
-│   ├── tests/                  # pytest 自动化测试
+│   ├── alembic/                # 数据库迁移（schema 唯一来源）
+│   ├── tests/                  # pytest 自动化测试（含多租户隔离）
+│   ├── repair_student_profiles.py  # 存量学生档案修复脚本
+│   ├── ensure_school_admin.py      # 幂等补建学校管理员
 │   ├── requirements.txt        # 运行时依赖
 │   ├── requirements-dev.txt    # 开发/测试依赖（pytest、httpx）
 │   ├── run.py                  # 启动脚本（端口 8080）
@@ -149,13 +158,13 @@ techhub/
 ├── frontend/                   # Vue 3 前端
 │   ├── src/
 │   │   ├── api/                # Axios 封装 + 接口定义
-│   │   ├── router/             # 路由 + 角色守卫
+│   │   ├── router/             # 路由 + 角色守卫（四角色 + 强制改密）
 │   │   ├── utils/              # 认证工具
 │   │   ├── composables/        # 可组合函数（useSort）
 │   │   ├── components/         # Markdown / MarkdownEditor / StudentSelect（班级联动）/ SortBar
 │   │   ├── layout/             # AdminLayout（可折叠侧边栏）/ StudentLayout
-│   │   ├── mobile/             # 移动端（Vant）：layout + views（登录/首页/学生/考勤/记录/请假）+ api
-│   │   └── views/              # 页面（student/ + admin/，共 33 个页面）
+│   │   ├── mobile/             # 移动端（Vant）：layout + views（登录/首页/学生/考勤/记录/请假/改密）+ api
+│   │   └── views/              # 页面（student/ + admin/，含学校管理）
 │   ├── vite.config.js          # /api 与 /uploads 代理 + 构建优化
 │   ├── Dockerfile              # 前端镜像（Node 构建 + Nginx 托管）
 │   ├── nginx.conf              # Nginx 配置（静态托管 + 反代后端）
@@ -286,11 +295,13 @@ npm run dev
 
 | 账号 | 密码 | 身份 |
 | ---- | ---- | ---- |
-| `admin` | `admin123` | 管理员 |
-| `teacher` | `123456` | 教师 |
-| 学生（班级 + 姓名 + `123456`） | — | 学生 |
+| `admin` | `admin123` | 平台超管（跨学校） |
+| `school_admin` | `admin123` | 学校管理员（本校） |
+| `teacher` | `123456` | 教师（默认校，班主任） |
+| `teacher3` | `123456` | 教师（第二校，用于验证隔离） |
+| 学生（学校 + 班级 + 姓名 + `123456`） | — | 学生 |
 
-> 学生账号的用户名即姓名，由 seed.py 自动生成 52 名学生；也可在学生端登录页通过「班级 + 姓名」自助注册。
+> 学生账号的用户名即姓名，由 seed.py 自动生成 52 名学生（默认校）+ 5 名（第二校）；也可在学生端登录页通过「学校 + 班级 + 姓名」自助注册。
 
 ---
 

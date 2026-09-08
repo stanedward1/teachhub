@@ -62,3 +62,5 @@ if settings.ENV == "production":
         raise RuntimeError(
             "生产环境必须通过环境变量设置强随机的 SECRET_KEY，且不得使用开发默认值。"
         )
+    if len(raw) < 32:
+        raise RuntimeError("生产环境 SECRET_KEY 长度不足 32 位，请使用强随机密钥。")

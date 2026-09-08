@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.audit import audit
 from app.database import get_db
-from app.deps import get_current_user, require_teacher
-from app.permissions import get_teacher_class_ids
+from app.deps import get_current_user, require_school_admin, require_super_admin, require_teacher
+from app.permissions import ensure_same_school, get_teacher_class_ids, is_any_admin, is_platform_admin
 from app.models import (
     Assignment,
     Attendance,
@@ -17,6 +17,7 @@ from app.models import (
     Leave,
     OperationLog,
     Resource,
+    School,
     Score,
     Setting,
     Student,
@@ -25,11 +26,12 @@ from app.models import (
     WorkLog,
 )
 from app.security import hash_password
-from app.utils import to_dict
+from app.utils import gen_student_no, to_dict, normalize_page
 
 router = APIRouter(tags=["系统管理"])
 
-admin_dep = require_teacher
+# 账号管理 / 系统设置：仅学校管理员及以上（教师不可管理账号与全校设置）
+admin_dep = require_school_admin
 
 
 def _user_out(db: Session, u: User) -> dict:
@@ -72,10 +74,17 @@ def create_user(payload: dict, user=Depends(admin_dep), db: Session = Depends(ge
     role = payload.get("role", "teacher")
     if not username or not name:
         raise HTTPException(status_code=400, detail="用户名和姓名不能为空")
-    if role not in ("teacher", "admin", "student"):
+    # 角色白名单：学校管理员可创建教师/学生；仅平台超管可创建学校管理员
+    if role not in ("teacher", "school_admin", "student"):
         raise HTTPException(status_code=400, detail="角色不合法")
-    if db.query(User).filter(User.username == username).first():
-        raise HTTPException(status_code=400, detail="用户名已存在")
+    if role == "school_admin" and not is_platform_admin(user):
+        raise HTTPException(status_code=403, detail="只有平台超管可以创建学校管理员")
+    # 多租户：用户名在学校内唯一（不同学校可存在同名教师）
+    target_school_id = payload.get("school_id") or user.school_id
+    if db.query(User).filter(
+        User.school_id == target_school_id, User.username == username
+    ).first():
+        raise HTTPException(status_code=400, detail="该校已存在同名用户名")
     # 新用户默认密码 123456 不满足强度要求时，标记首次登录强制改密
     from app.security import validate_password_strength
     must_change = validate_password_strength(password) is not None
@@ -86,9 +95,28 @@ def create_user(payload: dict, user=Depends(admin_dep), db: Session = Depends(ge
         role=role,
         phone=payload.get("phone"),
         class_id=payload.get("class_id") if role == "student" else None,
+        school_id=payload.get("school_id") or user.school_id,
         must_change_password=must_change,
     )
     db.add(u)
+    db.flush()
+    # 学生账号必须同步建立学生档案，否则教师后台花名册查不到
+    if role == "student" and u.class_id:
+        cls = db.get(Classroom, u.class_id)
+        if cls and not db.query(Student).filter(
+            Student.class_id == u.class_id, Student.name == name
+        ).first():
+            db.add(
+                Student(
+                    school_id=cls.school_id,
+                    class_id=u.class_id,
+                    name=name,
+                    student_no=gen_student_no(db, Student),
+                    gender=payload.get("gender", "男"),
+                    student_type="day",
+                    status="active",
+                )
+            )
     audit(db, user, "create_user", target=f"{u.username} ({u.name})", detail=f"role={role}")
     db.commit()
     db.refresh(u)
@@ -101,7 +129,7 @@ def update_user(user_id: int, payload: dict, user=Depends(admin_dep), db: Sessio
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
     # 教师不能编辑其他教师/管理员的姓名、角色、班级归属（管理员不受限）
-    if user.role == "teacher" and u.role in ("teacher", "admin"):
+    if user.role == "teacher" and u.role in ("teacher", "school_admin", "super_admin"):
         if "name" in payload and payload["name"] is not None and payload["name"] != u.name:
             raise HTTPException(status_code=403, detail="教师无权修改其他教师或管理员的姓名")
         if "role" in payload and payload["role"] is not None:
@@ -123,7 +151,7 @@ def reset_password(user_id: int, payload: dict, user=Depends(admin_dep), db: Ses
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
     # 教师不能重置其他教师/管理员的密码（只能重置学生密码；管理员可重置所有人）
-    if user.role == "teacher" and u.role in ("teacher", "admin"):
+    if user.role == "teacher" and u.role in ("teacher", "school_admin", "super_admin"):
         raise HTTPException(status_code=403, detail="教师无权重置其他教师或管理员的密码")
     new_pwd = payload.get("password") or "123456"
     # 重置密码后标记首次登录需改密（除非新密码本身满足强度要求）
@@ -143,10 +171,13 @@ def delete_user(user_id: int, user=Depends(admin_dep), db: Session = Depends(get
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
     # 教师不能删除其他教师/管理员
-    if user.role == "teacher" and u.role in ("teacher", "admin"):
+    if user.role == "teacher" and u.role in ("teacher", "school_admin", "super_admin"):
         raise HTTPException(status_code=403, detail="教师无权删除其他教师或管理员")
-    if u.role == "admin" and db.query(User).filter(User.role == "admin").count() <= 1:
-        raise HTTPException(status_code=400, detail="至少保留一个管理员账号")
+    # 平台超管可跨校删除；学校管理员仅能删除本校账号
+    if not is_platform_admin(user):
+        ensure_same_school(user, u.school_id)
+    if is_platform_admin(u) and db.query(User).filter(User.role == "super_admin").count() <= 1:
+        raise HTTPException(status_code=400, detail="至少保留一个平台超管账号")
     audit(db, user, "delete_user", target=f"{u.username} ({u.name})", detail=f"role={u.role}")
     db.delete(u)
     db.commit()
@@ -161,10 +192,13 @@ def get_settings(_=Depends(admin_dep), db: Session = Depends(get_db)):
 
 
 @router.put("/api/settings/{key}")
-def set_setting(key: str, payload: dict, _=Depends(admin_dep), db: Session = Depends(get_db)):
-    s = db.query(Setting).filter(Setting.key == key).first()
+def set_setting(key: str, payload: dict, user=Depends(admin_dep), db: Session = Depends(get_db)):
+    # 校内唯一：按 (school_id, key) 定位，避免跨校同名配置冲突
+    s = db.query(Setting).filter(
+        Setting.school_id == user.school_id, Setting.key == key
+    ).first()
     if not s:
-        s = Setting(key=key, value=payload.get("value", ""))
+        s = Setting(school_id=user.school_id, key=key, value=payload.get("value", ""))
         db.add(s)
     else:
         s.value = payload.get("value", s.value)
@@ -197,7 +231,7 @@ def _visible_audit_class_ids(db: Session, user: User):
     - 班主任：返回其班主任班级 id 列表
     - 科任老师（非任何班班主任）：返回空列表（无权查看）
     """
-    if user.role == "admin":
+    if is_any_admin(user):
         return None
     return [c.id for c in db.query(Classroom).filter(Classroom.teacher_id == user.id).all()]
 
@@ -225,11 +259,15 @@ def list_audit_logs(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    page, page_size = normalize_page(page, page_size)
     """查询操作审计日志。管理员看全部；班主任看自己班级；科任老师不可见。"""
     class_ids = _visible_audit_class_ids(db, user)
     if class_ids == []:
         raise HTTPException(status_code=403, detail="仅班主任或管理员可查看审计日志")
     q = db.query(OperationLog)
+    # 租户隔离：平台超管全局审计，其余角色仅本校
+    if not is_platform_admin(user):
+        q = q.filter(OperationLog.school_id == user.school_id)
     if class_ids is not None:
         q = q.filter(OperationLog.class_id.in_(class_ids))
     if action:
@@ -256,10 +294,10 @@ def list_audit_logs(
 
 # ---------------- 看板统计 ----------------
 @router.get("/api/stats/dashboard")
-def dashboard(user=Depends(admin_dep), db: Session = Depends(get_db)):
+def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
     # 教师只能查看自己负责班级的数据；管理员查看全校。
     # 均排除毕业班级与退学学生（看板不展示）。
-    if user.role != "admin":
+    if not is_any_admin(user):
         teacher_class_ids = get_teacher_class_ids(db, user.id)
         class_ids = [c.id for c in db.query(Classroom).filter(
             Classroom.id.in_(teacher_class_ids), Classroom.is_graduated.is_(False)
@@ -270,8 +308,14 @@ def dashboard(user=Depends(admin_dep), db: Session = Depends(get_db)):
                 Student.class_id.in_(class_ids), Student.is_dropped_out.is_(False)
             ).all()]
     else:
-        class_ids = [c.id for c in db.query(Classroom).filter(Classroom.is_graduated.is_(False)).all()]
-        student_ids = [s.id for s in db.query(Student).filter(Student.is_dropped_out.is_(False)).all()]
+        cq = db.query(Classroom).filter(Classroom.is_graduated.is_(False))
+        sq = db.query(Student).filter(Student.is_dropped_out.is_(False))
+        # 学校管理员仅统计本校；平台超管 school_id 为空，统计全部
+        if user.school_id is not None:
+            cq = cq.filter(Classroom.school_id == user.school_id)
+            sq = sq.filter(Student.school_id == user.school_id)
+        class_ids = [c.id for c in cq.all()]
+        student_ids = [s.id for s in sq.all()]
 
     def _count(model, id_col=None, ids=None):
         q = db.query(model)
@@ -377,7 +421,11 @@ def dashboard(user=Depends(admin_dep), db: Session = Depends(get_db)):
                 "time": l.created_at.strftime("%Y-%m-%d %H:%M") if l.created_at else "",
             }
         )
-    for w in db.query(WorkLog).order_by(WorkLog.id.desc()).limit(5).all():
+    # 最近动态的工作日志：教师只看自己的，管理员看全部
+    wq = db.query(WorkLog)
+    if user.role == "teacher":
+        wq = wq.filter(WorkLog.teacher_id == user.id)
+    for w in wq.order_by(WorkLog.id.desc()).limit(5).all():
         recent.append(
             {
                 "type": "日志",
@@ -470,4 +518,31 @@ def dashboard(user=Depends(admin_dep), db: Session = Depends(get_db)):
         "score_dist": dist,
         "score_dist_by_exam": score_dist_by_exam,
         "recent": recent,
+    }
+
+
+# ---------------- 平台超管：跨校概览 ----------------
+@router.get("/api/admin/platform/overview")
+def platform_overview(user=Depends(require_super_admin), db: Session = Depends(get_db)):
+    """平台超管视角的全局统计：学校数、班级数、教师数、学生数及分校明细。"""
+    schools = db.query(School).order_by(School.id).all()
+    items = []
+    for sc in schools:
+        items.append({
+            "id": sc.id,
+            "name": sc.name,
+            "code": sc.code,
+            "status": sc.status,
+            "class_count": db.query(Classroom).filter(Classroom.school_id == sc.id).count(),
+            "student_count": db.query(Student).filter(Student.school_id == sc.id).count(),
+            "teacher_count": db.query(User).filter(
+                User.school_id == sc.id, User.role.in_(("teacher", "school_admin"))
+            ).count(),
+        })
+    return {
+        "school_count": len(schools),
+        "active_school_count": sum(1 for x in schools if x.status == "active"),
+        "student_count": sum(x["student_count"] for x in items),
+        "teacher_count": sum(x["teacher_count"] for x in items),
+        "items": items,
     }

@@ -6,7 +6,7 @@ from app.audit import audit
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Attendance, Student, User
-from app.permissions import ensure_class_operable, is_teacher_class_owner
+from app.permissions import ensure_class_operable, is_any_admin, is_teacher_class_owner
 
 router = APIRouter(tags=["考勤"])
 
@@ -21,7 +21,7 @@ def list_attendance(
     db: Session = Depends(get_db),
 ):
     """查询某班级某日的考勤：返回该班在籍学生及其状态（未点名默认出勤）。"""
-    if user.role != "admin" and not is_teacher_class_owner(db, user.id, class_id):
+    if not is_any_admin(user) and not is_teacher_class_owner(db, user.id, class_id):
         raise HTTPException(status_code=403, detail="无权查看该班级考勤")
 
     students = (
@@ -57,10 +57,12 @@ def checkin(payload: dict, user: User = Depends(get_current_user), db: Session =
     records = payload.get("records") or []
     if not class_id or not date or not records:
         raise HTTPException(status_code=400, detail="请提供班级、日期和点名记录")
+    if not isinstance(records, list):
+        raise HTTPException(status_code=400, detail="点名记录格式错误")
 
     # 毕业班级不可再点名
     ensure_class_operable(db, class_id)
-    if user.role != "admin" and not is_teacher_class_owner(db, user.id, class_id):
+    if not is_any_admin(user) and not is_teacher_class_owner(db, user.id, class_id):
         raise HTTPException(status_code=403, detail="无权为该班级点名")
 
     saved = 0
@@ -103,7 +105,7 @@ def attendance_summary(
     db: Session = Depends(get_db),
 ):
     """出勤率统计：某班级某日期范围内的出勤率、状态分布与逐日趋势。"""
-    if user.role != "admin" and not is_teacher_class_owner(db, user.id, class_id):
+    if not is_any_admin(user) and not is_teacher_class_owner(db, user.id, class_id):
         raise HTTPException(status_code=403, detail="无权查看该班级考勤统计")
 
     student_count = (

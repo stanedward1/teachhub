@@ -13,6 +13,7 @@ class OperationLog(Base):
     user_id = Column(Integer, index=True)
     username = Column(String(50))
     role = Column(String(20))
+    school_id = Column(Integer, index=True)  # 租户归属（平台级操作为空）
     action = Column(String(50), index=True)  # 如 delete_student / change_password
     target = Column(String(255))  # 操作对象描述
     detail = Column(Text)  # 补充信息

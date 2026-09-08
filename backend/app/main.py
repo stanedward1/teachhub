@@ -3,11 +3,14 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import run_migrations
 from app.routers import admin, attendance, auth, classlog, homework, meta, mobile, students, uploads, workbench
+from app.security import decode_token
+from app.tenant import reset_tenant, set_tenant  # 导入即注册 ORM 租户隔离事件
 
 # 基础日志配置
 logging.basicConfig(
@@ -33,7 +36,10 @@ app = FastAPI(
 ### 权限说明
 
 - `student` 学生 —— 仅能访问作业提交平台
-- `teacher` 教师 / `admin` 管理员 —— 通过 `/admin` 进入后台，管理全部功能
+- `teacher` 教师 / `school_admin` 学校管理员 —— 通过 `/admin` 进入后台，管理本校功能
+- `super_admin` 平台超管 —— 跨学校管理全部租户
+
+数据按 `school_id` 租户隔离，接口层与 ORM 层双重拦截。
 """,
     version=settings.APP_VERSION,
 )
@@ -45,6 +51,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def tenant_context_middleware(request, call_next):
+    """从 JWT 解析 school_id 写入租户上下文，供 ORM 层自动隔离使用。
+
+    - 无 Authorization：公开接口（登录/注册/学校列表），不加过滤
+    - 平台超管：school_id 为 NULL，不加过滤（跨租户）
+    - 其余账号：按 school_id 过滤
+    - 旧版 token（payload 无 school_id 字段）：直接 401，强制重新登录
+    """
+    header = request.headers.get("authorization", "")
+    tokens = None
+    if header.lower().startswith("bearer "):
+        try:
+            payload = decode_token(header.split(" ", 1)[1].strip())
+        except Exception:
+            payload = None
+        if payload is not None:
+            if "school_id" not in payload:
+                return JSONResponse(
+                    status_code=401, content={"detail": "登录已过期，请重新登录"}
+                )
+            if payload.get("sub"):
+                tokens = set_tenant(payload.get("school_id"))
+    try:
+        return await call_next(request)
+    finally:
+        if tokens is not None:
+            reset_tenant(tokens)
+
 
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 

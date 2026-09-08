@@ -120,9 +120,10 @@ def test_student_cannot_submit_other_class(client):
 
 # ---------------- 教师工作台 CRUD ----------------
 def test_student_crud(client, teacher_token):
+    # 教师须在自己负责的班级添加学生
     resp = client.post(
         "/api/students",
-        json={"name": "测试学生", "student_no": "T999", "gender": "男"},
+        json={"name": "测试学生", "student_no": "T999", "gender": "男", "class_id": 1},
         headers=auth(teacher_token),
     )
     assert resp.status_code == 200

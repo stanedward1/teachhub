@@ -73,9 +73,10 @@
             <el-icon><Setting /></el-icon>
             <span>系统管理</span>
           </template>
-          <el-menu-item index="/admin/users">账号管理</el-menu-item>
+          <el-menu-item v-if="isAdmin" index="/admin/users">账号管理</el-menu-item>
+          <el-menu-item v-if="isPlatform" index="/admin/schools">学校管理</el-menu-item>
           <el-menu-item v-if="isAdmin" index="/admin/audit-logs">审计日志</el-menu-item>
-          <el-menu-item index="/admin/settings">系统设置</el-menu-item>
+          <el-menu-item v-if="isAdmin" index="/admin/settings">系统设置</el-menu-item>
         </el-sub-menu>
       </el-menu>
 
@@ -136,15 +137,22 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getUser, clearAuth } from '../utils/auth'
+import { getUser, clearAuth, isPlatformAdmin, isSchoolAdmin } from '../utils/auth'
 
 document.title = 'TechHub'
 
 const route = useRoute()
 const router = useRouter()
 const user = computed(() => getUser())
-const isAdmin = computed(() => getUser()?.role === 'admin')
-const roleText = computed(() => (getUser()?.role === 'admin' ? '管理员' : '教师'))
+const isAdmin = computed(() => getUser()?.role === 'admin' || isSchoolAdmin() || isPlatformAdmin())
+const isPlatform = computed(() => isPlatformAdmin())
+const roleText = computed(() => {
+  const r = getUser()?.role
+  if (r === 'super_admin') return '平台超管'
+  if (r === 'school_admin') return '学校管理员'
+  if (r === 'teacher') return '教师'
+  return '管理员'
+})
 
 const collapsed = ref(false)
 const mobileMenuOpen = ref(false)
@@ -171,6 +179,7 @@ const titles = {
   '/admin/student-comments': '学生评语',
   '/admin/reports': '班级报告',
   '/admin/users': '账号管理',
+  '/admin/schools': '学校管理',
   '/admin/settings': '系统设置'
 }
 

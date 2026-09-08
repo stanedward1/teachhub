@@ -7,6 +7,7 @@ class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, description="教师=用户名，学生=姓名")
     password: str = Field(..., min_length=1, description="密码")
     class_id: Optional[int] = Field(None, description="学生登录时的班级 ID")
+    school_id: Optional[int] = Field(None, description="学校 ID（教师/学校管理员/学生登录必填）")
 
 
 class RegisterRequest(BaseModel):

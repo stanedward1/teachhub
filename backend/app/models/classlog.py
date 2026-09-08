@@ -11,6 +11,7 @@ class WorkLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     date = Column(String(20))
     content = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -24,6 +25,7 @@ class ClassPlan(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     plan_type = Column(String(20), default="计划")  # 计划 / 总结
     content = Column(Text)
@@ -37,6 +39,7 @@ class TeacherPlan(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     plan_type = Column(String(20), default="计划")
     content = Column(Text)
@@ -50,6 +53,7 @@ class Schedule(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     day_of_week = Column(Integer, nullable=False)  # 1-5
     period = Column(Integer, nullable=False)  # 第几节 1-8
     subject = Column(String(50))
@@ -64,6 +68,7 @@ class Activity(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     content = Column(Text)
     filepath = Column(String(500))
@@ -78,6 +83,7 @@ class Talk(Base):
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
     teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     content = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -89,6 +95,7 @@ class ReturnRecord(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     return_date = Column(String(20))
     reason = Column(String(255))
     note = Column(Text)
@@ -102,6 +109,7 @@ class Performance(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     ptype = Column(String(20), default="积极")  # 积极 / 消极
     content = Column(Text)
     image = Column(String(500))
@@ -115,6 +123,7 @@ class StudentComment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     content = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

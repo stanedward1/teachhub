@@ -46,6 +46,7 @@ from app.models import (
     WorkLog,
 )
 from app.security import hash_password
+from app.tenant import reset_tenant, set_tenant, tenant_scope  # noqa: F401  注册 ORM 租户隔离
 
 fake = Faker("zh_CN")
 
@@ -123,6 +124,7 @@ TAG_SPECS = [
 def seed_all():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
+    tenant_tokens = None
     try:
         # ===== 清空旧数据 =====
         for model in (
@@ -146,21 +148,31 @@ def seed_all():
         )
         db.add(school)
         db.commit()
+        # 开启租户上下文：后续新建的业务数据自动注入 school_id
+        tenant_tokens = set_tenant(school.id)
 
-        # ===== 教师 / 管理员 =====
-        admin = User(
-            username="admin", password_hash=hash_password("admin123"),
-            name="系统管理员", role="admin",
+        # ===== 平台超管 / 学校管理员 / 教师 =====
+        # 平台超管不属于任何学校（school_id = NULL，可跨租户）
+        with tenant_scope(None):
+            admin = User(
+                username="admin", password_hash=hash_password("admin123"),
+                name="平台超管", role="super_admin",
+            )
+            db.add(admin)
+            db.commit()
+        school_admin = User(
+            username="school_admin", password_hash=hash_password("admin123"),
+            name="学校管理员", role="school_admin", school_id=school.id,
         )
         teacher = User(
             username="teacher", password_hash=hash_password("123456"),
-            name="龙老师", role="teacher", phone="13800000001",
+            name="龙老师", role="teacher", phone="13800000001", school_id=school.id,
         )
         teacher2 = User(
             username="teacher2", password_hash=hash_password("123456"),
-            name="王老师", role="teacher", phone="13800000002",
+            name="王老师", role="teacher", phone="13800000002", school_id=school.id,
         )
-        db.add_all([admin, teacher, teacher2])
+        db.add_all([school_admin, teacher, teacher2])
         db.commit()
         all_teachers = [teacher, teacher2]
 
@@ -212,6 +224,7 @@ def seed_all():
                     password_hash=hash_password("123456"),
                     name=name,
                     role="student",
+                    school_id=school.id,
                     class_id=classroom.id,
                 )
                 db.add(u)
@@ -623,12 +636,55 @@ def seed_all():
         print(f"  画像标签：{db.query(StudentProfileTag).count()} 个")
         print(f"  周报：{db.query(WeeklyReport).count()} 份")
         print(f"  导入历史：{db.query(ImportHistory).count()} 条")
+
+        # ===== 第二所学校（用于验证跨租户数据隔离）=====
+        school2 = School(
+            name="第二职业技术学校", code="DEZX01",
+            address="示例地址", phone="0730-7777777",
+        )
+        db.add(school2)
+        db.commit()
+        with tenant_scope(school2.id):
+            t3 = User(
+                username="teacher3", password_hash=hash_password("123456"),
+                name="李老师", role="teacher", phone="13800000003", school_id=school2.id,
+            )
+            db.add(t3)
+            db.commit()
+            c3 = Classroom(
+                school_id=school2.id, name="机电 2401 班", code="JD2401",
+                major="机电技术应用", grade="一年级", teacher_id=t3.id,
+            )
+            db.add(c3)
+            db.commit()
+            for i in range(1, 6):
+                nm = f"二校学生{i}"
+                st = Student(
+                    school_id=school2.id, class_id=c3.id, name=nm, gender="男",
+                    student_no=f"DEZX{i:04d}", major="机电技术应用", student_type="day",
+                )
+                db.add(st)
+                db.flush()
+                db.add(User(
+                    username=nm, password_hash=hash_password("123456"), name=nm,
+                    role="student", school_id=school2.id, class_id=c3.id,
+                ))
+                if i <= 2:
+                    db.add(Score(
+                        school_id=school2.id, student_id=st.id,
+                        subject="机械制图", score=80 + i,
+                    ))
+            db.commit()
+        print(f"  第二所学校：{school2.name}（班级 1 个 / 学生 5 名，用于验证隔离）")
         print()
-        print("  管理员账号：admin / admin123")
-        print("  教师账号：teacher / 123456、teacher2 / 123456")
-        print("  学生账号：班级 + 姓名 / 123456")
+        print("  平台超管：admin / admin123（跨学校）")
+        print("  学校管理员：school_admin / admin123（仅本校）")
+        print("  教师账号：teacher / 123456、teacher2 / 123456（默认校）、teacher3 / 123456（第二校）")
+        print("  学生账号：学校 + 班级 + 姓名 / 123456")
         print("=" * 50)
     finally:
+        if tenant_tokens is not None:
+            reset_tenant(tenant_tokens)
         db.close()
 
 

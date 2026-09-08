@@ -20,7 +20,7 @@ from app.models import (
     Submission,
     User,
 )
-from app.permissions import filter_students_by_teacher, is_student_in_teacher_classes
+from app.permissions import filter_students_by_teacher, get_student_account, is_any_admin, is_student_in_teacher_classes
 from app.routers.students import _student_out
 
 router = APIRouter(tags=["移动端"])
@@ -48,7 +48,7 @@ def mobile_students(
     db: Session = Depends(get_db),
 ):
     """移动端学生速查列表（精简字段，默认仅返回在籍学生）。"""
-    is_admin = user.role == "admin"
+    is_admin = is_any_admin(user)
     q = filter_students_by_teacher(db, user.id, is_admin)
     q = q.filter(Student.is_dropped_out.is_(False))
     if class_id:
@@ -72,7 +72,7 @@ def mobile_student_overview(
     student = db.get(Student, student_id)
     if not student:
         raise HTTPException(status_code=404, detail="学生不存在")
-    if user.role != "admin" and not is_student_in_teacher_classes(db, user.id, student_id):
+    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
         raise HTTPException(status_code=403, detail="无权查看该学生画像")
 
     # 成绩
@@ -125,9 +125,7 @@ def mobile_student_overview(
     }
 
     # 作业（技能维度优秀率）
-    student_user = db.query(User).filter(
-        User.role == "student", User.name == student.name, User.class_id == student.class_id
-    ).first()
+    student_user = get_student_account(db, student.class_id, student.name)
     if student_user:
         submissions = db.query(Submission).filter(Submission.student_id == student_user.id).all()
         sub_ids = [s.id for s in submissions]

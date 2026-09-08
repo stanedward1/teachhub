@@ -32,8 +32,9 @@ request.interceptors.response.use(
         // 其他接口 401 = 会话过期
         clearAuth()
         ElMessage.error('登录已过期，请重新登录')
-        const isAdmin = router.currentRoute.value.path.startsWith('/admin')
-        router.push(isAdmin ? '/admin/login' : '/login')
+        const p = router.currentRoute.value.path
+        const loginPath = p.startsWith('/m') ? '/m/login' : p.startsWith('/admin') ? '/admin/login' : '/login'
+        router.push(loginPath)
       }
     } else {
       ElMessage.error(typeof detail === 'string' ? detail : '操作失败')

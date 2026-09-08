@@ -9,6 +9,17 @@
         </div>
       </div>
 
+      <el-select
+        v-model="schoolId"
+        placeholder="选择学校"
+        size="large"
+        filterable
+        style="width: 100%; margin-bottom: 18px"
+        @change="onSchoolChange"
+      >
+        <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
+      </el-select>
+
       <el-tabs v-model="tab" class="tabs">
         <el-tab-pane label="学生登录" name="login">
           <el-form @submit.prevent="doLogin">
@@ -57,35 +68,64 @@
 </template>
 
 <script setup>
-import { reactive, ref, onMounted } from 'vue'
+import { reactive, ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authApi, metaApi } from '../../api'
-import { setAuth } from '../../utils/auth'
+import { getLastSchoolId, setAuth, setLastSchoolId } from '../../utils/auth'
 
 const router = useRouter()
 const tab = ref('login')
 const loading = ref(false)
 const classes = ref([])
+const schools = ref([])
+const schoolId = ref(getLastSchoolId())
 
 const form = reactive({ class_id: null, username: '', password: '' })
 const reg = reactive({ class_id: null, name: '', password: '123456' })
 
-onMounted(async () => {
+async function loadClasses() {
   try {
-    const res = await metaApi.classes()
+    const res = await metaApi.classes(schoolId.value)
     classes.value = res.items
   } catch (e) {}
+}
+
+function onSchoolChange() {
+  setLastSchoolId(schoolId.value)
+  form.class_id = null
+  reg.class_id = null
+  loadClasses()
+}
+
+onMounted(async () => {
+  try {
+    const res = await authApi.publicSchools()
+    schools.value = res.items || []
+  } catch (e) {}
+  await loadClasses()
 })
 
+watch(schoolId, () => setLastSchoolId(schoolId.value))
+
 async function doLogin() {
-  if (!form.class_id || !form.username || !form.password) {
-    return ElMessage.warning('请选择班级并填写姓名和密码')
+  if (!schoolId.value || !form.class_id || !form.username || !form.password) {
+    return ElMessage.warning('请选择学校、班级并填写姓名和密码')
   }
   loading.value = true
   try {
-    const res = await authApi.login(form)
+    const res = await authApi.login({
+      class_id: form.class_id,
+      username: form.username,
+      password: form.password,
+      school_id: schoolId.value
+    })
     setAuth(res.token, res.user)
+    if (res.must_change_password) {
+      ElMessage.warning('首次登录或密码已重置，请先修改密码')
+      router.push('/profile')
+      return
+    }
     ElMessage.success('登录成功')
     router.push('/')
   } catch (e) {
@@ -95,15 +135,16 @@ async function doLogin() {
 }
 
 async function doRegister() {
-  if (!reg.class_id || !reg.name) {
-    return ElMessage.warning('请选择班级并填写姓名')
+  if (!schoolId.value || !reg.class_id || !reg.name) {
+    return ElMessage.warning('请选择学校、班级并填写姓名')
   }
   loading.value = true
   try {
     const res = await authApi.register({
       name: reg.name,
       class_id: reg.class_id,
-      password: reg.password || '123456'
+      password: reg.password || '123456',
+      school_id: schoolId.value
     })
     setAuth(res.token, res.user)
     ElMessage.success('注册成功')

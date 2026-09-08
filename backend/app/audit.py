@@ -79,6 +79,7 @@ def audit(db: Session, user, action: str, target: str = "", detail: str = "", cl
             user_id=user.id if user else None,
             username=user.username if user else None,
             role=user.role if user else None,
+            school_id=getattr(user, "school_id", None),  # 租户归属（平台超管为 None）
             action=action,
             target=target,
             detail=detail,

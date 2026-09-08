@@ -11,6 +11,7 @@ class Score(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     subject = Column(String(50), nullable=False)
     score = Column(Float, nullable=False)
     exam_name = Column(String(100))
@@ -24,6 +25,7 @@ class Leave(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     reason = Column(String(255))
     start_date = Column(String(20))
     end_date = Column(String(20))
@@ -39,6 +41,7 @@ class Point(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     points = Column(Integer, nullable=False, default=0)
     reason = Column(String(255))
     performance_id = Column(Integer, ForeignKey("performances.id"), nullable=True)
@@ -52,6 +55,7 @@ class Communication(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     method = Column(String(20), default="电话")  # 电话/微信/面谈/其他
     content = Column(Text)
     feedback = Column(Text)
@@ -65,6 +69,7 @@ class Resource(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(200), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     category = Column(String(50), default="其他")
     filename = Column(String(255))
     filepath = Column(String(500))
@@ -78,6 +83,7 @@ class Exam(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     exam_type = Column(String(50), default="单元测验")
     content = Column(Text)
     filename = Column(String(255))
@@ -94,18 +100,23 @@ class Seat(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False, unique=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     layout = Column(Text)  # JSON: [[student_id, ...], ...]
     columns = Column(Integer, default=6)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
 class Setting(Base):
-    """系统设置（键值对，如当前年级）。"""
+    """系统设置（键值对，如当前年级），按学校隔离（校内 key 唯一）。"""
 
     __tablename__ = "settings"
+    __table_args__ = (
+        UniqueConstraint("school_id", "key", name="uq_settings_school_key"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    key = Column(String(50), unique=True, nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    key = Column(String(50), index=True, nullable=False)
     value = Column(String(255))
 
 
@@ -122,6 +133,7 @@ class ImportHistory(Base):
     error_rows = Column(Integer, default=0)
     errors = Column(Text)  # JSON 格式错误详情
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -132,6 +144,7 @@ class StudentProfileTag(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     tag = Column(String(50), nullable=False)  # 标签文本
     category = Column(String(20), default="自定义")  # 学业/品德/技能/自定义
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -144,6 +157,7 @@ class WeeklyReport(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     week_start = Column(String(20))
     week_end = Column(String(20))
@@ -161,6 +175,7 @@ class StudentBoardHistory(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     old_type = Column(String(20))  # day / boarding
     new_type = Column(String(20), nullable=False)
     changed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
@@ -178,6 +193,7 @@ class Attendance(Base):
     id = Column(Integer, primary_key=True, index=True)
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     date = Column(String(20), nullable=False, index=True)  # YYYY-MM-DD
     status = Column(String(20), default="出勤")  # 出勤 / 缺勤 / 请假 / 迟到
     created_at = Column(DateTime(timezone=True), server_default=func.now())

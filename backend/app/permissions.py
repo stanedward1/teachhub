@@ -7,6 +7,36 @@ from sqlalchemy.orm import Session
 from app.models import Classroom, ClassTeacher, Student, User
 
 
+# ---------------- 角色与租户辅助 ----------------
+
+def is_platform_admin(user) -> bool:
+    """平台超管（跨学校）。"""
+    return user.role == "super_admin"
+
+
+def is_school_admin(user) -> bool:
+    """学校管理员（本校）。"""
+    return user.role == "school_admin"
+
+
+def is_any_admin(user) -> bool:
+    """平台超管或学校管理员。"""
+    return user.role in ("super_admin", "school_admin")
+
+
+def get_user_school_id(user) -> Optional[int]:
+    """返回用户所属学校 ID（super_admin 返回 None，表示不限制）。"""
+    return getattr(user, "school_id", None)
+
+
+def ensure_same_school(user, target_school_id: Optional[int]) -> None:
+    """校验目标资源属于当前用户学校；平台超管不受限，否则越权抛 403。"""
+    if is_platform_admin(user):
+        return
+    if target_school_id is not None and target_school_id != user.school_id:
+        raise HTTPException(status_code=403, detail="无权访问其他学校的数据")
+
+
 def ensure_student_operable(db: Session, student_id: int) -> Student:
     """校验学生是否可被教师/管理员操作。
 
@@ -43,8 +73,13 @@ def ensure_class_operable(db: Session, class_id: int) -> Classroom:
 
 
 def get_teacher_class_ids(db: Session, teacher_id: int) -> List[int]:
-    """获取教师可操作的班级ID列表（班主任班级 + 科任班级）。"""
-    own_ids = {c.id for c in db.query(Classroom).filter(Classroom.teacher_id == teacher_id).all()}
+    """获取教师可操作的班级ID列表（班主任班级 + 科任班级），限定本校。"""
+    teacher = db.get(User, teacher_id)
+    school_id = teacher.school_id if teacher else None
+    q = db.query(Classroom)
+    if school_id is not None:
+        q = q.filter(Classroom.school_id == school_id)
+    own_ids = {c.id for c in q.filter(Classroom.teacher_id == teacher_id).all()}
     own_ids.update(
         ct.class_id
         for ct in db.query(ClassTeacher).filter(ClassTeacher.teacher_id == teacher_id).all()
@@ -67,7 +102,7 @@ def apply_student_class_filter(db: Session, user: User, q, class_id: Optional[in
     """
     if model is None:
         raise ValueError("apply_student_class_filter 需要传入 model 参数")
-    if user.role != "admin":
+    if not is_any_admin(user):
         if class_id and not is_teacher_class_owner(db, user.id, class_id):
             return q, True
         class_ids = get_teacher_class_ids(db, user.id)
@@ -107,8 +142,12 @@ def is_student_in_teacher_classes(db: Session, teacher_id: int, student_id: int)
 
 
 def filter_classrooms_by_teacher(db: Session, teacher_id: int, is_admin: bool):
-    """根据教师身份过滤班级查询（班主任 + 科任）。"""
+    """根据教师身份过滤班级查询（班主任 + 科任），限定本校。"""
+    teacher = db.get(User, teacher_id)
+    school_id = teacher.school_id if teacher else None
     query = db.query(Classroom)
+    if school_id is not None:
+        query = query.filter(Classroom.school_id == school_id)
     if not is_admin:
         class_ids = get_teacher_class_ids(db, teacher_id)
         query = query.filter(Classroom.id.in_(class_ids)) if class_ids else query.filter(False)
@@ -116,14 +155,33 @@ def filter_classrooms_by_teacher(db: Session, teacher_id: int, is_admin: bool):
 
 
 def filter_students_by_teacher(db: Session, teacher_id: int, is_admin: bool):
-    """根据教师身份过滤学生查询"""
+    """根据教师身份过滤学生查询，限定本校。"""
+    teacher = db.get(User, teacher_id)
+    school_id = teacher.school_id if teacher else None
     query = db.query(Student)
+    if school_id is not None:
+        query = query.filter(Student.school_id == school_id)
     if not is_admin:
-        # 获取教师负责的班级ID列表
         class_ids = get_teacher_class_ids(db, teacher_id)
         if class_ids:
             query = query.filter(Student.class_id.in_(class_ids))
         else:
-            # 教师没有负责任何班级，返回空查询
             query = query.filter(False)
     return query.order_by(Student.id)
+
+
+def get_student_account(db: Session, class_id: int, name: str) -> Optional[User]:
+    """通过「班级 + 姓名」定位学生登录账号（role=student），不存在返回 None。"""
+    if not class_id or not name:
+        return None
+    return (
+        db.query(User)
+        .filter(User.role == "student", User.class_id == class_id, User.name == name)
+        .first()
+    )
+
+
+def ensure_student_access(db: Session, user: User, student_id: int) -> None:
+    """校验当前用户可操作某学生：管理员放行，教师须为该生所属班级的班主任/科任。"""
+    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
+        raise HTTPException(status_code=403, detail="无权操作该学生")

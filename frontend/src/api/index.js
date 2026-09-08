@@ -8,13 +8,24 @@ export const authApi = {
   changePassword: (data) => request.put('/api/auth/password', data),
   uploadAvatar: (formData) => request.post('/api/auth/avatar', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
-  })
+  }),
+  // 登录页学校下拉（无需登录）
+  publicSchools: () => request.get('/api/auth/schools')
 }
 
 // ============ 公共 ============
 export const metaApi = {
-  classes: () => request.get('/api/meta/classes'),
+  classes: (schoolId) => request.get('/api/meta/classes', { params: schoolId ? { school_id: schoolId } : {} }),
   practice: () => request.get('/api/meta/practice')
+}
+
+// ============ 租户（学校）管理：平台超管 ============
+export const schoolApi = {
+  list: () => request.get('/api/schools'),
+  create: (data) => request.post('/api/schools', data),
+  update: (id, data) => request.put(`/api/schools/${id}`, data),
+  remove: (id) => request.delete(`/api/schools/${id}`),
+  setStatus: (id, status) => request.put(`/api/schools/${id}/status`, { status })
 }
 
 // ============ 作业提交平台 ============
@@ -197,7 +208,8 @@ export const adminApi = {
   upgradeGrade: () => request.post('/api/settings/upgrade-grade'),
   dashboard: () => request.get('/api/stats/dashboard'),
   auditLogs: (params) => request.get('/api/admin/audit-logs', { params }),
-  auditLogActions: () => request.get('/api/admin/audit-logs/actions')
+  auditLogActions: () => request.get('/api/admin/audit-logs/actions'),
+  platformOverview: () => request.get('/api/admin/platform/overview')
 }
 
 // ============ 文件上传 ============

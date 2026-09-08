@@ -66,6 +66,7 @@ const routes = [
       { path: 'student-comments', name: 'admin-student-comments', component: () => import('../views/admin/StudentComments.vue') },
       { path: 'reports', name: 'admin-reports', component: () => import('../views/admin/WeeklyReport.vue') },
       { path: 'users', name: 'admin-users', component: () => import('../views/admin/Users.vue') },
+      { path: 'schools', name: 'admin-schools', component: () => import('../views/admin/Schools.vue') },
       { path: 'audit-logs', name: 'admin-audit-logs', component: () => import('../views/admin/AuditLogs.vue') },
       { path: 'settings', name: 'admin-settings', component: () => import('../views/admin/Settings.vue') }
     ]
@@ -76,6 +77,12 @@ const routes = [
     path: '/m/login',
     name: 'mobile-login',
     component: () => import('../mobile/views/Login.vue')
+  },
+  {
+    path: '/m/change-password',
+    name: 'mobile-change-password',
+    component: () => import('../mobile/views/ChangePassword.vue'),
+    meta: { requiresTeacher: true }
   },
   {
     path: '/m',
@@ -103,48 +110,50 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const hasToken = !!getToken()
+  const user = getUser()
   const isTeacherArea = to.path.startsWith('/admin') || to.path.startsWith('/m')
+  const isMobileArea = to.path.startsWith('/m')
+
+  // 学生端页面：仅学生可访问（教师/管理员跳后台，不再预览）
+  if (to.meta.requiresStudent) {
+    if (!hasToken) return { path: '/login', query: { redirect: to.fullPath } }
+    if (isTeacher()) return { path: '/admin' }
+    // 学生强制改密
+    if (user?.must_change_password && to.path !== '/profile') {
+      return { path: '/profile' }
+    }
+    return true
+  }
 
   // 管理端 + 移动端访问控制（教师/管理员）
   if (isTeacherArea && to.path !== '/admin/login' && to.path !== '/m/login') {
     if (!hasToken || !isTeacher()) {
-      const loginPath = to.path.startsWith('/m') ? '/m/login' : '/admin/login'
+      const loginPath = isMobileArea ? '/m/login' : '/admin/login'
       return { path: loginPath, query: { redirect: to.fullPath } }
     }
     // 强制改密：未改密的用户只能访问改密页
-    if (getUser()?.must_change_password && to.path !== '/admin/change-password') {
-      return { path: '/admin/change-password', query: { first: 1 } }
+    const pwdPath = isMobileArea ? '/m/change-password' : '/admin/change-password'
+    if (user?.must_change_password && to.path !== pwdPath) {
+      return { path: pwdPath, query: { first: 1 } }
     }
   }
 
-  // 改密页已登录时不允许访问登录页
+  // 已登录访问登录页 → 跳转对应首页/改密页
   if (to.path === '/admin/login' && hasToken && isTeacher()) {
-    if (getUser()?.must_change_password) {
-      return { path: '/admin/change-password', query: { first: 1 } }
-    }
-    return { path: '/admin' }
+    return { path: user?.must_change_password ? '/admin/change-password' : '/admin' }
   }
-  // 移动端登录页已登录时跳转移动端首页
   if (to.path === '/m/login' && hasToken && isTeacher()) {
-    if (getUser()?.must_change_password) {
-      return { path: '/admin/change-password', query: { first: 1 } }
-    }
-    return { path: '/m/home' }
-  }
-
-  // 学生端访问控制（教师/管理员可预览学生端，学生需登录）
-  if (to.meta.requiresStudent && (!hasToken || (!isStudent() && !isTeacher()))) {
-    return { path: '/login', query: { redirect: to.fullPath } }
+    return { path: user?.must_change_password ? '/m/change-password' : '/m/home' }
   }
   if (to.path === '/login' && hasToken && isStudent()) {
-    return { path: '/' }
+    return { path: user?.must_change_password ? '/profile' : '/' }
   }
   if (to.path === '/login' && hasToken && isTeacher()) {
     return { path: '/admin' }
   }
 
   // 已登录学生访问后台/移动端时，跳转到学生端
-  if (hasToken && isStudent() && (to.path.startsWith('/admin') || to.path.startsWith('/m'))) {
+  if (hasToken && isStudent() && isTeacherArea) {
     return { path: '/' }
   }
 

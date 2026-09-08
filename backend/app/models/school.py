@@ -12,6 +12,8 @@ class School(Base):
     code = Column(String(50), nullable=False, unique=True)
     address = Column(String(255))
     phone = Column(String(20))
+    status = Column(String(20), nullable=False, default="active", server_default="active")  # active / disabled
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # 平台超管创建人
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

@@ -27,7 +27,35 @@ export function isStudent() {
   return getUser()?.role === 'student'
 }
 
+/** 后台角色：教师 / 学校管理员 / 平台超管 */
 export function isTeacher() {
-  const role = getUser()?.role
-  return role === 'teacher' || role === 'admin'
+  return ['teacher', 'school_admin', 'super_admin'].includes(getUser()?.role)
+}
+
+/** 平台超管：跨学校管理 */
+export function isPlatformAdmin() {
+  return getUser()?.role === 'super_admin'
+}
+
+/** 学校管理员：本校最高管理员 */
+export function isSchoolAdmin() {
+  return getUser()?.role === 'school_admin'
+}
+
+/** 当前用户所属学校（平台超管为 null） */
+export function getSchoolId() {
+  return getUser()?.school_id ?? null
+}
+
+const SCHOOL_KEY = 'techhub_school_id'
+
+/** 记住上次选择的学校（登录页用） */
+export function getLastSchoolId() {
+  const v = localStorage.getItem(SCHOOL_KEY)
+  return v ? Number(v) : null
+}
+
+export function setLastSchoolId(id) {
+  if (id) localStorage.setItem(SCHOOL_KEY, String(id))
+  else localStorage.removeItem(SCHOOL_KEY)
 }

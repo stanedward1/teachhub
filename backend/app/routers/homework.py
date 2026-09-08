@@ -1,8 +1,11 @@
+import os
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.audit import batch_user_map, audit
+from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user, require_student, require_teacher
 from app.models import (
@@ -17,6 +20,7 @@ from app.models import (
     WorkComment,
 )
 from app.permissions import (
+    is_any_admin,
     ensure_class_operable,
     ensure_student_operable,
     get_teacher_class_ids,
@@ -63,14 +67,33 @@ def _attachments_out(a: Assignment) -> list:
     ]
 
 
+def _remove_upload_files(paths) -> None:
+    """删除上传目录下的文件（失败静默，不阻断主流程）。"""
+    for p in paths or []:
+        if not p:
+            continue
+        full = os.path.join(settings.UPLOAD_DIR, p.lstrip("/").replace("/", os.sep))
+        try:
+            if os.path.exists(full):
+                os.remove(full)
+        except OSError:
+            pass
+
+
 def _sync_attachments(a: Assignment, attachments) -> None:
-    """同步作业附件（传入 [{filename, filepath}, ...]，整体替换旧附件）。"""
+    """同步作业附件（传入 [{filename, filepath}, ...]，整体替换旧附件），并清理被移除的附件文件。"""
+    new_paths = {
+        att.get("filepath") for att in (attachments or [])
+        if isinstance(att, dict) and att.get("filepath")
+    }
+    removed = [att.filepath for att in a.attachments if att.filepath and att.filepath not in new_paths]
     a.attachments.clear()
     for att in attachments or []:
         if isinstance(att, dict) and att.get("filename") and att.get("filepath"):
             a.attachments.append(
                 AssignmentAttachment(filename=att["filename"], filepath=att["filepath"])
             )
+    _remove_upload_files(removed)
 
 
 # ---------------- 作业任务 ----------------
@@ -144,7 +167,7 @@ def create_assignment(payload: dict, user: User = Depends(require_teacher), db: 
     # 毕业限制：毕业班级不可再布置作业
     ensure_class_operable(db, class_id)
     # 教师只能给自己负责的班级布置作业
-    if user.role != "admin" and not is_teacher_class_owner(db, user.id, class_id):
+    if not is_any_admin(user) and not is_teacher_class_owner(db, user.id, class_id):
         raise HTTPException(status_code=403, detail="只能给自己负责的班级布置作业")
 
     a = Assignment(
@@ -173,17 +196,23 @@ def update_assignment(
     a = db.get(Assignment, assignment_id)
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if a.created_by != user.id and user.role != "admin":
+    if a.created_by != user.id and not is_any_admin(user):
         raise HTTPException(status_code=403, detail="只能编辑自己创建的任务")
     for field in ("title", "description", "content", "deadline", "short_name"):
         if field in payload and payload[field] is not None:
             setattr(a, field, payload[field])
     if "attachments" in payload:
         _sync_attachments(a, payload["attachments"])
-    if payload.get("class_id") and db.get(Classroom, payload["class_id"]):
+    if payload.get("class_id") and payload["class_id"] != a.class_id:
+        new_cid = payload["class_id"]
+        if not db.get(Classroom, new_cid):
+            raise HTTPException(status_code=400, detail="目标班级不存在")
         # 毕业限制：不可将作业转移到已毕业班级
-        ensure_class_operable(db, payload["class_id"])
-        a.class_id = payload["class_id"]
+        ensure_class_operable(db, new_cid)
+        # 教师只能将作业转移到自己负责的班级
+        if not is_any_admin(user) and not is_teacher_class_owner(db, user.id, new_cid):
+            raise HTTPException(status_code=403, detail="只能将任务转移到自己负责的班级")
+        a.class_id = new_cid
     audit(db, user, "update_assignment", target=f"作业#{assignment_id}", class_id=a.class_id)
     db.commit()
     db.refresh(a)
@@ -199,8 +228,9 @@ def delete_assignment(
     a = db.get(Assignment, assignment_id)
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if a.created_by != user.id and user.role != "admin":
+    if a.created_by != user.id and not is_any_admin(user):
         raise HTTPException(status_code=403, detail="只能删除自己创建的任务")
+    _remove_upload_files([att.filepath for att in a.attachments])
     db.delete(a)
     audit(db, user, "delete_assignment", target=f"作业#{assignment_id}", class_id=a.class_id)
     db.commit()
@@ -333,13 +363,14 @@ def delete_submission_comment(
     c = db.get(SubmissionComment, comment_id)
     if not c or c.submission_id != submission_id:
         raise HTTPException(status_code=404, detail="点评不存在")
-    if user.role != "admin" and c.teacher_id != user.id:
+    if not is_any_admin(user) and c.teacher_id != user.id:
         raise HTTPException(status_code=403, detail="无权删除该点评")
     # 退学/毕业限制 + 教师只能操作自己班级的提交
     s = db.get(Submission, submission_id)
-    if s:
-        _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
-        _ensure_submission_operable(db, s)
+    if not s:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
+    _ensure_submission_operable(db, s)
     db.delete(c)
     stu = db.get(User, s.student_id) if s else None
     stu_name = stu.name if stu else ""
@@ -372,7 +403,11 @@ def submit(
     )
     if existing:
         existing.content = content
-        existing.filepath = filepath or existing.filepath
+        new_filepath = filepath or existing.filepath
+        # 替换附件时清理旧文件，避免泄漏
+        if new_filepath != existing.filepath:
+            _remove_upload_files([existing.filepath])
+        existing.filepath = new_filepath
         existing.filename = filename or existing.filename
         db.commit()
         db.refresh(existing)

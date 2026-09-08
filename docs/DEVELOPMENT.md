@@ -78,8 +78,9 @@ python -m pytest tests/ -v
 
 ### 3.3 权限
 
-- 只读接口用 `Depends(get_current_user)`，写接口用 `Depends(require_teacher)` 或 `Depends(require_student)`。
-- 任何新增管理端接口**必须**挂 `require_teacher`，学生端接口**必须**做班级数据隔离校验。
+- 只读接口用 `Depends(get_current_user)`；写接口按角色挂 `Depends(require_teacher)` / `require_school_admin` / `require_super_admin`，学生端写接口挂 `require_student`。
+- 任何新增管理端接口**必须**挂 `require_teacher`（教师及以上）；平台级能力（学校开通/启停、跨校概览）挂 `require_super_admin`。
+- **多租户隔离（必须）**：所有涉及租户数据的查询/写入必须带 `school_id`。ORM 层已通过 `app/tenant.py` 全局自动隔离（`do_orm_execute` 注入 `school_id` 过滤 + `before_flush` 回填），平台超管（`school_id=NULL`）不受限；跨校按 ID 访问应返回 404（不泄露存在性）。角色判断用 `permissions.is_any_admin()`（本校全量）/ `is_platform_admin()`（跨校），**不要**直接比较 `user.role == "admin"`。
 - 教师班级数据隔离**统一**走 `permissions.get_teacher_class_ids()` / `is_teacher_class_owner()`，这两个函数已支持「班主任 + 科任老师」多教师模型；**不得**直接比较 `Classroom.teacher_id` 做权限判断，否则会漏掉科任老师。
 
 ### 3.4 模型变更
@@ -88,6 +89,13 @@ python -m pytest tests/ -v
 - 生成迁移脚本：`cd backend && alembic revision --autogenerate -m "描述"`，人工核对后提交
 - 应用到本地库：`alembic upgrade head`（本地启动或 Docker 启动会自动执行）
 - 确保「迁移链」与「模型 schema」保持一致，避免依赖 `create_all` 兜底而遗漏加列
+- **多租户约束调整**：改唯一约束（如 `settings.key` 全局唯一 → `(school_id, key)` 校内唯一）时，SQLite 不支持 `DROP CONSTRAINT`，需在迁移中**重建表**（新建→拷贝→删除→重命名），参考 `f1a2b3c4d5e6_settings_school_key_unique.py`；MySQL/PostgreSQL 可直接 `drop_constraint` + `create_unique_constraint`。
+
+### 3.5 工具函数与辅助
+
+- 公共工具统一放 `app/utils.py`：`to_dict` / `safe_filename` / `gen_student_no`（生成学号）/ `normalize_page`（分页边界规范化，所有分页列表接口须调用）。
+- 权限/租户辅助统一放 `app/permissions.py`：`is_any_admin` / `is_platform_admin` / `get_teacher_class_ids` / `get_student_account`（按班级+姓名查学生账号）/ `ensure_student_access` 等，**不得**在各 router 重复实现。
+- 分页参数必须调用 `normalize_page(page, page_size)`（防负数/超大 page_size），删除类接口记录不存在时统一返回 `404`。
 
 ### 3.5 文件上传
 

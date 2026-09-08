@@ -8,13 +8,15 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    # 学生账号 username = 姓名（可重名），教师/管理员账号需唯一（由创建逻辑保证）
+    # 学生账号 username = 姓名（可重名），教师/管理员账号学校内唯一
     username = Column(String(50), nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     name = Column(String(50), nullable=False)
-    role = Column(String(20), nullable=False, default="student")  # student / teacher / admin
+    # super_admin(平台超管) / school_admin(学校管理员) / teacher(教师) / student(学生)
+    role = Column(String(20), nullable=False, default="student")
     avatar = Column(String(255))
     phone = Column(String(20))
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)  # 租户归属，super_admin 为 NULL
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=True)
     # 安全策略：首次登录强制改密 + 登录失败锁定
     must_change_password = Column(Boolean, default=False, nullable=False)  # True=首次登录需改密

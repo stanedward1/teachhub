@@ -8,6 +8,15 @@
     <van-form @submit="doLogin">
       <van-cell-group inset>
         <van-field
+          v-model="schoolName"
+          is-link
+          readonly
+          name="school"
+          label="学校"
+          placeholder="选择学校"
+          @click="showSchool = true"
+        />
+        <van-field
           v-model="form.username"
           name="username"
           label="账号"
@@ -29,20 +38,59 @@
         </van-button>
       </div>
     </van-form>
+
+    <van-popup v-model:show="showSchool" position="bottom" round>
+      <van-picker
+        :columns="schoolColumns"
+        :default-index="schoolDefaultIndex"
+        show-toolbar
+        title="选择学校"
+        @confirm="onSchoolConfirm"
+        @cancel="showSchool = false"
+      />
+    </van-popup>
     <!-- <div class="m-login-hint">默认账号 admin / admin123</div> -->
   </div>
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import { authApi } from '../../api'
-import { setAuth } from '../../utils/auth'
+import { getLastSchoolId, setAuth, setLastSchoolId } from '../../utils/auth'
 
 const router = useRouter()
 const loading = ref(false)
 const form = reactive({ username: '', password: '' })
+
+const schools = ref([])
+const schoolColumns = ref([])
+const schoolId = ref(getLastSchoolId())
+const schoolName = ref('')
+const showSchool = ref(false)
+const schoolDefaultIndex = ref(0)
+
+onMounted(async () => {
+  try {
+    const res = await authApi.publicSchools()
+    schools.value = res.items || []
+    schoolColumns.value = schools.value.map((s) => ({ text: s.name, value: s.id }))
+    const saved = schools.value.findIndex((s) => s.id === schoolId.value)
+    if (saved >= 0) {
+      schoolName.value = schools.value[saved].name
+      schoolDefaultIndex.value = saved
+    }
+  } catch (e) {}
+})
+
+function onSchoolConfirm({ selectedOptions }) {
+  const opt = selectedOptions[0]
+  schoolId.value = opt.value
+  schoolName.value = opt.text
+  setLastSchoolId(opt.value)
+  showSchool.value = false
+}
 
 async function doLogin() {
   if (!form.username || !form.password) {
@@ -50,7 +98,10 @@ async function doLogin() {
   }
   loading.value = true
   try {
-    const res = await authApi.login(form)
+    const res = await authApi.login({
+      ...form,
+      school_id: schoolId.value || undefined
+    })
     if (res.user.role === 'student') {
       return showToast('学生账号请从学生端登录')
     }

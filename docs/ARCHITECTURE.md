@@ -12,7 +12,7 @@ TechHub 是一套面向中职学校的「教学 + 班主任一体化工作平台
 | 班级日志管理系统 | 班主任班级事务 | **管理端**模块（`/admin`） |
 | 教师工作台 | 教师日常教务 | **管理端**模块（`/admin`） |
 
-**核心设计目标**：一个账号、三角色、权限严格隔离。
+**核心设计目标**：一个账号、四角色（平台超管 / 学校管理员 / 教师 / 学生）、多租户数据严格隔离。
 
 ## 2. 技术栈
 
@@ -39,13 +39,15 @@ TechHub 是一套面向中职学校的「教学 + 班主任一体化工作平台
 techhub/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py            # 应用入口：CORS、静态挂载、路由注册、建表、迁移
+│   │   ├── main.py            # 应用入口：CORS、静态挂载、路由注册、迁移、租户中间件
 │   │   ├── config.py          # 配置（env 驱动）
 │   │   ├── database.py        # engine / SessionLocal / Base / get_db / run_migrations
-│   │   ├── security.py        # 密码哈希 + JWT 签发/校验
-│   │   ├── deps.py            # 依赖：get_current_user / require_roles
-│   │   ├── utils.py           # to_dict / safe_filename 等工具
-│   │   ├── audit.py           # 操作审计日志 + 批量查询辅助
+│   │   ├── security.py        # 密码哈希 + JWT 签发/校验（payload 含 school_id）
+│   │   ├── deps.py            # 依赖：get_current_user / require_roles（含停用学校拦截）
+│   │   ├── tenant.py          # 多租户核心：ContextVar 上下文 + ORM 层 school_id 自动隔离
+│   │   ├── permissions.py     # 班级权限 + 租户辅助（is_any_admin / get_student_account 等）
+│   │   ├── utils.py           # to_dict / safe_filename / gen_student_no / normalize_page
+│   │   ├── audit.py           # 操作审计日志（含 school_id）+ 批量查询辅助
 │   │   ├── schemas.py         # Pydantic 请求/响应模型
 │   │   ├── models/            # SQLAlchemy 模型（按域分组）
 │   │   │   ├── user.py        #   User
@@ -55,7 +57,7 @@ techhub/
 │   │   │   ├── classlog.py    #   WorkLog / ClassPlan / TeacherPlan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
 │   │   │   └── operation_log.py
 │   │   ├── routers/           # 按业务域分组的 API 路由
-│   │   │   ├── auth.py        #   登录/注册/密码
+│   │   │   ├── auth.py        #   登录/注册/密码/学校下拉
 │   │   │   ├── meta.py        #   班级选项、编程练习（公开）
 │   │   │   ├── homework.py    #   作业/提交/优秀作品/评论
 │   │   │   ├── students.py    #   学校/班级/学生 CRUD + 班级教师（班主任+科任）+ 密码管理 + 通宿生统计
@@ -63,10 +65,13 @@ techhub/
 │   │   │   ├── classlog.py    #   班级日志（日志/计划/课表/活动/谈心/返校/表现/评语）
 │   │   │   ├── attendance.py  #   考勤点名 + 出勤率统计
 │   │   │   ├── mobile.py      #   移动端专用接口（学生速查 + 画像概览）
-│   │   │   ├── admin.py       #   账号管理 / 系统设置 / 数据看板 / 审计日志
+│   │   │   ├── admin.py       #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览
 │   │   │   └── uploads.py     #   通用文件上传
-│   │   └── seed.py            # 假数据生成（Faker）
-│   ├── tests/                 # pytest 自动化测试
+│   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
+│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源）
+│   ├── tests/                 # pytest 自动化测试（含 test_multi_tenant.py）
+│   ├── repair_student_profiles.py   # 存量学生档案修复脚本（可重复执行）
+│   ├── ensure_school_admin.py       # 幂等补建默认租户学校管理员
 │   ├── requirements.txt       # 运行时依赖
 │   ├── requirements-dev.txt   # 开发/测试依赖
 │   ├── run.py                 # uvicorn 启动入口
@@ -77,12 +82,12 @@ techhub/
 │   ├── src/
 │   │   ├── api/               # axios 封装 + 各域 API 函数
 │   │   │   └── index.js       # 所有 API 接口定义
-│   │   ├── router/            # 路由 + 角色守卫
+│   │   ├── router/            # 路由 + 角色守卫（四角色 + 强制改密）
 │   │   ├── layout/            # StudentLayout / AdminLayout（可折叠侧边栏）
 │   │   ├── components/        # Markdown / MarkdownEditor / StudentSelect
 │   │   ├── mobile/            # 移动端（Vant）：layout + views + api
-│   │   ├── views/student/     # 学生端页面（8 个）
-│   │   └── views/admin/       # 管理端页面（22 个）
+│   │   ├── views/student/     # 学生端页面
+│   │   └── views/admin/       # 管理端页面（含 Schools 学校管理）
 │   ├── vite.config.js         # dev 代理 /api、/uploads → 8080
 │   ├── Dockerfile             # 前端镜像（Node 构建 + Nginx 托管）
 │   ├── nginx.conf             # Nginx 静态托管 + 反代后端
@@ -96,22 +101,23 @@ techhub/
 
 | 角色 | 登录入口 | 可访问范围 | 服务端约束 |
 | ---- | -------- | ---------- | ---------- |
-| `student` | `/`（学生端） | 仅作业提交平台 | `require_student` / `get_current_user` |
-| `teacher` | `/admin`（管理端） | 作业管理 + 工作台 + 班级日志 + 系统管理 | `require_teacher` |
-| `admin` | `/admin`（管理端） | 同教师 + 账号管理 | `require_teacher`（含 admin） |
+| `student` | `/`（学生端，选学校 → 班级 + 姓名） | 仅作业提交平台（本班） | `require_student` / `get_current_user` |
+| `teacher` | `/admin`（管理端，选学校 → 用户名） | 自己负责班级（班主任 + 科任）的作业管理 + 工作台 + 班级日志 | `require_teacher` |
+| `school_admin` | `/admin`（管理端） | 本校全部班级/学生/账号 + 系统管理 | `require_school_admin` |
+| `super_admin` | `/admin`（管理端） | 跨学校：学校开通/启停 + 全局概览 + 所有租户数据 | `require_super_admin` |
 
 **双重校验**：
-- 后端：`deps.require_roles(*roles)` 依赖注入，越权返回 `403`；
+- 后端：`deps.require_roles(*roles)` 依赖注入，越权返回 `403`；另有多租户 `school_id` 隔离（接口层 + ORM 层双重拦截）。
 - 前端：`router.beforeEach` 路由守卫，按角色重定向。
 
-**数据隔离**：学生只能看到/提交**本班级**的作业（`homework._check_student_access`）。
+**多租户数据隔离**：每所学校是独立租户，通过 `school_id` 隔离——ORM 层自动为所有查询注入 `school_id` 过滤（含 `db.get`），跨校访问返回 `None`→404；平台超管 `school_id=NULL` 不受限。
 
 **教师班级归属（班主任 + 科任）**：
 - `classrooms.teacher_id` 绑定**班主任**，`class_teachers` 表关联多位**科任老师**
 - 班主任与科任老师均可操作其所属班级的数据（成绩/积分/考勤/沟通/谈心/表现/评语/作业等）
-- 权限判定统一走 `permissions.get_teacher_class_ids()`（返回班主任 + 科任班级）与 `is_teacher_class_owner()`（判断教师是否可操作某班）
+- 权限判定统一走 `permissions.get_teacher_class_ids()`（返回班主任 + 科任班级，限定本校）与 `is_teacher_class_owner()`（判断教师是否可操作某班）
 
-**学生登录**：学生通过「班级 + 姓名 + 密码」登录，账号由教师创建学生档案时自动同步生成。
+**学生登录**：学生通过「学校 + 班级 + 姓名 + 密码」登录，账号由教师创建学生档案时自动同步生成。
 
 ## 5. 数据模型概览
 
@@ -119,8 +125,8 @@ techhub/
 
 | 域 | 表 | 关键字段 |
 | --- | --- | -------- |
-| 认证 | `users` | username、password_hash、role、class_id、name |
-| 基础 | `schools` / `classrooms` / `class_teachers` / `students` | 学校/班级/班级教师（班主任+科任）/学生档案（student_type 通学/寄宿） |
+| 认证 | `users` | username、password_hash、role、school_id、class_id、name |
+| 基础 | `schools` / `classrooms` / `class_teachers` / `students` | 学校（status 启用/停用）/班级/班级教师（班主任+科任）/学生档案（student_type 通学/寄宿） |
 | 作业 | `assignments` / `assignment_attachments` / `submissions` / `submission_comments` / `excellent_works` / `work_comments` | 任务/任务附件（一对多）/提交/提交点评/优秀/评论 |
 | 工作台 | `scores` / `leaves` / `attendance` / `points` / `communications` / `resources` / `exams` / `seats` / `settings` / `student_profile_tags` / `weekly_reports` / `student_board_history` | 成绩/请假/考勤点名/积分/沟通/资源/试卷/座位/设置/画像标签/周报/住宿历史 |
 | 日志 | `work_logs` / `class_plans` / `teacher_plans` / `schedules` / `activities` / `talks` / `return_records` / `performances` / `student_comments` | 日志/计划/课表/活动/谈心/返校/表现/评语 |
@@ -132,10 +138,13 @@ techhub/
 - `points.performance_id` → `performances.id`：积分关联表现记录，可实现积分追溯
 - `students.class_id` → `classrooms.id`：学生归属班级
 - `class_teachers.class_id + teacher_id` → 班级-教师多对多关联（科任老师，班主任由 `classrooms.teacher_id` 绑定）
-- `users.class_id + users.name` → 学生账号唯一标识（取代原 username 唯一约束）
+- `users.school_id + class_id + name` → 学生账号唯一标识（取代原 username 唯一约束；教师用户名按 `school_id + username` 校内唯一）
+- `settings.school_id + key` → 系统设置校内唯一（多租户下不同学校可设置同名配置项）
 - `import_history.user_id` → `users.id`：导入操作人追溯
 
-> 说明：模型大多**不定义 ORM relationship**，关联查询通过 `db.get()` / `filter()` 手动完成，以避免模块间循环 import；唯一例外是同文件内的 `Assignment ↔ AssignmentAttachment`（一对多，用 `relationship` + `cascade="all, delete-orphan"` 实现附件级联删除）。
+> 说明一：模型大多**不定义 ORM relationship**，关联查询通过 `db.get()` / `filter()` 手动完成，以避免模块间循环 import；唯一例外是同文件内的 `Assignment ↔ AssignmentAttachment`（一对多，用 `relationship` + `cascade="all, delete-orphan"` 实现附件级联删除）。
+
+> 说明二（`student_id` 语义歧义）：`submissions.student_id` 指向 `users.id`（学生登录账号），而 `scores` / `talks` / `performances` 等业务表的 `student_id` 指向 `students.id`（学生档案）。关联作业数据时需通过「班级 + 姓名」先查 User 再映射，勿混用。
 
 ## 6. API 约定
 

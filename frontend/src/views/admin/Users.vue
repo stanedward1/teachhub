@@ -2,7 +2,8 @@
   <div>
     <div class="toolbar">
       <el-select v-model="role" placeholder="全部角色" clearable style="width: 160px" @change="load">
-        <el-option label="管理员" value="admin" />
+        <el-option label="平台超管" value="super_admin" />
+        <el-option label="学校管理员" value="school_admin" />
         <el-option label="教师" value="teacher" />
         <el-option label="学生" value="student" />
       </el-select>
@@ -49,7 +50,7 @@
         <el-form-item label="姓名" required><el-input v-model="form.name" :disabled="nameDisabled" /></el-form-item>
         <el-form-item label="角色">
           <el-select v-model="form.role" style="width: 100%" :disabled="roleDisabled">
-            <el-option label="管理员" value="admin" />
+            <el-option label="学校管理员" value="school_admin" />
             <el-option label="教师" value="teacher" />
             <el-option label="学生" value="student" />
           </el-select>
@@ -91,16 +92,16 @@ const isTeacherOnly = currentUser?.role === 'teacher'
 
 // 教师不能重置其他教师/管理员的密码
 function canResetPwd(row) {
-  return !(isTeacherOnly && (row.role === 'teacher' || row.role === 'admin'))
+  return !(isTeacherOnly && (row.role === 'teacher' || ['school_admin', 'super_admin'].includes(row.role)))
 }
 // 教师不能删除其他教师/管理员
 function canRemove(row) {
-  return !(isTeacherOnly && (row.role === 'teacher' || row.role === 'admin'))
+  return !(isTeacherOnly && (row.role === 'teacher' || ['school_admin', 'super_admin'].includes(row.role)))
 }
 // 教师编辑其他教师/管理员时禁止修改角色
-const roleDisabled = computed(() => !!editing.value && isTeacherOnly && (editing.value.role === 'teacher' || editing.value.role === 'admin'))
+const roleDisabled = computed(() => !!editing.value && isTeacherOnly && (editing.value.role === 'teacher' || ['school_admin', 'super_admin'].includes(editing.value.role)))
 // 教师编辑其他教师/管理员时禁止修改姓名
-const nameDisabled = computed(() => !!editing.value && isTeacherOnly && (editing.value.role === 'teacher' || editing.value.role === 'admin'))
+const nameDisabled = computed(() => !!editing.value && isTeacherOnly && (editing.value.role === 'teacher' || ['school_admin', 'super_admin'].includes(editing.value.role)))
 
 onMounted(async () => {
   const res = await studentApi.classrooms()
@@ -120,10 +121,10 @@ async function load() {
 }
 
 function roleType(r) {
-  return { admin: 'danger', teacher: 'primary', student: 'info' }[r]
+  return { super_admin: 'danger', school_admin: 'warning', teacher: 'primary', student: 'info' }[r]
 }
 function roleText(r) {
-  return { admin: '管理员', teacher: '教师', student: '学生' }[r]
+  return { super_admin: '平台超管', school_admin: '学校管理员', teacher: '教师', student: '学生' }[r]
 }
 
 function openCreate() {

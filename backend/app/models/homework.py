@@ -17,6 +17,7 @@ class Assignment(Base):
     deadline = Column(String(50))
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     short_name = Column(String(100))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -50,7 +51,10 @@ class Submission(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     assignment_id = Column(Integer, ForeignKey("assignments.id"), nullable=False, index=True)
+    # 注意：此处 student_id 指向 users.id（学生登录账号），与 workbench/classlog 中
+    # Score.student_id / Talk.student_id 指向 students.id（学生档案）语义不同，勿混用。
     student_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     content = Column(Text)
     filename = Column(String(255))
     filepath = Column(String(500))
@@ -66,6 +70,7 @@ class ExcellentWork(Base):
     id = Column(Integer, primary_key=True, index=True)
     submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=False, unique=True)
     selected_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     note = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -78,6 +83,7 @@ class WorkComment(Base):
     id = Column(Integer, primary_key=True, index=True)
     excellent_id = Column(Integer, ForeignKey("excellent_works.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -90,6 +96,7 @@ class SubmissionComment(Base):
     id = Column(Integer, primary_key=True, index=True)
     submission_id = Column(Integer, ForeignKey("submissions.id"), nullable=False, index=True)
     teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     content = Column(Text, nullable=False)
     score = Column(Integer, nullable=True)  # 可选评分 0-100
     created_at = Column(DateTime(timezone=True), server_default=func.now())

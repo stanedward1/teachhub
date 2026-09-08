@@ -33,11 +33,17 @@ def validate_password_strength(password: str) -> str | None:
     return None
 
 
-def create_access_token(subject: str, role: str, expires_delta: timedelta | None = None) -> str:
+def create_access_token(
+    subject: str,
+    role: str,
+    school_id: int | None = None,
+    expires_delta: timedelta | None = None,
+) -> str:
+    """签发 JWT。payload 携带 school_id 作为租户上下文（super_admin 为 None）。"""
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    payload = {"sub": subject, "role": role, "exp": expire}
+    payload = {"sub": subject, "role": role, "school_id": school_id, "exp": expire}
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
