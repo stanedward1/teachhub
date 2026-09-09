@@ -98,7 +98,6 @@ function renderRadar() {
         { name: '学业', max: 100 },
         { name: '品德', max: 100 },
         { name: '出勤', max: 100 },
-        { name: '活动', max: 100 },
         { name: '技能', max: 100 }
       ],
       radius: '65%'
@@ -108,7 +107,7 @@ function renderRadar() {
         type: 'radar',
         data: [
           {
-            value: [r.academic, r.moral, r.attendance, r.activity, r.skill],
+            value: [r.academic, r.moral, r.attendance, r.skill],
             name: '画像',
             areaStyle: { color: 'rgba(37,99,235,0.25)' },
             lineStyle: { color: '#2563eb' },

@@ -949,12 +949,11 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
     tags = db.query(StudentProfileTag).filter(StudentProfileTag.student_id == student_id).all()
     tag_list = [{"id": t.id, "tag": t.tag, "category": t.category} for t in tags]
 
-    # 五维雷达得分
+    # 四维雷达得分
     radar = {
         "academic": clamp_score(round(score_summary["avg"] if scores else 50, 1)),
         "moral": clamp_score(round(50 + point_delta * 2, 1)) if performances else 50,
         "attendance": clamp_score(round(100 - leave_summary["total"] * 5, 1)),
-        "activity": clamp_score(round(50 + performance_summary["positive"] * 5, 1)),
         "skill": clamp_score(round(submission_summary["rate"], 1)),
     }
 
@@ -992,17 +991,6 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
             "method": "满分 100 分，每请假 1 次扣 5 分，最低 0 分",
             "indicators": [
                 f"请假记录 {leave_summary['total']} 次",
-            ],
-        },
-        {
-            "key": "activity",
-            "name": "活动",
-            "score": radar["activity"],
-            "source": "学生表现记录（学生表现模块，积极/消极）",
-            "method": "基准 50 分 + 积极表现次数 × 5（上限 100），无记录时默认 50 分",
-            "indicators": [
-                f"表现记录 {performance_summary['total']} 条",
-                f"积极 {performance_summary['positive']} 次 / 消极 {performance_summary['negative']} 次",
             ],
         },
         {

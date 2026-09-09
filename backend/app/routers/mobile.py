@@ -136,12 +136,11 @@ def mobile_student_overview(
     excellent_count = sum(1 for s in submissions if s.id in excellent_ids)
     skill = round(excellent_count / len(submissions) * 100, 1) if submissions else 0
 
-    # 五维雷达（与桌面端画像同口径）
+    # 四维雷达（与桌面端画像同口径）
     radar = {
         "academic": clamp_score(round(avg, 1)) if scores else 50,
         "moral": clamp_score(round(50 + point_delta * 2, 1)) if performances else 50,
         "attendance": clamp_score(round(100 - leave_summary["total"] * 5, 1)),
-        "activity": clamp_score(round(50 + performance_summary["positive"] * 5, 1)),
         "skill": clamp_score(round(skill, 1)),
     }
 
