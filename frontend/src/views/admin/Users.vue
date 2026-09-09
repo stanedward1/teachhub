@@ -71,7 +71,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi, metaApi, studentApi } from '../../api'
 import { getUser } from '../../utils/auth'
@@ -79,7 +80,8 @@ import { getUser } from '../../utils/auth'
 const items = ref([])
 const classes = ref([])
 const role = ref('')
-const keyword = ref('')
+const keyword = useDebouncedRef('', 300)
+watch(keyword, () => load())
 const loading = ref(false)
 const dialog = ref(false)
 const editing = ref(null)

@@ -107,7 +107,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
+import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SortBar from '../../components/SortBar.vue'
 import { useSort } from '../../composables/useSort'
@@ -116,7 +117,8 @@ import { examApi } from '../../api'
 const rawItems = ref([])
 const { order, useSorted } = useSort('exams')
 const items = useSorted(rawItems)
-const keyword = ref('')
+const keyword = useDebouncedRef('', 300)
+watch(keyword, () => load())
 const loading = ref(false)
 
 // 上传

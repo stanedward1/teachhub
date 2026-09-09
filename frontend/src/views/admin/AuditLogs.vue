@@ -47,12 +47,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
+import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { adminApi } from '../../api'
 
 const items = ref([])
 const action = ref('')
-const keyword = ref('')
+const keyword = useDebouncedRef('', 300)
+watch(keyword, () => load())
 const date = ref('')
 const page = ref(1)
 const pageSize = 20

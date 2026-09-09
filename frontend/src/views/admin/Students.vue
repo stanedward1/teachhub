@@ -264,7 +264,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts/core'
 import { PieChart } from 'echarts/charts'
@@ -277,7 +278,8 @@ import { studentApi, metaApi } from '../../api'
 
 const rawItems = ref([])
 const classes = ref([])
-const keyword = ref('')
+const keyword = useDebouncedRef('', 300)
+watch(keyword, () => load())
 const classId = ref(null)
 const droppedFilter = ref('false')
 const page = ref(1)

@@ -27,10 +27,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
+import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { mobileApi } from '../api/mobile'
 
-const keyword = ref('')
+const keyword = useDebouncedRef('', 300)
+watch(keyword, () => load())
 const items = ref([])
 const loading = ref(false)
 const refreshing = ref(false)
