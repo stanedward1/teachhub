@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     Assignment,
+    AssignmentAttachment,
     Attendance,
     ClassPlan,
     ClassTeacher,
@@ -88,13 +89,105 @@ def purge_user_data(db: Session, user_id: int) -> None:
     db.query(ClassTeacher).filter(ClassTeacher.teacher_id == user_id).delete(
         synchronize_session=False
     )
-    # 3) 其余以 user_id / teacher_id / created_by / selected_by / changed_by 引用的业务表
+
+    # 3) 作业链级联清理（按「叶子 → 根」拓扑倒序删除，否则 MySQL 外键约束报错）
+    #    依赖关系（箭头 = 外键引用方向，需反向删除）：
+    #      work_comments -> excellent_works -> submissions -> assignments
+    #      submission_comments -> submissions
+    #      assignment_attachments -> assignments
+    #      excellent_works.selected_by -> users（教师评选他人提交）
+    #      work_comments.user_id -> users（用户评论）
+    #      submission_comments.teacher_id -> users（教师点评）
+    assignment_ids = [
+        r[0]
+        for r in db.query(Assignment.id)
+        .filter(Assignment.created_by == user_id)
+        .all()
+    ]
+    # 该教师评选的优秀作品（可能是他人作业下的提交）
+    selected_excellent_ids = [
+        r[0]
+        for r in db.query(ExcellentWork.id)
+        .filter(ExcellentWork.selected_by == user_id)
+        .all()
+    ]
+    # 该教师作业下的所有提交
+    sub_ids = []
+    if assignment_ids:
+        sub_ids = [
+            r[0]
+            for r in db.query(Submission.id)
+            .filter(Submission.assignment_id.in_(assignment_ids))
+            .all()
+        ]
+
+    # 3.1 最底层：work_comments（引用 excellent_works.id 或 users.id）
+    #     先删「该用户发布的评论」+「挂在将被删除的 excellent_works 下的评论」
+    wc_q = db.query(WorkComment).filter(WorkComment.user_id == user_id)
+    if selected_excellent_ids or sub_ids:
+        excellent_ids_to_del = set(selected_excellent_ids)
+        # 该教师作业的 submissions 若被评选，对应的 excellent_works 也要删
+        if sub_ids:
+            ew_by_sub = [
+                r[0]
+                for r in db.query(ExcellentWork.id)
+                .filter(ExcellentWork.submission_id.in_(sub_ids))
+                .all()
+            ]
+            excellent_ids_to_del.update(ew_by_sub)
+        if excellent_ids_to_del:
+            wc_q = wc_q | db.query(WorkComment).filter(
+                WorkComment.excellent_id.in_(list(excellent_ids_to_del))
+            )
+    wc_q.delete(synchronize_session=False)
+
+    # 3.2 excellent_works：删「该教师评选的」+「挂在将被删 submissions 下的」
+    ew_q = None
+    if selected_excellent_ids:
+        ew_q = db.query(ExcellentWork).filter(
+            ExcellentWork.id.in_(selected_excellent_ids)
+        )
+    if sub_ids:
+        q2 = db.query(ExcellentWork).filter(
+            ExcellentWork.submission_id.in_(sub_ids)
+        )
+        ew_q = q2 if ew_q is None else ew_q.union(q2)
+    if ew_q is not None:
+        # union 结果需用子查询删除
+        ids = [r[0] for r in ew_q.all()]
+        if ids:
+            db.query(ExcellentWork).filter(ExcellentWork.id.in_(ids)).delete(
+                synchronize_session=False
+            )
+
+    # 3.3 submission_comments：删「该教师点评的」+「挂在将被删 submissions 下的」
+    sc_q = db.query(SubmissionComment).filter(
+        SubmissionComment.teacher_id == user_id
+    )
+    if sub_ids:
+        sc_q = sc_q | db.query(SubmissionComment).filter(
+            SubmissionComment.submission_id.in_(sub_ids)
+        )
+    sc_q.delete(synchronize_session=False)
+
+    # 3.4 submissions（该教师作业下的提交）
+    if sub_ids:
+        db.query(Submission).filter(Submission.id.in_(sub_ids)).delete(
+            synchronize_session=False
+        )
+
+    # 3.5 assignment_attachments + assignments
+    if assignment_ids:
+        db.query(AssignmentAttachment).filter(
+            AssignmentAttachment.assignment_id.in_(assignment_ids)
+        ).delete(synchronize_session=False)
+        db.query(Assignment).filter(Assignment.id.in_(assignment_ids)).delete(
+            synchronize_session=False
+        )
+
+    # 4) 其余直接引用 users.id 且无子表依赖的业务表
     _USER_DATA_MODELS = [
         # (模型, 引用列名)
-        (Assignment, "created_by"),
-        (ExcellentWork, "selected_by"),
-        (WorkComment, "user_id"),
-        (SubmissionComment, "teacher_id"),
         (WorkLog, "teacher_id"),
         (ClassPlan, "teacher_id"),
         (TeacherPlan, "teacher_id"),
