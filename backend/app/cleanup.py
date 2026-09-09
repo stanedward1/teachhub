@@ -11,6 +11,7 @@ SQLite 默认不开启外键约束，因此这些孤儿数据不会立刻报错�
 """
 import os
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -123,52 +124,40 @@ def purge_user_data(db: Session, user_id: int) -> None:
 
     # 3.1 最底层：work_comments（引用 excellent_works.id 或 users.id）
     #     先删「该用户发布的评论」+「挂在将被删除的 excellent_works 下的评论」
-    wc_q = db.query(WorkComment).filter(WorkComment.user_id == user_id)
-    if selected_excellent_ids or sub_ids:
-        excellent_ids_to_del = set(selected_excellent_ids)
-        # 该教师作业的 submissions 若被评选，对应的 excellent_works 也要删
-        if sub_ids:
-            ew_by_sub = [
-                r[0]
-                for r in db.query(ExcellentWork.id)
-                .filter(ExcellentWork.submission_id.in_(sub_ids))
-                .all()
-            ]
-            excellent_ids_to_del.update(ew_by_sub)
-        if excellent_ids_to_del:
-            wc_q = wc_q | db.query(WorkComment).filter(
-                WorkComment.excellent_id.in_(list(excellent_ids_to_del))
-            )
-    wc_q.delete(synchronize_session=False)
+    excellent_ids_to_del = set(selected_excellent_ids)
+    if sub_ids:
+        ew_by_sub = [
+            r[0]
+            for r in db.query(ExcellentWork.id)
+            .filter(ExcellentWork.submission_id.in_(sub_ids))
+            .all()
+        ]
+        excellent_ids_to_del.update(ew_by_sub)
+    wc_cond = WorkComment.user_id == user_id
+    if excellent_ids_to_del:
+        wc_cond = or_(wc_cond, WorkComment.excellent_id.in_(list(excellent_ids_to_del)))
+    db.query(WorkComment).filter(wc_cond).delete(synchronize_session=False)
 
     # 3.2 excellent_works：删「该教师评选的」+「挂在将被删 submissions 下的」
-    ew_q = None
-    if selected_excellent_ids:
-        ew_q = db.query(ExcellentWork).filter(
-            ExcellentWork.id.in_(selected_excellent_ids)
-        )
+    ew_ids = set(selected_excellent_ids)
     if sub_ids:
-        q2 = db.query(ExcellentWork).filter(
-            ExcellentWork.submission_id.in_(sub_ids)
+        ew_by_sub = [
+            r[0]
+            for r in db.query(ExcellentWork.id)
+            .filter(ExcellentWork.submission_id.in_(sub_ids))
+            .all()
+        ]
+        ew_ids.update(ew_by_sub)
+    if ew_ids:
+        db.query(ExcellentWork).filter(ExcellentWork.id.in_(list(ew_ids))).delete(
+            synchronize_session=False
         )
-        ew_q = q2 if ew_q is None else ew_q.union(q2)
-    if ew_q is not None:
-        # union 结果需用子查询删除
-        ids = [r[0] for r in ew_q.all()]
-        if ids:
-            db.query(ExcellentWork).filter(ExcellentWork.id.in_(ids)).delete(
-                synchronize_session=False
-            )
 
     # 3.3 submission_comments：删「该教师点评的」+「挂在将被删 submissions 下的」
-    sc_q = db.query(SubmissionComment).filter(
-        SubmissionComment.teacher_id == user_id
-    )
+    sc_cond = SubmissionComment.teacher_id == user_id
     if sub_ids:
-        sc_q = sc_q | db.query(SubmissionComment).filter(
-            SubmissionComment.submission_id.in_(sub_ids)
-        )
-    sc_q.delete(synchronize_session=False)
+        sc_cond = or_(sc_cond, SubmissionComment.submission_id.in_(sub_ids))
+    db.query(SubmissionComment).filter(sc_cond).delete(synchronize_session=False)
 
     # 3.4 submissions（该教师作业下的提交）
     if sub_ids:
