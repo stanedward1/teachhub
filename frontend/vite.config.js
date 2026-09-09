@@ -1,16 +1,32 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import Components from 'unplugin-vue-components/vite'
-import { ElementPlusResolver, VantResolver } from 'unplugin-vue-components/resolvers'
 
 export default defineConfig({
   plugins: [
     vue(),
-    // 按需引入 Element Plus / Vant 组件及其样式，避免全量打包
-    Components({
-      resolvers: [ElementPlusResolver(), VantResolver()],
-    }),
   ],
+  // 依赖预构建：把 CJS 依赖（dayjs 等）提前转 ESM，避免浏览器报
+  // "does not provide an export named 'default'" 白屏错误；
+  // 全量预构建 element-plus，避免 dev 模式运行时反复发现新依赖触发 reload 卡顿
+  optimizeDeps: {
+    include: [
+      'vue',
+      'vue-router',
+      'axios',
+      'echarts',
+      'echarts/core',
+      'echarts/charts',
+      'echarts/components',
+      'echarts/renderers',
+      'marked',
+      'dompurify',
+      'dayjs',
+      'lodash-unified',
+      'element-plus',
+      '@element-plus/icons-vue',
+      'vant',
+    ],
+  },
   server: {
     port: 5173,
     proxy: {

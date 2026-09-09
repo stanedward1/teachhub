@@ -1,29 +1,25 @@
 import { createApp } from 'vue'
-import {
-  ArrowDown, Back, Bell, Briefcase, Calendar, ChatDotRound, Clock, CollectionTag,
-  Document, Expand, Folder, Fold, Key, Loading, Lock, Menu, Monitor, Notebook,
-  Odometer, Reading, Right, School, Setting, SortDown, SortUp, Star, Switch,
-  Tickets, Upload, UploadFilled, User,
-} from '@element-plus/icons-vue'
+import ElementPlus from 'element-plus'
+import 'element-plus/dist/index.css'
+import * as ElementPlusIconsVue from '@element-plus/icons-vue'
+import Vant from 'vant'
+import 'vant/lib/index.css'
 import App from './App.vue'
 import router from './router'
 import './style.css'
 
-// 命令式 API（ElMessage / ElMessageBox）样式需手动引入（按需组件样式由 resolver 处理）
-import 'element-plus/es/components/message/style/css'
-import 'element-plus/es/components/message-box/style/css'
-
 const app = createApp(App)
 
-// 具名导入 + 只注册项目实际用到的图标（tree-shaking 生效，避免把整个图标库打进主包）
-const ICONS = {
-  ArrowDown, Back, Bell, Briefcase, Calendar, ChatDotRound, Clock, CollectionTag,
-  Document, Expand, Folder, Fold, Key, Loading, Lock, Menu, Monitor, Notebook,
-  Odometer, Reading, Right, School, Setting, SortDown, SortUp, Star, Switch,
-  Tickets, Upload, UploadFilled, User,
-}
-for (const [name, comp] of Object.entries(ICONS)) {
-  app.component(name, comp)
+// 全量引入 Element Plus（项目几乎用到全部核心组件，按需引入在 dev 模式会
+// 反复触发依赖预构建重跑导致卡顿，全量引入可让 vite 启动时一次性预构建完成）
+app.use(ElementPlus)
+
+// 全量引入 Vant（移动端 /m 共用同一入口）
+app.use(Vant)
+
+// 全量注册图标
+for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+  app.component(key, component)
 }
 
 app.use(router)
