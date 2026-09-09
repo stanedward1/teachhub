@@ -41,12 +41,13 @@ from app.models import (
     WorkLog,
 )
 
-# 所有以 student_id 引用 students.id 的业务模型（按删除顺序，无特殊依赖）
+# 所有以 student_id 引用 students.id 的业务模型（无子表依赖，可平铺删除）。
+# 注意：Submission 不在此列——它被 excellent_works / submission_comments
+# 通过 submission_id 外键引用，需按「叶子 → 根」顺序单独级联处理。
 _STUDENT_DATA_MODELS = [
     Score,
     Leave,
     Communication,
-    Submission,
     Attendance,
     Performance,
     Talk,
@@ -58,7 +59,46 @@ _STUDENT_DATA_MODELS = [
 
 
 def purge_student_data(db: Session, student_id: int) -> None:
-    """级联删除某学生档案关联的全部业务数据（不 commit，由调用方统一提交）。"""
+    """级联删除某学生档案关联的全部业务数据（不 commit，由调用方统一提交）。
+
+    依赖关系（箭头 = 外键引用方向，需反向删除）：
+      work_comments -> excellent_works -> submissions
+      submission_comments -> submissions
+    因此删除该学生的 submissions 前，须先删引用它们的子表。
+    """
+    # 1) 该学生的所有提交（submissions）
+    sub_ids = [
+        r[0]
+        for r in db.query(Submission.id)
+        .filter(Submission.student_id == student_id)
+        .all()
+    ]
+    if sub_ids:
+        # 1.1 这些提交被评选的优秀作品（excellent_works）
+        ew_ids = [
+            r[0]
+            for r in db.query(ExcellentWork.id)
+            .filter(ExcellentWork.submission_id.in_(sub_ids))
+            .all()
+        ]
+        if ew_ids:
+            # 1.1.1 优秀作品下的评论（work_comments，叶子）
+            db.query(WorkComment).filter(
+                WorkComment.excellent_id.in_(ew_ids)
+            ).delete(synchronize_session=False)
+            # 1.1.2 优秀作品本身
+            db.query(ExcellentWork).filter(
+                ExcellentWork.id.in_(ew_ids)
+            ).delete(synchronize_session=False)
+        # 1.2 这些提交的点评（submission_comments）
+        db.query(SubmissionComment).filter(
+            SubmissionComment.submission_id.in_(sub_ids)
+        ).delete(synchronize_session=False)
+        # 1.3 提交本身
+        db.query(Submission).filter(Submission.id.in_(sub_ids)).delete(
+            synchronize_session=False
+        )
+    # 2) 其余以 student_id 直接引用的业务表（无子表依赖）
     for model in _STUDENT_DATA_MODELS:
         db.query(model).filter(model.student_id == student_id).delete(
             synchronize_session=False
