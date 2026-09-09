@@ -4,7 +4,6 @@ from app.models.homework import Assignment, AssignmentAttachment, Submission, Ex
 from app.models.workbench import (
     Score,
     Leave,
-    Point,
     Communication,
     Resource,
     Exam,
@@ -43,7 +42,6 @@ __all__ = [
     "SubmissionComment",
     "Score",
     "Leave",
-    "Point",
     "Communication",
     "Resource",
     "Exam",

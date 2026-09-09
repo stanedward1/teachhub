@@ -1,0 +1,24 @@
+sequenceDiagram
+    participant FE as Performances.vue / Record.vue(移动端)
+    participant API as classlog.py create_performance
+    participant DB as SQLite(performances)
+    participant PF as workbench.py get_student_profile
+    participant WR as workbench.py get_weekly_data
+    participant MO as mobile.py overview
+
+    FE->>API: POST /api/performances {student_id, ptype, content, points?}
+    API->>API: points 默认 积极+1 / 消极-1
+    API->>DB: INSERT performances(含 points)
+    API-->>FE: 记录(含 points)
+
+    Note over PF,MO: 统计口径统一基于 performances.points
+    PF->>DB: SELECT * FROM performances WHERE student_id=?
+    PF->>PF: 净变化=sum(points)；total=BASE_POINTS+净变化
+    PF-->>FE: point_summary{total,positive,negative,count,timeline[{points,reason=content,date}]}
+
+    WR->>DB: SELECT * FROM performances WHERE student_id IN (班级学生)
+    WR->>WR: point_map 聚合 → top5/bottom5/profile_summaries
+    WR-->>FE: {top5, bottom5, profile_summaries[points=净变化]}
+
+    MO->>DB: SELECT * FROM performances WHERE student_id=?
+    MO-->>FE: point_summary{total,...,recent[{points,reason=content,date}]}

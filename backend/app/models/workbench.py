@@ -34,20 +34,6 @@ class Leave(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
-class Point(Base):
-    """学生积分（正/负），可关联学生表现记录。"""
-
-    __tablename__ = "points"
-
-    id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
-    points = Column(Integer, nullable=False, default=0)
-    reason = Column(String(255))
-    performance_id = Column(Integer, ForeignKey("performances.id"), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-
 class Communication(Base):
     """家校沟通记录。"""
 

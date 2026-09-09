@@ -19,6 +19,13 @@
             <el-tag :type="row.ptype === '积极' ? 'success' : 'danger'" size="small">{{ row.ptype }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="分值" width="70" align="center">
+          <template #default="{ row }">
+            <span :style="{ color: (row.points || 0) > 0 ? '#67c23a' : (row.points || 0) < 0 ? '#f56c6c' : '#909399', fontWeight: 600 }">
+              {{ (row.points || 0) > 0 ? '+' + (row.points || 0) : (row.points || 0) }}
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column prop="content" label="内容" min-width="260" />
         <el-table-column prop="created_at" label="时间" width="170" />
         <el-table-column label="操作" width="100" fixed="right">

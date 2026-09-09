@@ -18,7 +18,6 @@ DELETE FROM submissions;
 DELETE FROM assignments;
 
 -- 2) 学生业务数据
-DELETE FROM points;
 DELETE FROM performances;
 DELETE FROM talks;
 DELETE FROM scores;

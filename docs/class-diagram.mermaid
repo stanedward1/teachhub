@@ -1,0 +1,44 @@
+classDiagram
+    class Student {
+        +int id
+        +str name
+        +str student_no
+        +int class_id
+    }
+    class Performance {
+        +int id
+        +int student_id
+        +int school_id
+        +str ptype
+        +int points
+        +str content
+        +str image
+        +datetime created_at
+    }
+    class PerformanceAPI {
+        +list_performances(page, page_size, student_id, class_id, ptype) dict
+        +create_performance(payload) dict
+        +delete_performance(performance_id) dict
+    }
+    class ProfileAPI {
+        +get_student_profile(student_id) dict
+        +point_summary_of(performances) dict
+    }
+    class WeeklyReportAPI {
+        +get_weekly_data(class_id, week_start, week_end) dict
+        +rank_students(point_map) dict
+    }
+    class MobileAPI {
+        +mobile_student_overview(student_id) dict
+    }
+    class Seed {
+        +seed_performance_points(db, students, now) void
+    }
+
+    Student "1" --> "*" Performance : student_id
+    PerformanceAPI ..> Performance : CRUD
+    ProfileAPI ..> Performance : 聚合 points
+    WeeklyReportAPI ..> Performance : 聚合 points
+    MobileAPI ..> Performance : 聚合 points
+    Seed ..> Performance : 生成种子数据
+    note for Performance "points 列为本合并新增；正数加分、负数减分，默认 ±1"

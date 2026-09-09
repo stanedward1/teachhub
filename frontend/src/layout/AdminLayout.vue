@@ -44,7 +44,6 @@
           <el-menu-item index="/admin/students">学生管理</el-menu-item>
           <el-menu-item index="/admin/scores">成绩管理</el-menu-item>
           <el-menu-item index="/admin/leaves">考勤管理</el-menu-item>
-          <el-menu-item index="/admin/points">积分管理</el-menu-item>
           <el-menu-item index="/admin/communications">家校沟通</el-menu-item>
           <el-menu-item index="/admin/resources">资源管理</el-menu-item>
           <el-menu-item index="/admin/exams">试卷管理</el-menu-item>
@@ -164,7 +163,6 @@ const titles = {
   '/admin/classrooms': '班级管理',
   '/admin/scores': '成绩管理',
   '/admin/leaves': '考勤管理',
-  '/admin/points': '积分管理',
   '/admin/communications': '家校沟通',
   '/admin/resources': '资源管理',
   '/admin/exams': '试卷管理',

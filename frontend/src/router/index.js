@@ -51,7 +51,6 @@ const routes = [
       { path: 'classrooms', name: 'admin-classrooms', component: () => import('../views/admin/Classrooms.vue') },
       { path: 'scores', name: 'admin-scores', component: () => import('../views/admin/Scores.vue') },
       { path: 'leaves', name: 'admin-leaves', component: () => import('../views/admin/Leaves.vue') },
-      { path: 'points', name: 'admin-points', component: () => import('../views/admin/Points.vue') },
       { path: 'communications', name: 'admin-communications', component: () => import('../views/admin/Communications.vue') },
       { path: 'resources', name: 'admin-resources', component: () => import('../views/admin/Resources.vue') },
       { path: 'exams', name: 'admin-exams', component: () => import('../views/admin/Exams.vue') },

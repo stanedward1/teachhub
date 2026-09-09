@@ -14,7 +14,6 @@ from app.models import (
     ExcellentWork,
     Leave,
     Performance,
-    Point,
     Score,
     Student,
     StudentProfileTag,
@@ -91,17 +90,27 @@ def mobile_student_overview(
         ],
     }
 
-    # 积分（总分 = 初始基础分 100 + 加减分净变化）
-    points = db.query(Point).filter(Point.student_id == student_id).all()
-    point_delta = sum(p.points for p in points)
+    # 表现 + 积分统计（一次查询派生两套口径；响应结构冻结）
+    performances = db.query(Performance).filter(Performance.student_id == student_id).all()
+    sorted_perfs = sorted(performances, key=lambda x: x.created_at, reverse=True)
+    point_delta = sum((p.points or 0) for p in performances)
     point_summary = {
         "total": BASE_POINTS + point_delta,
-        "positive": sum(p.points for p in points if p.points > 0),
-        "negative": sum(p.points for p in points if p.points < 0),
-        "count": len(points),
+        "positive": sum(v for v in ((p.points or 0) for p in performances) if v > 0),
+        "negative": sum(v for v in ((p.points or 0) for p in performances) if v < 0),
+        "count": len(performances),
         "recent": [
-            {"points": p.points, "reason": p.reason, "date": str(p.created_at)[:10]}
-            for p in sorted(points, key=lambda x: x.created_at, reverse=True)[:10]
+            {"points": p.points or 0, "reason": p.content or "", "date": str(p.created_at)[:10]}
+            for p in sorted_perfs[:10]
+        ],
+    }
+    performance_summary = {
+        "positive": sum(1 for p in performances if p.ptype == "积极"),
+        "negative": sum(1 for p in performances if p.ptype == "消极"),
+        "total": len(performances),
+        "recent": [
+            {"ptype": p.ptype, "content": p.content, "date": str(p.created_at)[:10]}
+            for p in sorted_perfs[:5]
         ],
     }
 
@@ -112,18 +121,6 @@ def mobile_student_overview(
         "recent": [
             {"reason": l.reason, "start": l.start_date, "end": l.end_date, "status": l.status}
             for l in sorted(leaves, key=lambda x: x.created_at, reverse=True)[:5]
-        ],
-    }
-
-    # 表现
-    performances = db.query(Performance).filter(Performance.student_id == student_id).all()
-    performance_summary = {
-        "positive": sum(1 for p in performances if p.ptype == "积极"),
-        "negative": sum(1 for p in performances if p.ptype == "消极"),
-        "total": len(performances),
-        "recent": [
-            {"ptype": p.ptype, "content": p.content, "date": str(p.created_at)[:10]}
-            for p in sorted(performances, key=lambda x: x.created_at, reverse=True)[:5]
         ],
     }
 
@@ -142,7 +139,7 @@ def mobile_student_overview(
     # 五维雷达（与桌面端画像同口径）
     radar = {
         "academic": clamp_score(round(avg, 1)) if scores else 50,
-        "moral": clamp_score(round(50 + point_delta * 2, 1)) if points else 50,
+        "moral": clamp_score(round(50 + point_delta * 2, 1)) if performances else 50,
         "attendance": clamp_score(round(100 - leave_summary["total"] * 5, 1)),
         "activity": clamp_score(round(50 + performance_summary["positive"] * 5, 1)),
         "skill": clamp_score(round(skill, 1)),

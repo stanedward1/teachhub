@@ -107,12 +107,6 @@ export const attendanceApi = {
   summary: (params) => request.get('/api/attendance/summary', { params })
 }
 
-export const pointApi = {
-  list: (params) => request.get('/api/points', { params }),
-  create: (data) => request.post('/api/points', data),
-  remove: (id) => request.delete(`/api/points/${id}`)
-}
-
 export const communicationApi = {
   list: (params) => request.get('/api/communications', { params }),
   create: (data) => request.post('/api/communications', data),

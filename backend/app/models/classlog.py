@@ -111,6 +111,7 @@ class Performance(Base):
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     ptype = Column(String(20), default="积极")  # 积极 / 消极
+    points = Column(Integer, default=1)  # 分值：正数加分、负数减分，默认 积极+1/消极-1
     content = Column(Text)
     image = Column(String(500))
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -17,7 +17,7 @@ from app.models import (
     ExcellentWork,
     ImportHistory,
     Leave,
-    Point,
+    Performance,
     Resource,
     Score,
     Seat,
@@ -291,72 +291,6 @@ def delete_leave(leave_id: int, user: User = Depends(get_current_user), db: Sess
         raise HTTPException(status_code=403, detail="无权删除该请假")
     db.delete(x)
     audit(db, user, "delete_leave", target=f"请假#{leave_id}-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"事由：{x.reason or '未填写'}")
-    db.commit()
-    return {"ok": True}
-
-
-# ---------------- 积分 ----------------
-@router.get("/api/points")
-def list_points(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    page, page_size = normalize_page(page, page_size)
-    q = db.query(Point)
-    # 排除退学学生
-    q = q.filter(Point.student_id.in_(active_student_id_query(db)))
-    # 教师只能查看自己负责班级的学生积分
-    if not is_any_admin(user):
-        class_ids = get_teacher_class_ids(db, user.id)
-        if class_ids:
-            student_ids = [s.id for s in db.query(Student).filter(Student.class_id.in_(class_ids)).all()]
-            q = q.filter(Point.student_id.in_(student_ids))
-        else:
-            return {"items": [], "total": 0}
-    if class_id:
-        q, denied = apply_student_class_filter(db, user, q, class_id, Point)
-        if denied:
-            return {"items": [], "total": 0}
-    if student_id:
-        # 教师只能查看自己班级学生的积分
-        if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
-            return {"items": [], "total": 0}
-        q = q.filter(Point.student_id == student_id)
-    total = q.count()
-    rows = q.order_by(Point.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return {"items": serialize_list_with_students(db, rows), "total": total}
-
-
-@router.post("/api/points")
-def create_point(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not payload.get("student_id") or payload.get("points") is None:
-        raise HTTPException(status_code=400, detail="请选择学生并填写积分")
-    # 退学/毕业限制
-    ensure_student_operable(db, payload["student_id"])
-    # 教师只能为自己班级的学生创建积分
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload["student_id"]):
-        raise HTTPException(status_code=403, detail="无权为该学生创建积分")
-    x = Point(
-        student_id=payload["student_id"],
-        points=payload["points"],
-        reason=payload.get("reason"),
-    )
-    db.add(x)
-    audit(db, user, "create_point", target=f"新增积分-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"积分：{x.points}分；原因：{x.reason or ''}")
-    db.commit()
-    db.refresh(x)
-    return attach_student(db, to_dict(x), x.student_id)
-
-
-@router.delete("/api/points/{point_id}")
-def delete_point(point_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    x = db.get(Point, point_id)
-    if not x:
-        raise HTTPException(status_code=404, detail="记录不存在")
-    # 退学/毕业限制
-    ensure_student_operable(db, x.student_id)
-    # 教师只能删除自己班级学生的积分
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, x.student_id):
-        raise HTTPException(status_code=403, detail="无权删除该积分")
-    db.delete(x)
-    audit(db, user, "delete_point", target=f"积分#{point_id}-{student_name(db, x.student_id)}", student_id=x.student_id)
     db.commit()
     return {"ok": True}
 
@@ -965,15 +899,25 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
         score_summary["by_subject"].setdefault(s.subject, []).append({"score": s.score, "exam": s.exam_name or "", "date": str(s.created_at)[:10]})
         score_summary["trend"].append({"subject": s.subject, "score": s.score, "exam": s.exam_name or "", "date": str(s.created_at)[:10]})
 
-    # 积分统计（总分 = 初始基础分 100 + 加减分净变化）
-    points = db.query(Point).filter(Point.student_id == student_id).all()
-    point_delta = sum(p.points for p in points)
+    # 表现 + 积分统计（一次查询派生两套口径；响应结构冻结）
+    performances = db.query(Performance).filter(Performance.student_id == student_id).all()
+    sorted_perfs = sorted(performances, key=lambda x: x.created_at, reverse=True)
+    point_delta = sum((p.points or 0) for p in performances)
     point_summary = {
         "total": BASE_POINTS + point_delta,
-        "positive": sum(p.points for p in points if p.points > 0),
-        "negative": sum(p.points for p in points if p.points < 0),
-        "count": len(points),
-        "timeline": [{"points": p.points, "reason": p.reason, "date": str(p.created_at)[:10]} for p in sorted(points, key=lambda x: x.created_at, reverse=True)[:20]],
+        "positive": sum(v for v in ((p.points or 0) for p in performances) if v > 0),
+        "negative": sum(v for v in ((p.points or 0) for p in performances) if v < 0),
+        "count": len(performances),
+        "timeline": [
+            {"points": p.points or 0, "reason": p.content or "", "date": str(p.created_at)[:10]}
+            for p in sorted_perfs[:20]
+        ],
+    }
+    performance_summary = {
+        "positive": sum(1 for p in performances if p.ptype == "积极"),
+        "negative": sum(1 for p in performances if p.ptype == "消极"),
+        "total": len(performances),
+        "recent": [{"ptype": p.ptype, "content": p.content, "date": str(p.created_at)[:10]} for p in sorted_perfs[:10]],
     }
 
     # 考勤统计
@@ -981,16 +925,6 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
     leave_summary = {
         "total": len(leaves),
         "recent": [{"reason": l.reason, "start": l.start_date, "end": l.end_date, "status": l.status} for l in leaves[:10]],
-    }
-
-    # 表现统计
-    from app.models import Performance
-    performances = db.query(Performance).filter(Performance.student_id == student_id).all()
-    performance_summary = {
-        "positive": sum(1 for p in performances if p.ptype == "积极"),
-        "negative": sum(1 for p in performances if p.ptype == "消极"),
-        "total": len(performances),
-        "recent": [{"ptype": p.ptype, "content": p.content, "date": str(p.created_at)[:10]} for p in sorted(performances, key=lambda x: x.created_at, reverse=True)[:10]],
     }
 
     # 作业统计（submissions.student_id 指向 students.id，直接用 student_id）
@@ -1015,7 +949,7 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
     # 五维雷达得分
     radar = {
         "academic": clamp_score(round(score_summary["avg"] if scores else 50, 1)),
-        "moral": clamp_score(round(50 + point_delta * 2, 1)) if points else 50,
+        "moral": clamp_score(round(50 + point_delta * 2, 1)) if performances else 50,
         "attendance": clamp_score(round(100 - leave_summary["total"] * 5, 1)),
         "activity": clamp_score(round(50 + performance_summary["positive"] * 5, 1)),
         "skill": clamp_score(round(submission_summary["rate"], 1)),
@@ -1039,8 +973,8 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
             "key": "moral",
             "name": "品德",
             "score": radar["moral"],
-            "source": "学生积分记录（积分管理模块，含表现联动加分/扣分）",
-            "method": "基准 50 分 + 积分净变化 × 2（上限 100），无积分记录时默认 50 分",
+            "source": "学生表现记录（表现管理模块的分值字段，加分/扣分）",
+            "method": "基准 50 分 + 表现分值净变化 × 2（上限 100），无记录时默认 50 分",
             "indicators": [
                 f"积分总计 {point_summary['total']} 分",
                 f"加分 {point_summary['positive']} 分 / 扣分 {point_summary['negative']} 分",
@@ -1152,7 +1086,6 @@ def get_weekly_data(class_id: int, week_start: str = "", week_end: str = "", use
         leave_q = leave_q.filter(Leave.start_date >= week_start, Leave.start_date <= week_end)
     leaves = leave_q.all()
 
-    from app.models import Performance
     perf_q = db.query(Performance).filter(Performance.student_id.in_(student_ids))
     if week_start and week_end:
         perf_q = perf_q.filter(Performance.created_at >= week_start, Performance.created_at <= week_end)
@@ -1160,51 +1093,36 @@ def get_weekly_data(class_id: int, week_start: str = "", week_end: str = "", use
     positive_count = sum(1 for p in performances if p.ptype == "积极")
     negative_count = sum(1 for p in performances if p.ptype == "消极")
 
-    from sqlalchemy import func as sqlfunc
-    point_ranking = (
-        db.query(Point.student_id, sqlfunc.sum(Point.points).label("total"))
-        .filter(Point.student_id.in_(student_ids))
-        .group_by(Point.student_id)
-        .order_by(sqlfunc.sum(Point.points).desc())
-        .all()
-    )
-    top5 = []
-    bottom5 = []
-    for pr in point_ranking[:5]:
-        name = student_map.get(pr.student_id, "")
-        if name:
-            top5.append({"name": name, "points": BASE_POINTS + pr.total})
-    for pr in point_ranking[-5:]:
-        name = student_map.get(pr.student_id, "")
-        if name:
-            bottom5.append({"name": name, "points": BASE_POINTS + pr.total})
-
     score_q = db.query(Score).filter(Score.student_id.in_(student_ids))
     if week_start and week_end:
         score_q = score_q.filter(Score.created_at >= week_start, Score.created_at <= week_end)
     recent_scores = score_q.all()
     score_avg = round(sum(s.score for s in recent_scores) / len(recent_scores), 1) if recent_scores else 0
 
-    # 批量查询：一次查询获取所有学生的积分/考勤/表现，避免 N+1
-    all_points = db.query(Point).filter(Point.student_id.in_(student_ids)).all()
+    # 批量查询：一次查询获取所有学生的考勤/表现，避免 N+1
     all_leaves = db.query(Leave).filter(Leave.student_id.in_(student_ids)).all()
     all_perfs = db.query(Performance).filter(Performance.student_id.in_(student_ids)).all()
 
-    # 按 student_id 分组聚合
-    point_map = {}
-    for p in all_points:
-        point_map.setdefault(p.student_id, 0)
-        point_map[p.student_id] += p.points
-    leave_map = {}
+    # 一次遍历派生：积分排行（point_map）+ 表现正负计数（perf_map）
+    point_map: dict = {}
+    perf_map: dict = {}
+    for p in all_perfs:
+        point_map[p.student_id] = point_map.get(p.student_id, 0) + (p.points or 0)
+        d = perf_map.setdefault(p.student_id, {"positive": 0, "negative": 0})
+        if p.ptype == "积极":
+            d["positive"] += 1
+        else:
+            d["negative"] += 1
+    leave_map: dict = {}
     for l in all_leaves:
         leave_map[l.student_id] = leave_map.get(l.student_id, 0) + 1
-    perf_map = {}
-    for p in all_perfs:
-        perf_map.setdefault(p.student_id, {"positive": 0, "negative": 0})
-        if p.ptype == "积极":
-            perf_map[p.student_id]["positive"] += 1
-        else:
-            perf_map[p.student_id]["negative"] += 1
+
+    # 积分排行（全量累计，不限周，保留旧语义）
+    ranked = sorted(point_map.items(), key=lambda kv: kv[1], reverse=True)
+    top5 = [{"name": student_map.get(sid, ""), "points": BASE_POINTS + total}
+            for sid, total in ranked[:5] if student_map.get(sid)]
+    bottom5 = [{"name": student_map.get(sid, ""), "points": BASE_POINTS + total}
+               for sid, total in ranked[-5:] if student_map.get(sid)]
 
     profile_summaries = []
     for s in students[:10]:

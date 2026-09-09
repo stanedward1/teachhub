@@ -7,7 +7,6 @@ from app.models import (
     Activity,
     ClassPlan,
     Performance,
-    Point,
     ReturnRecord,
     Schedule,
     Student,
@@ -439,7 +438,7 @@ def create_performance(payload: dict, user: User = Depends(get_current_user), db
     _check_student_permission(db, user, payload["student_id"])
     ptype = payload.get("ptype", "积极")
     content = payload.get("content", "")
-    # 积分联动：积极默认加分、消极默认减分，可手动指定分值
+    # 分值：积极默认加分、消极默认减分，可手动指定
     points = payload.get("points")
     if points is None:
         points = 1 if ptype == "积极" else -1
@@ -447,21 +446,12 @@ def create_performance(payload: dict, user: User = Depends(get_current_user), db
     x = Performance(
         student_id=payload["student_id"],
         ptype=ptype,
+        points=points,
         content=content,
         image=payload.get("image"),
     )
     db.add(x)
-    db.flush()  # 取得 x.id 用于关联
-    # 自动生成积分记录，关联到该表现
-    db.add(
-        Point(
-            student_id=x.student_id,
-            points=points,
-            reason=f"{ptype}表现：{content}" if content else f"{ptype}表现",
-            performance_id=x.id,
-        )
-    )
-    audit(db, user, "create_performance", target=f"新增表现-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"类型：{x.ptype}；内容：{(x.content or '')[:50]}")
+    audit(db, user, "create_performance", target=f"新增表现-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"类型：{x.ptype}；分值：{x.points}；内容：{(x.content or '')[:50]}")
     db.commit()
     db.refresh(x)
     return attach_student(db, to_dict(x), x.student_id)
@@ -474,8 +464,6 @@ def delete_performance(performance_id: int, user: User = Depends(get_current_use
         raise HTTPException(status_code=404, detail="记录不存在")
     # 教师只能删除自己班级学生的表现
     _check_student_permission(db, user, x.student_id)
-    # 同步删除关联的积分记录
-    db.query(Point).filter(Point.performance_id == x.id).delete()
     db.delete(x)
     audit(db, user, "delete_performance", target=f"表现#{performance_id}-{student_name(db, x.student_id)}", student_id=x.student_id)
     db.commit()

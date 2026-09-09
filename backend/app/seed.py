@@ -4,8 +4,8 @@
     cd backend
     python -m app.seed
 
-数据覆盖：学生档案、作业、成绩、考勤、积分、沟通、资源、试卷、
-        工作日志、表现、评语、画像标签、周报、导入历史等 28 张表。
+数据覆盖：学生档案、作业、成绩、考勤、表现（含分值）、沟通、资源、试卷、
+        工作日志、评语、画像标签、周报、导入历史等。
 """
 
 import json
@@ -26,7 +26,6 @@ from app.models import (
     ImportHistory,
     Leave,
     Performance,
-    Point,
     Resource,
     ReturnRecord,
     Schedule,
@@ -130,7 +129,7 @@ def seed_all():
         for model in (
             WeeklyReport, ImportHistory, StudentProfileTag,
             WorkComment, ExcellentWork, Submission, Assignment,
-            Score, Leave, Point, Communication, Resource, Exam, Seat,
+            Score, Leave, Communication, Resource, Exam, Seat,
             WorkLog, ClassPlan, TeacherPlan, Schedule, Activity, Talk, ReturnRecord,
             Performance, StudentComment, Student, Classroom, User, School, Setting,
         ):
@@ -358,48 +357,22 @@ def seed_all():
                 ))
         db.commit()
 
-        # ===== 积分 + 表现联动（40% 积分关联表现）=====
+        # ===== 表现记录（含分值；积分管理已合并入表现管理）=====
+        pf_total = 0
         for s in students:
             for _ in range(random.randint(2, 6)):
                 is_positive = random.random() < 0.65
-                points = random.choice([1, 2, 3, 5]) if is_positive else random.choice([-1, -2, -3])
-                reason = random.choice(PERFORMANCE_POSITIVE if is_positive else PERFORMANCE_NEGATIVE)
-                days_ago = random.randint(1, 60)
-                db.add(Point(
-                    student_id=s.id,
-                    points=points,
-                    reason=reason,
-                    created_at=now - timedelta(days=days_ago),
-                ))
-        db.commit()
-
-        # 表现记录（关联积分）
-        pf_total = 0
-        pf_linked = 0
-        for s in students:
-            for _ in range(random.randint(1, 4)):
-                is_positive = random.random() < 0.6
                 ptype = "积极" if is_positive else "消极"
                 content = random.choice(PERFORMANCE_POSITIVE if is_positive else PERFORMANCE_NEGATIVE)
-                pf = Performance(
+                points = random.choice([1, 2, 3, 5]) if is_positive else random.choice([-1, -2, -3])
+                db.add(Performance(
                     student_id=s.id,
                     ptype=ptype,
                     content=content,
+                    points=points,
                     created_at=now - timedelta(days=random.randint(1, 60)),
-                )
-                db.add(pf)
-                db.flush()
+                ))
                 pf_total += 1
-                # 40% 概率关联积分
-                if random.random() < 0.4:
-                    pts = random.choice([1, 2, 3, 5]) if is_positive else random.choice([-1, -2, -3])
-                    db.add(Point(
-                        student_id=s.id,
-                        points=pts,
-                        reason=f"{ptype}表现：{content[:20]}",
-                        performance_id=pf.id,
-                    ))
-                    pf_linked += 1
         db.commit()
 
         # ===== 家校沟通 =====
@@ -627,8 +600,7 @@ def seed_all():
         print(f"  作业：{len(assignments)} 个任务")
         print(f"  成绩：{db.query(Score).count()} 条")
         print(f"  请假：{db.query(Leave).count()} 条")
-        print(f"  积分：{db.query(Point).count()} 条")
-        print(f"  表现：{pf_total} 条（含 {pf_linked} 条关联积分）")
+        print(f"  表现：{pf_total} 条（含分值字段）")
         print(f"  沟通：{db.query(Communication).count()} 条")
         print(f"  资源：{db.query(Resource).count()} 个")
         print(f"  试卷：{db.query(Exam).count()} 份")
