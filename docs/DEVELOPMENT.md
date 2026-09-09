@@ -57,7 +57,7 @@ python -m pytest tests/ -v
 
 | 变量 | 说明 | 默认 |
 | ---- | ---- | ---- |
-| `DATABASE_URL` | 数据库连接串 | `sqlite:///./teachhub.db` |
+| `DATABASE_URL` | 数据库连接串 | `mysql+pymysql://root:password@127.0.0.1:3306/teachhub`（开发可切 `sqlite:///./teachhub.db`） |
 | `SECRET_KEY` | JWT 签名密钥 | 开发默认值（**生产必改**） |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Token 有效期 | `1440`（24 小时） |
 | `MAX_UPLOAD_SIZE` | 上传文件大小上限 | `20971520`（20MB） |
@@ -82,6 +82,7 @@ python -m pytest tests/ -v
 - 任何新增管理端接口**必须**挂 `require_teacher`（教师及以上）；平台级能力（学校开通/启停、跨校概览）挂 `require_super_admin`。
 - **多租户隔离（必须）**：所有涉及租户数据的查询/写入必须带 `school_id`。ORM 层已通过 `app/tenant.py` 全局自动隔离（`do_orm_execute` 注入 `school_id` 过滤 + `before_flush` 回填），平台超管（`school_id=NULL`）不受限；跨校按 ID 访问应返回 404（不泄露存在性）。角色判断用 `permissions.is_any_admin()`（本校全量）/ `is_platform_admin()`（跨校），**不要**直接比较 `user.role == "admin"`。
 - 教师班级数据隔离**统一**走 `permissions.get_teacher_class_ids()` / `is_teacher_class_owner()`，这两个函数已支持「班主任 + 科任老师」多教师模型；**不得**直接比较 `Classroom.teacher_id` 做权限判断，否则会漏掉科任老师。
+- **登录/注册限流**：认证入口用 `slowapi` 的 `@limiter.limit("5/minute")`（登录）/ `("10/minute")`（注册）装饰；`main.py` 已挂 `app.state.limiter` 与 `RateLimitExceeded` handler，新增认证端点须沿用该模式。
 
 ### 3.4 模型变更
 
@@ -90,6 +91,8 @@ python -m pytest tests/ -v
 - 应用到本地库：`alembic upgrade head`（本地启动或 Docker 启动会自动执行）
 - 确保「迁移链」与「模型 schema」保持一致，避免依赖 `create_all` 兜底而遗漏加列
 - **多租户约束调整**：改唯一约束（如 `settings.key` 全局唯一 → `(school_id, key)` 校内唯一）时，SQLite 不支持 `DROP CONSTRAINT`，需在迁移中**重建表**（新建→拷贝→删除→重命名），参考 `f1a2b3c4d5e6_settings_school_key_unique.py`；MySQL/PostgreSQL 可直接 `drop_constraint` + `create_unique_constraint`。
+- **手动改库须同步 `alembic_version`**：`main.py` 启动自动 `upgrade head`，若先用 SQL 手动改了库再触发迁移会重复执行报错（如 DROP INDEX 1091）。手动改库后需 `UPDATE alembic_version SET version_num='<rev>'` 到对应 revision。
+- **外键删除规则分层**：纯从属关系用 `ondelete="CASCADE"`（作业链、学生业务链，共 16 个）；归属/操作人关系保持 RESTRICT（`teacher_id`/`created_by`/`school_id`/`class_id` 等，共 24 个）。应用层 `cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序删除作双保险，与 CASCADE 兼容。
 
 ### 3.5 工具函数与辅助
 
@@ -118,6 +121,7 @@ python -m pytest tests/ -v
 - **移动端页面放 `mobile/views/`**，布局放 `mobile/layout/`，使用 Vant 组件（`van-*`），与桌面端 Element Plus（`el-*`）互不干扰。
 - API 调用统一收敛到 `api/index.js`（移动端专用接口放 `mobile/api/mobile.js`），页面**不得**直接 import axios。
 - 路由统一在 `router/index.js` 注册，角色守卫统一走 `beforeEach`；移动端路由前缀 `/m`，同样纳入 `requiresTeacher` 校验。
+- **状态管理用 Pinia**：全局状态放 `stores/`（如 `auth.js`），组件内 `useAuthStore()` 取响应式状态；不要直接反复解析 localStorage。`utils/auth.js` 的 `setAuth`/`clearAuth` 通过 `getActivePinia()` + 动态 import 惰性同步 store，避免循环依赖。
 
 ### 4.2 组件风格
 
@@ -125,6 +129,7 @@ python -m pytest tests/ -v
 - 使用全局 CSS 变量（`--brand`、`--text-*`、`--bg-*` 等）而非硬编码颜色。
 - Element Plus 图标通过 `main.js` 全局注册，页面直接 `<el-icon><Xxx /></el-icon>`。
 - 表单校验：必填字段在提交前显式校验并 `ElMessage` 提示；复杂校验建议上 `el-form` rules。
+- **防重复提交**：写操作复用 `src/composables/useSubmit.js` 的 loading 包裹；网络层 `request.js` 已做并发去重（AbortController + pending Map）。
 
 ### 4.3 样式系统
 
@@ -137,6 +142,12 @@ python -m pytest tests/ -v
 - Markdown 渲染**必须**经过 `DOMPurify.sanitize()` 进行 XSS 过滤。
 - 文件上传/下载使用 Blob 方式处理，注意 `responseType: 'blob'`。
 - Token 存储在 localStorage，请求时通过 Axios 拦截器自动注入。
+
+### 4.5 代码规范工具
+
+- ESLint 10（flat config，`eslint.config.js`）+ Prettier 3（`.prettierrc.json`）。
+- 脚本：`npm run lint`（检查）、`npm run lint:fix`（修复）、`npm run format`（格式化）。
+- 提交前确保 `npm run lint` 0 error（warning 可接受）。
 
 ## 5. Git 规范
 

@@ -54,7 +54,7 @@ TeachHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 **2. 教师工作台（管理端）**
 - 数据看板：核心指标卡片（可点击跳转对应模块）+ 请假趋势图（详情含班级+姓名）+ **成绩分布饼图（可按考试名称切换）** + 请假人员详情 + 班级动态（**教师视角仅统计自己班级**）
 - 学生管理：通学生/寄宿生统计图表（点击查看明细）+ 批量导入导出 + 密码管理 + 头像上传（**仅自己班级**）
-- 学生画像：五维雷达图（含评价依据说明）+ 成绩趋势 + 积分历程 + 个性化标签 + 住宿状态变更历史
+- 学生画像：四维雷达图（学业/品德/出勤/技能，含评价依据说明）+ 成绩趋势 + 积分历程 + 个性化标签 + 住宿状态变更历史
 - 成绩管理：录入/编辑/批量导入导出 + 排序 + **按班级联动筛选**
 - 考勤管理：**每日点名打卡**（出勤/缺勤/请假/迟到）+ 请假登记销假 + **出勤率统计看板**（近 7/30 天、按班级拆分）+ 积分管理（关联学生表现自动联动）+ 家校沟通、资源管理
 - 试卷管理：文件上传（.pdf/.docx）+ 下载 + 在线管理
@@ -78,10 +78,11 @@ TeachHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 - **首次登录强制改密**：新创建/重置密码的账号首次登录后必须修改密码才能使用
 - **密码强度校验**：至少 8 位，须同时包含字母和数字，不能全为相同字符
 - **登录失败锁定**：连续 5 次密码错误锁定账号 15 分钟（返回 423）
+- **登录限流**：登录 5 次/分钟、注册 10 次/分钟（slowapi，返回 429）
 
 ### 📱 移动端（独立 H5，Vant）
 - **独立移动端**（`/m`）：班主任/管理员专用，底部 TabBar 五个入口——首页、考勤、学生、记录、请假
-- 功能：学生速查与画像概览（五维雷达）、考勤打卡、快捷记录（表现/谈心）、请假登记与销假
+- 功能：学生速查与画像概览（四维雷达）、考勤打卡、快捷记录（表现/谈心）、请假登记与销假
 - 管理端侧边栏在窄屏自动变为**抽屉式菜单**（点击汉堡按钮滑出 + 遮罩）
 - 学生端导航自适应（窄屏隐藏文字、超小屏横向滚动）
 - 全局：表格横向滚动、对话框近全屏、分页居中换行、工具栏控件全宽
@@ -97,9 +98,9 @@ TeachHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 | ---- | ---- | ---- |
 | 后端框架 | FastAPI | 0.115 |
 | ORM | SQLAlchemy | 2.0 |
-| 数据库 | SQLite（默认，零配置）｜可切换 MySQL/MariaDB/PostgreSQL | — |
+| 数据库 | MySQL（生产默认）｜兼容 SQLite / MariaDB / PostgreSQL | — |
 | 数据库迁移 | Alembic | 1.13 |
-| 认证 | JWT（python-jose）+ bcrypt | — |
+| 认证 | JWT（PyJWT）+ bcrypt + 登录限流（slowapi） | — |
 | 前端框架 | Vue 3（Composition API） | 3.4 |
 | 构建工具 | Vite | 5.4 |
 | UI 组件库 | Element Plus（桌面端） | 2.7 |
@@ -127,15 +128,16 @@ techhub/
 │   │   ├── utils.py            # 工具函数（to_dict / gen_student_no / normalize_page）
 │   │   ├── audit.py            # 操作审计日志 + 批量查询
 │   │   ├── seed.py             # 假数据种子（默认校 + 第二校，多租户）
-│   │   ├── models/             # 数据模型（按域分组，34 张表）
+│   │   ├── cleanup.py          # 级联清理（purge_student_data / purge_user_data）
+│   │   ├── models/             # 数据模型（按域分组，33 张表）
 │   │   │   ├── user.py         #   User
 │   │   │   ├── school.py       #   School / Classroom / ClassTeacher / Student
 │   │   │   ├── homework.py     #   Assignment / AssignmentAttachment / Submission / ExcellentWork / WorkComment / SubmissionComment
-│   │   │   ├── workbench.py    #   Score / Leave / Point / Communication / Resource / Exam / Seat / Setting / ImportHistory / StudentProfileTag / WeeklyReport / StudentBoardHistory
+│   │   │   ├── workbench.py    #   Score / Leave / Communication / Resource / Exam / Seat / Setting / ImportHistory / StudentProfileTag / WeeklyReport / StudentBoardHistory
 │   │   │   ├── classlog.py     #   WorkLog / ClassPlan / TeacherPlan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
 │   │   │   └── operation_log.py
 │   │   └── routers/            # API 路由（按业务域分组）
-│   │       ├── auth.py         #   登录/注册/密码/头像上传/学校下拉
+│   │       ├── auth.py         #   登录/注册/密码/头像上传/学校下拉（含登录限流）
 │   │       ├── meta.py         #   班级选项、编程练习
 │   │       ├── homework.py     #   作业/提交/优秀作品/评论
 │   │       ├── students.py     #   学校/班级/学生 CRUD + 导出 + 密码管理 + 通宿生统计 + 住宿历史
@@ -147,6 +149,7 @@ techhub/
 │   │       └── uploads.py      #   通用文件上传
 │   ├── alembic/                # 数据库迁移（schema 唯一来源）
 │   ├── tests/                  # pytest 自动化测试（含多租户隔离）
+│   ├── clean_data.sql          # 数据清理 SQL（清空业务数据，保留账号+学校）
 │   ├── repair_student_profiles.py  # 存量学生档案修复脚本
 │   ├── ensure_school_admin.py      # 幂等补建学校管理员
 │   ├── requirements.txt        # 运行时依赖
@@ -159,13 +162,15 @@ techhub/
 │   ├── src/
 │   │   ├── api/                # Axios 封装 + 接口定义
 │   │   ├── router/             # 路由 + 角色守卫（四角色 + 强制改密）
+│   │   ├── stores/             # Pinia 状态（auth）
 │   │   ├── utils/              # 认证工具
-│   │   ├── composables/        # 可组合函数（useSort）
+│   │   ├── composables/        # 可组合函数（useSort、useSubmit）
 │   │   ├── components/         # Markdown / MarkdownEditor / StudentSelect（班级联动）/ SortBar
 │   │   ├── layout/             # AdminLayout（可折叠侧边栏）/ StudentLayout
 │   │   ├── mobile/             # 移动端（Vant）：layout + views（登录/首页/学生/考勤/记录/请假/改密）+ api
 │   │   └── views/              # 页面（student/ + admin/，含学校管理）
 │   ├── vite.config.js          # /api 与 /uploads 代理 + 构建优化
+│   ├── eslint.config.js        # ESLint 10（flat config）
 │   ├── Dockerfile              # 前端镜像（Node 构建 + Nginx 托管）
 │   ├── nginx.conf              # Nginx 配置（静态托管 + 反代后端）
 │   └── package.json

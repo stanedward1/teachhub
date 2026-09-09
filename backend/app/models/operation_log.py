@@ -9,7 +9,7 @@ class OperationLog(Base):
 
     __tablename__ = "operation_logs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     user_id = Column(Integer, index=True)
     username = Column(String(50))
     role = Column(String(20))
@@ -18,4 +18,4 @@ class OperationLog(Base):
     target = Column(String(255))  # 操作对象描述
     detail = Column(Text)  # 补充信息
     class_id = Column(Integer, index=True)  # 关联班级（班级/学生相关操作），账号与系统操作为空
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now())

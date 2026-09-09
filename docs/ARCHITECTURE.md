@@ -1,6 +1,6 @@
 # TeachHub 架构设计文档
 
-> 版本：2.1 ｜ 更新：2026-09-07 ｜ 适用对象：后端 / 前端 / 测试 / 运维
+> 版本：2.2 ｜ 更新：2026-09-09 ｜ 适用对象：后端 / 前端 / 测试 / 运维
 
 ## 1. 项目定位
 
@@ -20,16 +20,18 @@ TeachHub 是一套面向中职学校的「教学 + 班主任一体化工作平�
 | --- | ---- | ---- | ---- |
 | 后端框架 | FastAPI | 0.115 | 自动生成 OpenAPI 文档 |
 | ORM | SQLAlchemy | 2.0 | 声明式模型 |
-| 数据库 | SQLite | — | 单文件，可平滑切换 MySQL/PostgreSQL |
+| 数据库 | MySQL | 8.0+ | 生产默认；兼容 SQLite / MariaDB / PostgreSQL |
 | 迁移 | Alembic | 1.13 | schema 唯一来源，`upgrade head` 建表/加列 |
-| 认证 | python-jose + bcrypt | — | JWT（HS256）+ bcrypt 密码哈希 |
+| 认证 | PyJWT + bcrypt + slowapi | — | JWT（HS256）+ bcrypt 密码哈希 + 登录限流 |
 | 前端框架 | Vue 3 | 3.4 | Composition API + `<script setup>` |
+| 状态管理 | Pinia | 2 | 认证状态（auth store）响应式管理 |
 | UI 库 | Element Plus | 2.7 | 后台与表单（桌面端） |
 | 移动端 UI 库 | Vant | 4.10 | 移动端 H5（`/m`） |
-| 图表 | ECharts | 5.5 | 数据看板、通宿生统计 |
+| 图表 | ECharts | 5.5 | 数据看板、通宿生统计（按需引入） |
 | 构建 | Vite | 5.4 | 开发热更新 + 生产构建 |
 | Markdown | marked + DOMPurify | 12 | 作业正文/日志渲染 + XSS 防护 |
 | Excel | openpyxl | 3.1 | 导入/导出 |
+| 代码规范 | ESLint + Prettier | 10 / 3 | flat config + 格式化 |
 | 测试 | pytest | — | 后端自动化测试 |
 | 部署 | Docker + Nginx | — | 多阶段镜像 + 静态托管 + 反代 |
 
@@ -49,15 +51,16 @@ techhub/
 │   │   ├── utils.py           # to_dict / safe_filename / gen_student_no / normalize_page
 │   │   ├── audit.py           # 操作审计日志（含 school_id）+ 批量查询辅助
 │   │   ├── schemas.py         # Pydantic 请求/响应模型
+│   │   ├── cleanup.py         # 级联清理（purge_student_data / purge_user_data，叶子→根拓扑倒序）
 │   │   ├── models/            # SQLAlchemy 模型（按域分组）
 │   │   │   ├── user.py        #   User
 │   │   │   ├── school.py      #   School / Classroom / ClassTeacher / Student
 │   │   │   ├── homework.py    #   Assignment / AssignmentAttachment / Submission / ExcellentWork / WorkComment / SubmissionComment
-│   │   │   ├── workbench.py   #   Score / Leave / Point / Communication / Resource / Exam / Seat / Setting / ImportHistory
+│   │   │   ├── workbench.py   #   Score / Leave / Communication / Resource / Exam / Seat / Setting / ImportHistory / StudentProfileTag / WeeklyReport / StudentBoardHistory
 │   │   │   ├── classlog.py    #   WorkLog / ClassPlan / TeacherPlan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
 │   │   │   └── operation_log.py
 │   │   ├── routers/           # 按业务域分组的 API 路由
-│   │   │   ├── auth.py        #   登录/注册/密码/学校下拉
+│   │   │   ├── auth.py        #   登录/注册/密码/学校下拉（含登录限流）
 │   │   │   ├── meta.py        #   班级选项、编程练习（公开）
 │   │   │   ├── homework.py    #   作业/提交/优秀作品/评论
 │   │   │   ├── students.py    #   学校/班级/学生 CRUD + 班级教师（班主任+科任）+ 密码管理 + 通宿生统计
@@ -70,6 +73,7 @@ techhub/
 │   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
 │   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源）
 │   ├── tests/                 # pytest 自动化测试（含 test_multi_tenant.py）
+│   ├── clean_data.sql         # 数据清理 SQL（事务包裹，清空业务数据保留账号）
 │   ├── repair_student_profiles.py   # 存量学生档案修复脚本（可重复执行）
 │   ├── ensure_school_admin.py       # 幂等补建默认租户学校管理员
 │   ├── requirements.txt       # 运行时依赖
@@ -83,12 +87,14 @@ techhub/
 │   │   ├── api/               # axios 封装 + 各域 API 函数
 │   │   │   └── index.js       # 所有 API 接口定义
 │   │   ├── router/            # 路由 + 角色守卫（四角色 + 强制改密）
+│   │   ├── stores/            # Pinia store（auth）
 │   │   ├── layout/            # StudentLayout / AdminLayout（可折叠侧边栏）
 │   │   ├── components/        # Markdown / MarkdownEditor / StudentSelect
 │   │   ├── mobile/            # 移动端（Vant）：layout + views + api
 │   │   ├── views/student/     # 学生端页面
 │   │   └── views/admin/       # 管理端页面（含 Schools 学校管理）
 │   ├── vite.config.js         # dev 代理 /api、/uploads → 8080
+│   ├── eslint.config.js       # ESLint 10（flat config）
 │   ├── Dockerfile             # 前端镜像（Node 构建 + Nginx 托管）
 │   ├── nginx.conf             # Nginx 静态托管 + 反代后端
 │   └── package.json
@@ -121,30 +127,40 @@ techhub/
 
 ## 5. 数据模型概览
 
-### 5.1 表清单（34 张表）
+### 5.1 表清单（33 张表）
 
 | 域 | 表 | 关键字段 |
 | --- | --- | -------- |
 | 认证 | `users` | username、password_hash、role、school_id、class_id、name |
 | 基础 | `schools` / `classrooms` / `class_teachers` / `students` | 学校（status 启用/停用）/班级/班级教师（班主任+科任）/学生档案（student_type 通学/寄宿） |
 | 作业 | `assignments` / `assignment_attachments` / `submissions` / `submission_comments` / `excellent_works` / `work_comments` | 任务/任务附件（一对多）/提交/提交点评/优秀/评论 |
-| 工作台 | `scores` / `leaves` / `attendance` / `points` / `communications` / `resources` / `exams` / `seats` / `settings` / `student_profile_tags` / `weekly_reports` / `student_board_history` | 成绩/请假/考勤点名/积分/沟通/资源/试卷/座位/设置/画像标签/周报/住宿历史 |
+| 工作台 | `scores` / `leaves` / `attendance` / `communications` / `resources` / `exams` / `seats` / `settings` / `student_profile_tags` / `weekly_reports` / `student_board_history` | 成绩/请假/考勤点名/沟通/资源/试卷/座位/设置/画像标签/周报/住宿历史 |
 | 日志 | `work_logs` / `class_plans` / `teacher_plans` / `schedules` / `activities` / `talks` / `return_records` / `performances` / `student_comments` | 日志/计划/课表/活动/谈心/返校/表现/评语 |
 | 审计 | `operation_logs` | 操作审计日志（含 class_id 班级维度） |
 | 导入 | `import_history` | 数据导入历史（类型/文件名/成功/失败/错误详情） |
 
+> 说明：原独立的 `points` 积分表已并入 `performances`（新增 `points` 数值列承载积分语义），积分/画像/周报统计统一基于 `performances.points` 聚合，总分口径 `BASE_POINTS(100) + sum(points)`。
+
 ### 5.2 关键关联
 
-- `points.performance_id` → `performances.id`：积分关联表现记录，可实现积分追溯
+- `performances.points` → 积分语义列（正数加分/负数减分，默认 ±1）；学生表现与积分合并为同一业务
 - `students.class_id` → `classrooms.id`：学生归属班级
 - `class_teachers.class_id + teacher_id` → 班级-教师多对多关联（科任老师，班主任由 `classrooms.teacher_id` 绑定）
 - `users.school_id + class_id + name` → 学生账号唯一标识（取代原 username 唯一约束；教师用户名按 `school_id + username` 校内唯一）
 - `settings.school_id + key` → 系统设置校内唯一（多租户下不同学校可设置同名配置项）
 - `import_history.user_id` → `users.id`：导入操作人追溯
 
+### 5.3 外键删除策略（分层）
+
+外键共 40 个，按语义分层设置 `ondelete` 删除规则：
+
+- **CASCADE（16 个，纯从属关系）**：作业链（`assignment_attachments`/`submissions`→`assignments`、`excellent_works`/`submission_comments`→`submissions`、`work_comments`→`excellent_works`）+ 学生业务链（`scores`/`attendance`/`leaves`/`performances`/`communications`/`talks`/`return_records`/`student_comments`/`student_profile_tags`/`student_board_history`/`submissions`→`students`）。删父记录自动级联删子记录。
+- **RESTRICT（24 个，归属/操作人关系）**：`classrooms.teacher_id`、`class_teachers.teacher_id`、`assignments.created_by`、`excellent_works.selected_by`、各日志表的 `teacher_id`/`created_by`/`changed_by` 等，以及所有 `school_id`/`class_id` 引用。删归属主体时保留业务数据，由应用层显式处理。
+- **代码双保险**：`cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序先删子表再删父表，与 DB CASCADE 兼容（先显式清空，CASCADE 无副作用）。
+
 > 说明一：模型大多**不定义 ORM relationship**，关联查询通过 `db.get()` / `filter()` 手动完成，以避免模块间循环 import；唯一例外是同文件内的 `Assignment ↔ AssignmentAttachment`（一对多，用 `relationship` + `cascade="all, delete-orphan"` 实现附件级联删除）。
 
-> 说明二（`student_id` 语义统一）：所有业务表的 `student_id` 均指向 `students.id`（学生档案），包括 `submissions` / `scores` / `talks` / `performances` / `points` / `leaves` / `communications` / `return_records` / `student_comments` / `attendance` / `student_board_history` / `student_profile_tags`。学生登录账号（`users.id`）与学生档案通过「`class_id + name`」关联，由 `permissions.get_student_by_account()` 定位。
+> 说明二（`student_id` 语义统一）：所有业务表的 `student_id` 均指向 `students.id`（学生档案），包括 `submissions` / `scores` / `talks` / `performances` / `leaves` / `communications` / `return_records` / `student_comments` / `attendance` / `student_board_history` / `student_profile_tags`。学生登录账号（`users.id`）与学生档案通过「`class_id + name`」关联，由 `permissions.get_student_by_account()` 定位。
 
 ## 6. API 约定
 
@@ -188,7 +204,7 @@ techhub/
 
 ### 开发环境
 ```
-浏览器 → Vite(:5173) ──/api,/uploads──▶ FastAPI(:8080) ──▶ SQLite(teachhub.db)
+浏览器 → Vite(:5173) ──/api,/uploads──▶ FastAPI(:8080) ──▶ MySQL(teachhub)
 ```
 
 ### Docker 部署（推荐）
@@ -228,9 +244,11 @@ docker compose up -d --build
 | 后端框架 | FastAPI（弃用原 Express） | 原生 OpenAPI、类型提示、异步支持 |
 | 前端框架 | Vue3（弃用原 React） | 与班级日志系统一致，Element Plus 生态成熟 |
 | ORM 尽量无 relationship | 手动查询 | 避免循环 import，换取模型文件解耦（仅同文件的 Assignment↔Attachment 用 relationship） |
-| 数据库 | SQLite | 单文件易备份，满足单校规模；预留迁移路径 |
-| 认证 | JWT + bcrypt | 无状态、前后端分离友好 |
+| 数据库 | MySQL（生产默认，兼容 SQLite） | 强制外键约束暴露级联缺陷；SQLite 作零配置开发/单机备选 |
+| 认证 | PyJWT + bcrypt + slowapi | 无状态、前后端分离友好；弃用已停维的 python-jose；登录限流防爆破 |
 | 密码哈希 | bcrypt（弃用 passlib） | 规避 passlib/bcrypt 4.x 兼容问题 |
+| 状态管理 | Pinia | 用户信息响应式，替代 localStorage 反复解析 |
+| 积分与表现合并 | performances 加 points 列 | 消除重复建模（90% 语义重叠），统一统计口径 |
 | 学生账号 | 班级+姓名 定位 | 解决重名问题，支持自助注册 |
 | 积分联动 | 表现创建时自动生成积分 | 减少重复录入，积分可追溯 |
 | 文件管理 | 试卷上传独立接口 | 格式校验、分块写入、大小限制 |

@@ -7,7 +7,7 @@ from app.database import Base
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     # 学生账号 username = 姓名（可重名），教师/管理员账号学校内唯一
     username = Column(String(50), nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
@@ -21,6 +21,6 @@ class User(Base):
     # 安全策略：首次登录强制改密 + 登录失败锁定
     must_change_password = Column(Boolean, default=False, nullable=False)  # True=首次登录需改密
     failed_attempts = Column(Integer, default=0, nullable=False)           # 连续失败次数
-    locked_until = Column(DateTime(timezone=True), nullable=True)           # 锁定截止时间
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    locked_until = Column(DateTime, nullable=True)           # 锁定截止时间
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
