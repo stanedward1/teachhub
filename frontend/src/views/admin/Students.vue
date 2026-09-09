@@ -264,7 +264,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, nextTick } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts/core'
 import { PieChart } from 'echarts/charts'
@@ -326,6 +326,10 @@ onMounted(async () => {
   const res = await studentApi.classrooms()
   classes.value = res.items
   load()
+})
+
+onBeforeUnmount(() => {
+  if (chartInstance) { chartInstance.dispose(); chartInstance = null }
 })
 
 async function load() {

@@ -63,7 +63,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import * as echarts from 'echarts/core'
 import { RadarChart } from 'echarts/charts'
@@ -121,6 +121,10 @@ function renderRadar() {
 }
 
 onMounted(load)
+
+onBeforeUnmount(() => {
+  if (chart) { chart.dispose(); chart = null }
+})
 </script>
 
 <style scoped>

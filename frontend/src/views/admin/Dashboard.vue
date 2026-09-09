@@ -126,6 +126,7 @@ const selectedExam = ref('')
 let trendChart = null
 let distChart = null
 let attChart = null
+let resizeTimer = null
 
 // 考试名称列表（用于下拉选择）
 const examNames = computed(() => Object.keys(data.value.score_dist_by_exam || {}))
@@ -185,15 +186,19 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resize)
+  clearTimeout(resizeTimer)
   if (trendChart) { trendChart.dispose(); trendChart = null }
   if (distChart) { distChart.dispose(); distChart = null }
   if (attChart) { attChart.dispose(); attChart = null }
 })
 
 function resize() {
-  trendChart?.resize()
-  distChart?.resize()
-  attChart?.resize()
+  clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(() => {
+    trendChart?.resize()
+    distChart?.resize()
+    attChart?.resize()
+  }, 100)
 }
 
 function renderCharts() {

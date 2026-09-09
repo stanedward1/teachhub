@@ -180,7 +180,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts/core'
@@ -240,6 +240,11 @@ onMounted(async () => {
   }
   await nextTick()
   setTimeout(() => renderCharts(), 0)
+})
+
+onBeforeUnmount(() => {
+  if (radarChart) { radarChart.dispose(); radarChart = null }
+  if (trendChart) { trendChart.dispose(); trendChart = null }
 })
 
 function renderCharts() {
