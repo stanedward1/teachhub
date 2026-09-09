@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.audit import audit
+from app.cleanup import delete_avatar_file, purge_student_data
 from app.database import get_db
 from app.deps import get_current_user, require_school_admin, require_super_admin, require_teacher
 from app.permissions import ensure_same_school, get_teacher_class_ids, is_any_admin, is_platform_admin
@@ -205,6 +206,9 @@ def delete_user(user_id: int, user=Depends(admin_dep), db: Session = Depends(get
     u = db.get(User, user_id)
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # 不能删除自己
+    if u.id == user.id:
+        raise HTTPException(status_code=400, detail="不能删除当前登录账号")
     # 教师不能删除其他教师/管理员
     if user.role == "teacher" and u.role in ("teacher", "school_admin", "super_admin"):
         raise HTTPException(status_code=403, detail="教师无权删除其他教师或管理员")
@@ -213,9 +217,24 @@ def delete_user(user_id: int, user=Depends(admin_dep), db: Session = Depends(get
         ensure_same_school(user, u.school_id)
     if is_platform_admin(u) and db.query(User).filter(User.role == "super_admin").count() <= 1:
         raise HTTPException(status_code=400, detail="至少保留一个平台超管账号")
+
+    # 删除学生账号时，级联清理对应的学生档案及其业务数据，避免孤儿数据导致后续接口异常
+    if u.role == "student":
+        stu = (
+            db.query(Student)
+            .filter(Student.class_id == u.class_id, Student.name == u.name)
+            .first()
+        )
+        if stu:
+            purge_student_data(db, stu.id)
+            db.delete(stu)
+
     audit(db, user, "delete_user", target=f"{u.username} ({u.name})", detail=f"role={u.role}")
     db.delete(u)
     db.commit()
+
+    # 删除头像文件（账号删除成功后清理磁盘文件，失败不影响结果）
+    delete_avatar_file(u.avatar)
     return {"ok": True}
 
 

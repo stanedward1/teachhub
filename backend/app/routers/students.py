@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user, require_teacher
 from app.audit import audit, batch_student_avatar_map
+from app.cleanup import delete_avatar_file, purge_student_data
 from app.models import Classroom, ClassTeacher, School, Student, StudentBoardHistory, User
 from app.security import hash_password, validate_password_strength
 from app.schemas import StudentCreate, StudentUpdate
@@ -485,9 +486,23 @@ def delete_student(student_id: int, user: User = Depends(get_current_user), db: 
         raise HTTPException(status_code=403, detail="无权删除该学生")
     # 退学/毕业限制
     ensure_student_operable(db, student_id)
+
+    # 级联清理：删除该学生全部业务数据（成绩/考勤/表现/提交等），避免孤儿数据
+    purge_student_data(db, student_id)
+
+    # 同步删除对应的登录账号（users，通过班级+姓名定位），并清理其头像文件
+    account = get_student_account(db, s.class_id, s.name)
+    avatar_url = account.avatar if account else None
+
     db.delete(s)
-    audit(db, user, "delete_student", target=f"学生#{student_id}", student_id=student_id)
+    audit(db, user, "delete_student", target=f"{s.name} ({s.student_no})", student_id=student_id)
     db.commit()
+
+    # 账号与头像：在档案删除成功后清理（账号删除失败不影响档案已删的结果）
+    if account:
+        db.delete(account)
+        db.commit()
+    delete_avatar_file(avatar_url)
     return {"ok": True}
 
 
