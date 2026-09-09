@@ -18,7 +18,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
-logger = logging.getLogger("techhub")
+logger = logging.getLogger("teachhub")
 
 # 确保上传目录存在
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
@@ -26,7 +26,7 @@ os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 app = FastAPI(
     title=f"{settings.APP_NAME} API",
     description="""
-## TechHub —— 教学与班主任一体化工作平台
+## TeachHub —— 教学与班主任一体化工作平台
 
 三大功能模块：
 

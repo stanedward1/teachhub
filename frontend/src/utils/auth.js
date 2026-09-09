@@ -1,5 +1,5 @@
-const TOKEN_KEY = 'techhub_token'
-const USER_KEY = 'techhub_user'
+const TOKEN_KEY = 'teachhub_token'
+const USER_KEY = 'teachhub_user'
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY)
@@ -47,7 +47,7 @@ export function getSchoolId() {
   return getUser()?.school_id ?? null
 }
 
-const SCHOOL_KEY = 'techhub_school_id'
+const SCHOOL_KEY = 'teachhub_school_id'
 
 /** 记住上次选择的学校（登录页用） */
 export function getLastSchoolId() {

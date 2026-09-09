@@ -1,10 +1,10 @@
-# TechHub 架构设计文档
+# TeachHub 架构设计文档
 
 > 版本：2.1 ｜ 更新：2026-09-07 ｜ 适用对象：后端 / 前端 / 测试 / 运维
 
 ## 1. 项目定位
 
-TechHub 是一套面向中职学校的「教学 + 班主任一体化工作平台」，将原先分散的三个系统合并为**一套前后端分离**的应用：
+TeachHub 是一套面向中职学校的「教学 + 班主任一体化工作平台」，将原先分散的三个系统合并为**一套前后端分离**的应用：
 
 | 原系统 | 定位 | 合并后形态 |
 | ------ | ---- | ---------- |
@@ -188,7 +188,7 @@ techhub/
 
 ### 开发环境
 ```
-浏览器 → Vite(:5173) ──/api,/uploads──▶ FastAPI(:8080) ──▶ SQLite(techhub.db)
+浏览器 → Vite(:5173) ──/api,/uploads──▶ FastAPI(:8080) ──▶ SQLite(teachhub.db)
 ```
 
 ### Docker 部署（推荐）
@@ -200,7 +200,7 @@ docker compose up -d --build
 ```
 - `frontend` 容器：多阶段构建（Node 打包 → Nginx 托管），反代 `/api`、`/uploads` 到 `backend` 服务
 - `backend` 容器：`docker-entrypoint.py` 启动时先 `alembic upgrade head` 迁移，再按需 seed，最后起 uvicorn
-- SQLite 持久化在 `techhub-data` 卷，上传文件持久化在 `techhub-uploads` 卷
+- SQLite 持久化在 `teachhub-data` 卷，上传文件持久化在 `teachhub-uploads` 卷
 - 切换 MySQL/PostgreSQL 只需改 `DATABASE_URL` 环境变量
 
 ### 生产环境（裸机，可选）

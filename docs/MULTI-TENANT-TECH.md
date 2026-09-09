@@ -1,4 +1,4 @@
-# TechHub 多租户 SaaS 技术方案
+# TeachHub 多租户 SaaS 技术方案
 
 > 版本：v1.0 ｜ 日期：2026-09-07 ｜ 状态：已实现（2026-09-08）
 > 关联文档：[产品需求](MULTI-TENANT-PRD.md)

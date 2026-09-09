@@ -1,4 +1,4 @@
-# TechHub 开发规范
+# TeachHub 开发规范
 
 > 面向贡献者与维护者。目标：统一风格、降低协作成本、保证代码可维护。
 
@@ -57,7 +57,7 @@ python -m pytest tests/ -v
 
 | 变量 | 说明 | 默认 |
 | ---- | ---- | ---- |
-| `DATABASE_URL` | 数据库连接串 | `sqlite:///./techhub.db` |
+| `DATABASE_URL` | 数据库连接串 | `sqlite:///./teachhub.db` |
 | `SECRET_KEY` | JWT 签名密钥 | 开发默认值（**生产必改**） |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Token 有效期 | `1440`（24 小时） |
 | `MAX_UPLOAD_SIZE` | 上传文件大小上限 | `20971520`（20MB） |

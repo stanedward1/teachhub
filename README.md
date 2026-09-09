@@ -1,8 +1,8 @@
-# TechHub
+# TeachHub
 
 > 教学与班主任一体化工作平台 —— 一个账号，四种身份，覆盖「在线作业提交、班级日志、教师工作台」三大场景。
 
-TechHub 将**在线作业提交平台**、**班级日志管理系统**、**教师工作台**三个项目合并重构为**一套前后端分离**的应用，统一使用 **FastAPI + Vue 3** 技术栈，实现清晰的**角色权限隔离**。
+TeachHub 将**在线作业提交平台**、**班级日志管理系统**、**教师工作台**三个项目合并重构为**一套前后端分离**的应用，统一使用 **FastAPI + Vue 3** 技术栈，实现清晰的**角色权限隔离**。
 
 ## 文档导航
 
@@ -192,15 +192,15 @@ docker compose up -d --build
 
 - 前端：http://localhost （默认 `80` 端口，可用 `FRONTEND_PORT` 覆盖）
 - 后端 API 文档：http://localhost:8080/docs
-- 数据库：默认 SQLite，持久化在 `techhub-data` 数据卷；上传文件持久化在 `techhub-uploads`
+- 数据库：默认 SQLite，持久化在 `teachhub-data` 数据卷；上传文件持久化在 `teachhub-uploads`
 
 **自定义配置**（可选，通过环境变量或根目录 `.env` 覆盖）：
 
 | 变量 | 默认值 | 说明 |
 | ---- | ---- | ---- |
 | `FRONTEND_PORT` | `80` | 前端对外端口 |
-| `DATABASE_URL` | `sqlite:////app/data/techhub.db` | 数据库连接串，可切换 MySQL/PostgreSQL |
-| `SECRET_KEY` | `techhub-dev-secret-key` | JWT 密钥（生产必改） |
+| `DATABASE_URL` | `sqlite:////app/data/teachhub.db` | 数据库连接串，可切换 MySQL/PostgreSQL |
+| `SECRET_KEY` | `teachhub-dev-secret-key` | JWT 密钥（生产必改） |
 | `ENV` | `development` | `development` / `production` |
 | `CORS_ORIGINS` | `http://localhost,http://127.0.0.1` | 允许跨域来源 |
 
@@ -208,8 +208,8 @@ docker compose up -d --build
 > **生产环境务必设置 `ENV=production` 与强随机 `SECRET_KEY`**，否则后端会拒绝启动。
 
 **切换 MySQL**（可选）：`docker-compose.yml` 中已内置注释掉的 `mysql` 服务与连接串示例，按注释说明三步即可切换：
-1. 取消末尾 `mysql` 服务整段注释（自动创建 `techhub` 库）
-2. 将 `backend` 的 `DATABASE_URL` 改为 `mysql+pymysql://techhub:techhub123456@mysql:3306/techhub?charset=utf8mb4`
+1. 取消末尾 `mysql` 服务整段注释（自动创建 `teachhub` 库）
+2. 将 `backend` 的 `DATABASE_URL` 改为 `mysql+pymysql://teachhub:teachhub123456@mysql:3306/teachhub?charset=utf8mb4`
 3. 取消 `backend` 的 `depends_on: mysql` 注释，让后端等待 MySQL 就绪
 
 常用命令：
@@ -238,7 +238,7 @@ cd techhub
 启动完成后：
 - 前端：http://localhost:5173 （局域网设备用 `http://<本机IP>:5173/`）
 - 后端 API 文档：http://localhost:8080/docs
-- 数据库：默认 **SQLite**（`backend/techhub.db`，零配置）；如需 MySQL/MariaDB，运行 `DB_ENGINE=mysql bash start.sh` 并在 `start.sh` 顶部配置账号密码
+- 数据库：默认 **SQLite**（`backend/teachhub.db`，零配置）；如需 MySQL/MariaDB，运行 `DB_ENGINE=mysql bash start.sh` 并在 `start.sh` 顶部配置账号密码
 
 > **说明**：`start.sh` 自动检测 CPU 架构（x86_64 / arm64）、安装系统依赖与 Node.js 20、
 > 创建 Python 虚拟环境、生成 `.env`、执行数据库迁移（Alembic）与首次 seed、最后启动前后端；
@@ -345,8 +345,8 @@ ENV=production
 SECRET_KEY=替换为随机生成的64位十六进制字符串
 
 # 数据库（MySQL/MariaDB，生产推荐；也可用 SQLite 快速体验）
-# 先创建数据库：mysql -u root -p -e "CREATE DATABASE techhub CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-DATABASE_URL=mysql+pymysql://root:your_password@127.0.0.1:3306/techhub?charset=utf8mb4
+# 先创建数据库：mysql -u root -p -e "CREATE DATABASE teachhub CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+DATABASE_URL=mysql+pymysql://root:your_password@127.0.0.1:3306/teachhub?charset=utf8mb4
 
 # 允许跨域的前端地址（多个用逗号分隔）
 CORS_ORIGINS=http://localhost,http://your-domain.com
@@ -398,7 +398,7 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8080 app.main:app
 
 ### 6. 配置 Nginx 反向代理
 
-创建 `/etc/nginx/sites-available/techhub`：
+创建 `/etc/nginx/sites-available/teachhub`：
 
 ```nginx
 server {
@@ -445,7 +445,7 @@ server {
 启用配置：
 
 ```bash
-sudo ln -s /etc/nginx/sites-available/techhub /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/teachhub /etc/nginx/sites-enabled/
 sudo nginx -t           # 测试配置
 sudo systemctl reload nginx
 ```
@@ -460,11 +460,11 @@ sudo certbot --nginx -d your-domain.com
 
 ### 8. 使用 systemd 管理后端服务
 
-创建 `/etc/systemd/system/techhub.service`：
+创建 `/etc/systemd/system/teachhub.service`：
 
 ```ini
 [Unit]
-Description=TechHub Backend
+Description=TeachHub Backend
 After=network.target
 
 [Service]
@@ -484,9 +484,9 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable techhub
-sudo systemctl start techhub
-sudo systemctl status techhub   # 检查运行状态
+sudo systemctl enable teachhub
+sudo systemctl start teachhub
+sudo systemctl status teachhub   # 检查运行状态
 ```
 
 ### 9. 验证部署
@@ -524,7 +524,7 @@ python -m pytest tests/ -v
 | ---- | ---- | ---- | ---- |
 | `ENV` | 运行环境 | `development` | `production` |
 | `SECRET_KEY` | JWT 签名密钥 | 开发默认值 | **必须修改**为随机 64 位 hex |
-| `DATABASE_URL` | 数据库连接串 | `sqlite:///./techhub.db` | MySQL/PostgreSQL 连接串 |
+| `DATABASE_URL` | 数据库连接串 | `sqlite:///./teachhub.db` | MySQL/PostgreSQL 连接串 |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Token 有效期 | `1440`（24h） | 按需调整 |
 | `MAX_UPLOAD_SIZE` | 上传文件大小上限 | `20971520`（20MB） | 按需调整 |
 | `CORS_ORIGINS` | 允许跨域的前端地址 | `http://localhost:5173` | 生产域名 |
@@ -540,7 +540,7 @@ python -m pytest tests/ -v
 | 登录后立即跳回登录页 | Token 过期或 SECRET_KEY 变更 | 清除浏览器 localStorage，重新登录 |
 | 图表不显示 | ECharts DOM 未就绪 | 刷新页面，等待数据加载完成 |
 | `address already in use` | 端口被占用 | 修改 `run.py` 中的 `port` 参数 |
-| 数据库文件损坏 | 异常断电 | 恢复 `techhub.db` 备份文件 |
+| 数据库文件损坏 | 异常断电 | 恢复 `teachhub.db` 备份文件 |
 
 ## License
 

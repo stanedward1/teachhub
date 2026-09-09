@@ -1,6 +1,6 @@
 # 积分管理 → 表现管理 合并重构设计（保留表现管理）
 
-> 项目：TechHub（Vue3 + Element Plus / FastAPI + SQLAlchemy + SQLite + Alembic）
+> 项目：TeachHub（Vue3 + Element Plus / FastAPI + SQLAlchemy + SQLite + Alembic）
 > 原则：最小变更、不引入新依赖、保证表现管理功能完整与性能不降、移动端不受破坏。
 
 ---
@@ -66,7 +66,7 @@
   3. **兜底**：仍为 NULL 的表现（历史上没联动积分的）按 `ptype` 补默认值：消极→-1，积极→+1。
   4. **下线 points 表**：`op.drop_table('points')`（SQLite/MySQL 下 drop_table 连带删索引与外键，沿用 `a89fda91c31a` 的注释结论）。
 - downgrade：重建空 points 表 + 删除 performances.points 列（尽力而为）。
-- **风险控制**：迁移前备份 `backend/techhub.db`；`docker-entrypoint.py` 启动即 `alembic upgrade head`，无需改动。
+- **风险控制**：迁移前备份 `backend/teachhub.db`；`docker-entrypoint.py` 启动即 `alembic upgrade head`，无需改动。
 
 #### 2.2 后端层
 
@@ -189,7 +189,7 @@ sequenceDiagram
   - `backend/app/models/__init__.py`（删 Point 导出）
   - `backend/clean_data.sql`（删 `DELETE FROM points;`）
 - **要点**：迁移三步数据回填（独立积分→INSERT 表现 / 关联积分→UPDATE 表现 / 兜底 ±1）后 `drop_table('points')`。
-- **风险**：SQLite batch_alter 与 SQL 双方言兼容；执行前备份 techhub.db；迁移后用 sqlite3 抽查 performances.points 无 NULL。
+- **风险**：SQLite batch_alter 与 SQL 双方言兼容；执行前备份 teachhub.db；迁移后用 sqlite3 抽查 performances.points 无 NULL。
 
 #### T02【后端】路由层去积分化 + 统计口径切换 — P0，依赖 T01
 - **文件**：

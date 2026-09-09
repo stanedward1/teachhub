@@ -4,7 +4,7 @@
       <div class="brand">
         <div class="brand-mark">T</div>
         <div>
-          <h1>TechHub</h1>
+          <h1>TeachHub</h1>
           <p>教师 / 管理员后台</p>
         </div>
       </div>

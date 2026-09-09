@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# TechHub 一键启动脚本（本地开发 / 服务器部署通用）
+# TeachHub 一键启动脚本（本地开发 / 服务器部署通用）
 #
 # 用法:
 #   bash start.sh                 # 启动（缺依赖会自动安装），默认 SQLite
@@ -37,7 +37,7 @@ ENV_FILE="$BACKEND_DIR/.env"
 DB_ENGINE="${DB_ENGINE:-sqlite}"   # sqlite | mysql
 DB_USER="root"
 DB_PASSWORD="password"
-DB_NAME="techhub"
+DB_NAME="teachhub"
 DB_HOST="127.0.0.1"
 DB_PORT="3306"
 
@@ -186,7 +186,7 @@ setup_backend() {
   if [ "$DB_ENGINE" = "mysql" ]; then
     DATABASE_URL_VALUE="mysql+pymysql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?charset=utf8mb4"
   else
-    DATABASE_URL_VALUE="sqlite:///./techhub.db"
+    DATABASE_URL_VALUE="sqlite:///./teachhub.db"
   fi
 
   # 生成 .env（不存在时）；已存在则尊重用户已有配置
@@ -200,7 +200,7 @@ ENV=development
 DATABASE_URL=${DATABASE_URL_VALUE}
 
 # JWT 签名密钥
-SECRET_KEY=techhub-dev-secret-key-2026
+SECRET_KEY=teachhub-dev-secret-key-2026
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 
@@ -356,13 +356,13 @@ start_services() {
 
   info "启动后端 (uvicorn :8080)..."
   cd "$BACKEND_DIR"
-  nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 > /tmp/techhub_backend.log 2>&1 &
-  echo "  后端日志: /tmp/techhub_backend.log"
+  nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 > /tmp/teachhub_backend.log 2>&1 &
+  echo "  后端日志: /tmp/teachhub_backend.log"
 
   info "启动前端 (vite :5173)..."
   cd "$FRONTEND_DIR"
-  nohup npm run dev -- --host 0.0.0.0 > /tmp/techhub_frontend.log 2>&1 &
-  echo "  前端日志: /tmp/techhub_frontend.log"
+  nohup npm run dev -- --host 0.0.0.0 > /tmp/teachhub_frontend.log 2>&1 &
+  echo "  前端日志: /tmp/teachhub_frontend.log"
 
   # 等待端口就绪
   info "等待服务启动..."
@@ -379,7 +379,7 @@ start_services() {
   echo ""
   echo "======================================================"
   if [ "$ok" = "1" ]; then
-    echo "  TechHub 启动完成!"
+    echo "  TeachHub 启动完成!"
     echo "  前端:  http://localhost:5173/   (局域网: http://<本机IP>:5173/)"
     echo "  后端:  http://localhost:8080/   (API 文档: /docs)"
     echo "  数据库: $DB_ENGINE ($DATABASE_URL)"
@@ -390,8 +390,8 @@ start_services() {
     echo "    学生   班级+姓名 / 123456"
   else
     echo "  服务可能未就绪，请查看日志排查："
-    echo "    后端: tail -50 /tmp/techhub_backend.log"
-    echo "    前端: tail -50 /tmp/techhub_frontend.log"
+    echo "    后端: tail -50 /tmp/teachhub_backend.log"
+    echo "    前端: tail -50 /tmp/teachhub_frontend.log"
   fi
   echo "======================================================"
   echo ""

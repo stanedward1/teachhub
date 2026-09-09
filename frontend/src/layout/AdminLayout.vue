@@ -8,7 +8,7 @@
       <div class="brand" @click="$router.push('/admin/dashboard')">
         <span class="brand-mark">T</span>
         <transition name="fade">
-          <span v-if="!collapsed" class="brand-text">TechHub</span>
+          <span v-if="!collapsed" class="brand-text">TeachHub</span>
         </transition>
       </div>
 
@@ -128,7 +128,7 @@
       <el-main class="main">
         <router-view />
       </el-main>
-      <footer class="footer">TechHub · code by longbiu</footer>
+      <footer class="footer">TeachHub · code by longbiu</footer>
     </el-container>
   </el-container>
 </template>
@@ -138,7 +138,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getUser, clearAuth, isPlatformAdmin, isSchoolAdmin } from '../utils/auth'
 
-document.title = 'TechHub'
+document.title = 'TeachHub'
 
 const route = useRoute()
 const router = useRouter()
@@ -191,7 +191,7 @@ const breadcrumb = computed(() => {
   const p = route.path
   if (p.includes('/submissions')) return ['在线作业管理', '提交审阅']
   const name = titles[p]
-  if (!name) return ['TechHub']
+  if (!name) return ['TeachHub']
   // 尝试从路由路径推断所属分组
   for (const [key, val] of Object.entries(titles)) {
     if (key === p) return [name]

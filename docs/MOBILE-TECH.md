@@ -1,4 +1,4 @@
-# TechHub 移动端技术方案（Product Brief）
+# TeachHub 移动端技术方案（Product Brief）
 
 > 状态：草稿 v0.1 ｜ 配套 `docs/REQUIREMENTS.md`（移动端 MVP PRD）｜ 面向工程评审
 

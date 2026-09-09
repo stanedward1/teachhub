@@ -2,7 +2,7 @@
   <div class="m-login">
     <div class="m-login-header">
       <div class="m-logo">T</div>
-      <h1>TechHub</h1>
+      <h1>TeachHub</h1>
       <p>教师 / 管理员移动端</p>
     </div>
     <van-form @submit="doLogin">

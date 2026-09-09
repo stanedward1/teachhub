@@ -1,4 +1,4 @@
-# TechHub 前端镜像（多阶段：Node 构建 + Nginx 托管）
+# TeachHub 前端镜像（多阶段：Node 构建 + Nginx 托管）
 FROM node:20-alpine AS build
 
 WORKDIR /app

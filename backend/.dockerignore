@@ -5,7 +5,7 @@ __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
 tests/
-techhub.db
+teachhub.db
 *.db
 *.db-shm
 *.db-wal

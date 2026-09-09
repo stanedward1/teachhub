@@ -30,7 +30,7 @@ const title = computed(() => {
     '/m/leaves': '请假管理'
   }
   if (route.path.startsWith('/m/students/')) return '学生画像'
-  return map[route.path] || 'TechHub'
+  return map[route.path] || 'TeachHub'
 })
 </script>
 

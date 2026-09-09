@@ -1,4 +1,4 @@
-# TechHub 后端镜像
+# TeachHub 后端镜像
 FROM python:3.11-slim
 
 WORKDIR /app

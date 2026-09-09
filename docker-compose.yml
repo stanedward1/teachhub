@@ -1,27 +1,27 @@
 services:
   backend:
     build: ./backend
-    container_name: techhub-backend
+    container_name: teachhub-backend
     restart: unless-stopped
     environment:
       # ---- 数据库：默认 SQLite（持久化到数据卷）----
-      DATABASE_URL: ${DATABASE_URL:-sqlite:////app/data/techhub.db}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////app/data/teachhub.db}
 
       # ---- 切换 MySQL 示例（取消下行注释，并注释掉上面的 SQLite 行）----
       #   1. 取消本文件末尾 mysql 服务的注释（或使用自建 MySQL）
       #   2. 取消下方 depends_on: mysql 的注释，让后端等待 MySQL 就绪
       #   3. 连接串格式：mysql+pymysql://用户:密码@主机:3306/库名?charset=utf8mb4
-      # DATABASE_URL: ${DATABASE_URL:-mysql+pymysql://techhub:techhub123456@mysql:3306/techhub?charset=utf8mb4}
+      # DATABASE_URL: ${DATABASE_URL:-mysql+pymysql://teachhub:teachhub123456@mysql:3306/teachhub?charset=utf8mb4}
 
       ENV: ${ENV:-development}
-      SECRET_KEY: ${SECRET_KEY:-techhub-dev-secret-key}
+      SECRET_KEY: ${SECRET_KEY:-teachhub-dev-secret-key}
       ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1}
       MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-20971520}
     volumes:
-      - techhub-data:/app/data
-      - techhub-uploads:/app/uploads
+      - teachhub-data:/app/data
+      - teachhub-uploads:/app/uploads
     # ---- 使用 MySQL 时取消下行注释，等待 MySQL 健康后再启动后端 ----
     # depends_on:
     #   mysql:
@@ -37,7 +37,7 @@ services:
 
   frontend:
     build: ./frontend
-    container_name: techhub-frontend
+    container_name: teachhub-frontend
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-80}:80"
@@ -51,13 +51,13 @@ services:
   # =====================================================================
   # mysql:
   #   image: mysql:8.0
-  #   container_name: techhub-mysql
+  #   container_name: teachhub-mysql
   #   restart: unless-stopped
   #   environment:
-  #     MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-techhub123456}
-  #     MYSQL_DATABASE: techhub
-  #     MYSQL_USER: techhub
-  #     MYSQL_PASSWORD: ${MYSQL_PASSWORD:-techhub123456}
+  #     MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-teachhub123456}
+  #     MYSQL_DATABASE: teachhub
+  #     MYSQL_USER: teachhub
+  #     MYSQL_PASSWORD: ${MYSQL_PASSWORD:-teachhub123456}
   #     TZ: Asia/Shanghai
   #   command:
   #     - --character-set-server=utf8mb4
@@ -74,7 +74,7 @@ services:
   #     start_period: 30s
 
 volumes:
-  techhub-data:
-  techhub-uploads:
+  teachhub-data:
+  teachhub-uploads:
   # 使用 MySQL 时取消下行注释
   # mysql-data:

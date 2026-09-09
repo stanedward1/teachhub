@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 仅供本地开发兜底，生产环境禁止使用
-_DEV_SECRET_KEY = "techhub-dev-secret-key"
+_DEV_SECRET_KEY = "teachhub-dev-secret-key"
 
 # 学生积分初始基础分（每个学生默认 100 分，加减分在此基础上累加）
 BASE_POINTS = 100
@@ -24,7 +24,7 @@ ALLOWED_UPLOAD_EXTS = {
 
 
 class Settings:
-    APP_NAME: str = "TechHub"
+    APP_NAME: str = "TeachHub"
     APP_VERSION: str = "1.0.0"
     ENV: str = os.getenv("ENV", "development")  # development / production
 
@@ -35,9 +35,9 @@ class Settings:
         os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440")
     )
     # 数据库连接串：默认 SQLite（单文件零配置），切换只需改此环境变量
-    #   MySQL:      mysql+pymysql://user:pass@localhost:3306/techhub?charset=utf8mb4
-    #   PostgreSQL: postgresql://user:pass@localhost:5432/techhub
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./techhub.db")
+    #   MySQL:      mysql+pymysql://user:pass@localhost:3306/teachhub?charset=utf8mb4
+    #   PostgreSQL: postgresql://user:pass@localhost:5432/teachhub
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./teachhub.db")
     UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 
     # 上传约束

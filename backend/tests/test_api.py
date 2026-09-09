@@ -1,4 +1,4 @@
-"""TechHub 后端 API 自动化测试。
+"""TeachHub 后端 API 自动化测试。
 
 运行：
     cd backend

@@ -1,7 +1,7 @@
 // 时间排序状态管理 — 支持 localStorage 持久化 + 响应式排序
 import { ref, watch } from 'vue'
 
-const STORAGE_KEY = 'techhub_sort_prefs'
+const STORAGE_KEY = 'teachhub_sort_prefs'
 
 function loadPrefs() {
   try {

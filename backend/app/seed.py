@@ -592,7 +592,7 @@ def seed_all():
 
         # ===== 统计输出 =====
         print("=" * 50)
-        print("  TechHub 测试数据生成完成")
+        print("  TeachHub 测试数据生成完成")
         print("=" * 50)
         print(f"  学校：{school.name}")
         print(f"  班级：{len(classrooms)} 个")
