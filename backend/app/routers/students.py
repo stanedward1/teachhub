@@ -5,6 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -63,11 +64,21 @@ def list_schools(user: User = Depends(get_current_user), db: Session = Depends(g
     if not is_platform_admin(user):
         q = q.filter(School.id == user.school_id)
     rows = q.order_by(School.id).all()
+    # 一次聚合查询各校学生数/班级数，避免逐校 count 的 N+1
+    school_ids = [sc.id for sc in rows]
+    student_counts = (
+        dict(db.query(Student.school_id, func.count()).filter(Student.school_id.in_(school_ids)).group_by(Student.school_id).all())
+        if school_ids else {}
+    )
+    class_counts = (
+        dict(db.query(Classroom.school_id, func.count()).filter(Classroom.school_id.in_(school_ids)).group_by(Classroom.school_id).all())
+        if school_ids else {}
+    )
     items = []
     for sc in rows:
         d = to_dict(sc)
-        d["student_count"] = db.query(Student).filter(Student.school_id == sc.id).count()
-        d["class_count"] = db.query(Classroom).filter(Classroom.school_id == sc.id).count()
+        d["student_count"] = student_counts.get(sc.id, 0)
+        d["class_count"] = class_counts.get(sc.id, 0)
         items.append(d)
     return {"items": items, "total": len(items)}
 
@@ -195,17 +206,26 @@ def list_classrooms(
     elif graduated == "true":
         query = query.filter(Classroom.is_graduated.is_(True))
     rows = query.all()
+    # 一次聚合查询各班级在籍学生数，避免逐班 count 的 N+1
+    class_ids = [c.id for c in rows]
+    student_counts = (
+        dict(
+            db.query(Student.class_id, func.count())
+            .filter(Student.class_id.in_(class_ids), Student.is_dropped_out.is_(False))
+            .group_by(Student.class_id)
+            .all()
+        )
+        if class_ids else {}
+    )
+    # 一次查询所有班主任，避免逐班 db.get(User) 的 N+1
+    teacher_ids = {c.teacher_id for c in rows if c.teacher_id}
+    teacher_map = {t.id: t.name for t in db.query(User).filter(User.id.in_(teacher_ids)).all()} if teacher_ids else {}
     items = []
     for c in rows:
         d = to_dict(c)
-        teacher = db.get(User, c.teacher_id) if c.teacher_id else None
-        d["teacher_name"] = teacher.name if teacher else None
+        d["teacher_name"] = teacher_map.get(c.teacher_id)
         # 在籍学生数（不含退学）
-        d["student_count"] = (
-            db.query(Student)
-            .filter(Student.class_id == c.id, Student.is_dropped_out.is_(False))
-            .count()
-        )
+        d["student_count"] = student_counts.get(c.id, 0)
         items.append(d)
     return {"items": items, "total": len(items)}
 

@@ -92,6 +92,25 @@ def get_student_ids_in_class(db: Session, class_id: int) -> List[int]:
     return [s.id for s in db.query(Student).filter(Student.class_id == class_id).all()]
 
 
+def apply_teacher_student_filter(db: Session, user: User, q, model):
+    """教师数据权限过滤：仅保留其负责班级学生的记录。
+
+    返回 (query, denied)。管理员不限制（denied=False）；教师无班级时
+    denied=True（调用方应返回空列表）；有班级则按 student_id 过滤。
+
+    该模式在成绩/请假/沟通等列表接口大量重复，统一收口避免遗漏与不一致。
+    """
+    if is_any_admin(user):
+        return q, False
+    class_ids = get_teacher_class_ids(db, user.id)
+    if not class_ids:
+        return q.filter(False), True
+    student_ids = [
+        s.id for s in db.query(Student).filter(Student.class_id.in_(class_ids)).all()
+    ]
+    return q.filter(model.student_id.in_(student_ids)), False
+
+
 def apply_student_class_filter(db: Session, user: User, q, class_id: Optional[int], model=None):
     """在班级筛选上叠加权限控制。
 

@@ -1,8 +1,11 @@
+import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.audit import audit
@@ -18,8 +21,6 @@ from app.security import (
     verify_password,
 )
 from app.utils import gen_student_no, to_dict
-import os
-import uuid
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -91,8 +92,6 @@ def _resolve_login_user(db: Session, payload):
     - 平台超管：用户名（不属于任何学校）
     未传 school_id 时回退为全局唯一匹配，命中多个则要求前端选择学校。
     """
-    from sqlalchemy import or_
-
     if payload.class_id is not None:
         q = db.query(User).filter(
             User.role == "student",

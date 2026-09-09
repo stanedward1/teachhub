@@ -9,7 +9,6 @@ from app.models import (
     Performance,
     ReturnRecord,
     Schedule,
-    Student,
     StudentComment,
     Talk,
     TeacherPlan,
@@ -32,6 +31,7 @@ from app.permissions import (
     is_student_in_teacher_classes,
     is_teacher_class_owner,
     apply_student_class_filter,
+    apply_teacher_student_filter,
     ensure_student_operable,
     ensure_class_operable,
 )
@@ -46,13 +46,8 @@ def _filter_student_query(db: Session, model, user: User):
     q = db.query(model)
     # 排除退学学生
     q = q.filter(model.student_id.in_(active_student_id_query(db)))
-    if not is_any_admin(user):
-        class_ids = get_teacher_class_ids(db, user.id)
-        if class_ids:
-            student_ids = [s.id for s in db.query(Student).filter(Student.class_id.in_(class_ids)).all()]
-            q = q.filter(model.student_id.in_(student_ids))
-        else:
-            return q.filter(False)
+    # 教师班级过滤（复用统一权限过滤逻辑）
+    q, _ = apply_teacher_student_filter(db, user, q, model)
     return q
 
 

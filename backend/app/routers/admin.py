@@ -1,6 +1,7 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.audit import audit
@@ -26,13 +27,36 @@ from app.models import (
     User,
     WorkLog,
 )
-from app.security import hash_password
+from app.security import hash_password, validate_password_strength
 from app.utils import gen_student_no, to_dict, normalize_page
 
 router = APIRouter(tags=["系统管理"])
 
 # 账号管理 / 系统设置：仅学校管理员及以上（教师不可管理账号与全校设置）
 admin_dep = require_school_admin
+
+# 成绩分布分段定义：(标签, 下界, 上界)，上界 None 表示无上界
+_SCORE_BANDS = [
+    ("优秀(90+)", 90, None),
+    ("良好(75-89)", 75, 90),
+    ("中等(60-74)", 60, 75),
+    ("待提高(<60)", None, 60),
+]
+
+
+def _score_distribution(values) -> dict:
+    """按固定分段统计成绩分布，返回 {标签: {count, percent}}。"""
+    total = len(values) or 1
+    dist = {}
+    for label, lo, hi in _SCORE_BANDS:
+        if lo is None:
+            cnt = sum(1 for x in values if x < hi)
+        elif hi is None:
+            cnt = sum(1 for x in values if x >= lo)
+        else:
+            cnt = sum(1 for x in values if lo <= x < hi)
+        dist[label] = {"count": cnt, "percent": round(cnt / total * 100, 1)}
+    return dist
 
 
 def _teachers_class_map(db: Session, teacher_ids):
@@ -122,7 +146,6 @@ def create_user(payload: dict, user=Depends(admin_dep), db: Session = Depends(ge
     ).first():
         raise HTTPException(status_code=400, detail="该校已存在同名用户名")
     # 新用户默认密码 123456 不满足强度要求时，标记首次登录强制改密
-    from app.security import validate_password_strength
     must_change = validate_password_strength(password) is not None
     u = User(
         username=username,
@@ -191,7 +214,6 @@ def reset_password(user_id: int, payload: dict, user=Depends(admin_dep), db: Ses
         raise HTTPException(status_code=403, detail="教师无权重置其他教师或管理员的密码")
     new_pwd = payload.get("password") or "123456"
     # 重置密码后标记首次登录需改密（除非新密码本身满足强度要求）
-    from app.security import validate_password_strength
     u.must_change_password = validate_password_strength(new_pwd) is not None
     u.password_hash = hash_password(new_pwd)
     u.failed_attempts = 0
@@ -337,7 +359,6 @@ def list_audit_logs(
         )
     if date:
         # 查询该日 00:00:00 - 23:59:59 的日志
-        from datetime import datetime, time
         try:
             d = datetime.strptime(date, "%Y-%m-%d").date()
             start = datetime.combine(d, time.min)
@@ -445,23 +466,12 @@ def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
         exam_groups.setdefault(en, []).append(s.score)
     score_dist_by_exam = {}
     for en, scs in sorted(exam_groups.items()):
-        total_n = len(scs) if scs else 1
-        score_dist_by_exam[en] = {
-            "total": len(scs),
-            "优秀(90+)": {"count": sum(1 for x in scs if x >= 90), "percent": round(sum(1 for x in scs if x >= 90) / total_n * 100, 1)},
-            "良好(75-89)": {"count": sum(1 for x in scs if 75 <= x < 90), "percent": round(sum(1 for x in scs if 75 <= x < 90) / total_n * 100, 1)},
-            "中等(60-74)": {"count": sum(1 for x in scs if 60 <= x < 75), "percent": round(sum(1 for x in scs if 60 <= x < 75) / total_n * 100, 1)},
-            "待提高(<60)": {"count": sum(1 for x in scs if x < 60), "percent": round(sum(1 for x in scs if x < 60) / total_n * 100, 1)},
-        }
+        d = _score_distribution(scs)
+        d["total"] = len(scs)
+        score_dist_by_exam[en] = d
     # 兼容旧前端：总体分布
     scores = [s.score for s in score_rows]
-    total_scores = len(scores) if scores else 1
-    dist = {
-        "优秀(90+)": {"count": sum(1 for x in scores if x >= 90), "percent": round(sum(1 for x in scores if x >= 90) / total_scores * 100, 1)},
-        "良好(75-89)": {"count": sum(1 for x in scores if 75 <= x < 90), "percent": round(sum(1 for x in scores if 75 <= x < 90) / total_scores * 100, 1)},
-        "中等(60-74)": {"count": sum(1 for x in scores if 60 <= x < 75), "percent": round(sum(1 for x in scores if 60 <= x < 75) / total_scores * 100, 1)},
-        "待提高(<60)": {"count": sum(1 for x in scores if x < 60), "percent": round(sum(1 for x in scores if x < 60) / total_scores * 100, 1)},
-    }
+    dist = _score_distribution(scores)
 
     # 最近动态（请假 + 工作日志）
     recent = []
@@ -588,6 +598,25 @@ def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
 def platform_overview(user=Depends(require_super_admin), db: Session = Depends(get_db)):
     """平台超管视角的全局统计：学校数、班级数、教师数、学生数及分校明细。"""
     schools = db.query(School).order_by(School.id).all()
+    school_ids = [sc.id for sc in schools]
+    # 一次聚合查询分校的班级数/学生数/教师数，避免逐校 count 的 N+1
+    class_counts = (
+        dict(db.query(Classroom.school_id, func.count()).filter(Classroom.school_id.in_(school_ids)).group_by(Classroom.school_id).all())
+        if school_ids else {}
+    )
+    student_counts = (
+        dict(db.query(Student.school_id, func.count()).filter(Student.school_id.in_(school_ids)).group_by(Student.school_id).all())
+        if school_ids else {}
+    )
+    teacher_counts = (
+        dict(
+            db.query(User.school_id, func.count())
+            .filter(User.school_id.in_(school_ids), User.role.in_(("teacher", "school_admin")))
+            .group_by(User.school_id)
+            .all()
+        )
+        if school_ids else {}
+    )
     items = []
     for sc in schools:
         items.append({
@@ -595,11 +624,9 @@ def platform_overview(user=Depends(require_super_admin), db: Session = Depends(g
             "name": sc.name,
             "code": sc.code,
             "status": sc.status,
-            "class_count": db.query(Classroom).filter(Classroom.school_id == sc.id).count(),
-            "student_count": db.query(Student).filter(Student.school_id == sc.id).count(),
-            "teacher_count": db.query(User).filter(
-                User.school_id == sc.id, User.role.in_(("teacher", "school_admin"))
-            ).count(),
+            "class_count": class_counts.get(sc.id, 0),
+            "student_count": student_counts.get(sc.id, 0),
+            "teacher_count": teacher_counts.get(sc.id, 0),
         })
     return {
         "school_count": len(schools),
