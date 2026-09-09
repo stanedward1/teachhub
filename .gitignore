@@ -24,6 +24,9 @@ backend/uploads/*
 # WorkBuddy 工作区数据（含记忆日志，可能记录密钥/密码，禁止提交）
 .workbuddy/
 
+# AI 生成的优化报告（临时交付物，不纳入版本库）
+docs/OPTIMIZATION_PLAN.md
+
 # IDE
 .vscode/
 .idea/
