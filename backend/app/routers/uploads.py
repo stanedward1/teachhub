@@ -14,7 +14,7 @@ _CHUNK_SIZE = 1024 * 1024  # 1MB
 
 
 @router.post("")
-async def upload_file(
+def upload_file(
     file: UploadFile = File(...),
     _=Depends(get_current_user),
 ):
@@ -35,7 +35,7 @@ async def upload_file(
     try:
         with open(dest, "wb") as f:
             while True:
-                chunk = await file.read(_CHUNK_SIZE)
+                chunk = file.file.read(_CHUNK_SIZE)
                 if not chunk:
                     break
                 size += len(chunk)

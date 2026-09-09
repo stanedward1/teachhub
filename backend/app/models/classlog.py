@@ -10,7 +10,7 @@ class WorkLog(Base):
     __tablename__ = "work_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     date = Column(Date)
     content = Column(Text)
@@ -24,7 +24,7 @@ class ClassPlan(Base):
     __tablename__ = "class_plans"
 
     id = Column(Integer, primary_key=True, index=True)
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     plan_type = Column(String(20), default="计划")  # 计划 / 总结
@@ -38,7 +38,7 @@ class TeacherPlan(Base):
     __tablename__ = "teacher_plans"
 
     id = Column(Integer, primary_key=True, index=True)
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     plan_type = Column(String(20), default="计划")
@@ -82,7 +82,7 @@ class Talk(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     content = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

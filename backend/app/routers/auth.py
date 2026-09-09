@@ -112,7 +112,10 @@ def _resolve_login_user(db: Session, payload):
 
 def public_user(db: Session, user: User) -> dict:
     data = to_dict(user)
+    # 剥离敏感字段：密码哈希 + 安全状态
     data.pop("password_hash", None)
+    data.pop("failed_attempts", None)
+    data.pop("locked_until", None)
     class_name = None
     if user.class_id:
         cls = db.get(Classroom, user.class_id)
@@ -259,7 +262,7 @@ _AVATAR_ALLOWED = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 
 @router.post("/avatar")
-async def upload_avatar(
+def upload_avatar(
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -279,7 +282,7 @@ async def upload_avatar(
     try:
         with open(dest, "wb") as f:
             while True:
-                chunk = await file.read(chunk_size)
+                chunk = file.file.read(chunk_size)
                 if not chunk:
                     break
                 size += len(chunk)

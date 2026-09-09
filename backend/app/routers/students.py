@@ -12,6 +12,7 @@ from app.deps import get_current_user, require_teacher
 from app.audit import audit, batch_student_avatar_map
 from app.models import Classroom, ClassTeacher, School, Student, StudentBoardHistory, User
 from app.security import hash_password, validate_password_strength
+from app.schemas import StudentCreate, StudentUpdate
 from app.utils import to_dict, normalize_page, parse_date
 from app.permissions import (
     is_any_admin,
@@ -377,10 +378,10 @@ def list_students(
 
 
 @router.post("/api/students")
-def create_student(payload: dict, user: User = Depends(require_teacher), db: Session = Depends(get_db)):
-    name = (payload.get("name") or "").strip()
-    student_no = (payload.get("student_no") or "").strip()
-    class_id = payload.get("class_id")
+def create_student(payload: StudentCreate, user: User = Depends(require_teacher), db: Session = Depends(get_db)):
+    name = payload.name.strip()
+    student_no = payload.student_no.strip()
+    class_id = payload.class_id
     if not name or not student_no:
         raise HTTPException(status_code=400, detail="姓名和学号不能为空")
     # 已毕业班级不可再添加学生
@@ -395,7 +396,7 @@ def create_student(payload: dict, user: User = Depends(require_teacher), db: Ses
     if db.query(Student).filter(Student.student_no == student_no).first():
         raise HTTPException(status_code=400, detail="学号已存在")
     # 归属学校：优先显式指定，否则从班级推导，再否则取当前用户学校
-    school_id = payload.get("school_id")
+    school_id = payload.school_id
     if not school_id and class_id:
         _cls = db.get(Classroom, class_id)
         school_id = _cls.school_id if _cls else None
@@ -405,14 +406,14 @@ def create_student(payload: dict, user: User = Depends(require_teacher), db: Ses
         school_id=school_id,
         class_id=class_id,
         name=name,
-        gender=payload.get("gender", "男"),
-        birth_date=parse_date(payload.get("birth_date")),
+        gender=payload.gender,
+        birth_date=parse_date(payload.birth_date),
         student_no=student_no,
-        major=payload.get("major"),
-        parent_name=payload.get("parent_name"),
-        parent_phone=payload.get("parent_phone"),
-        student_type=payload.get("student_type", "day"),
-        is_dropped_out=bool(payload.get("is_dropped_out", False)),
+        major=payload.major,
+        parent_name=payload.parent_name,
+        parent_phone=payload.parent_phone,
+        student_type=payload.student_type,
+        is_dropped_out=payload.is_dropped_out,
     )
     db.add(s)
     db.flush()
@@ -435,7 +436,7 @@ def create_student(payload: dict, user: User = Depends(require_teacher), db: Ses
 
 
 @router.put("/api/students/{student_id}")
-def update_student(student_id: int, payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_student(student_id: int, payload: StudentUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     s = db.get(Student, student_id)
     if not s:
         raise HTTPException(status_code=404, detail="学生不存在")
@@ -447,19 +448,20 @@ def update_student(student_id: int, payload: dict, user: User = Depends(get_curr
         cls = db.get(Classroom, s.class_id)
         if cls and cls.is_graduated:
             raise HTTPException(status_code=403, detail="该学生所在班级已毕业，无法修改")
-    if s.is_dropped_out and payload.get("is_dropped_out") is not False:
+    if s.is_dropped_out and payload.is_dropped_out is not False:
         raise HTTPException(status_code=403, detail="该学生已退学，无法修改（可将其改回在籍后操作）")
+    data = payload.model_dump(exclude_unset=True)
     old_type = s.student_type
     for f in (
         "name", "gender", "birth_date", "class_id", "major",
         "parent_name", "parent_phone", "student_type", "is_dropped_out",
     ):
-        if f in payload and payload[f] is not None:
+        if f in data and data[f] is not None:
             if f == "class_id" and not is_any_admin(user):
                 raise HTTPException(status_code=403, detail="教师无权修改学生班级")
-            setattr(s, f, parse_date(payload[f]) if f == "birth_date" else payload[f])
+            setattr(s, f, parse_date(data[f]) if f == "birth_date" else data[f])
     # 记录寄宿/通学状态变更
-    new_type = payload.get("student_type")
+    new_type = data.get("student_type")
     if new_type and new_type != old_type:
         db.add(StudentBoardHistory(
             student_id=s.id,
@@ -528,7 +530,7 @@ _AVATAR_ALLOWED = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 
 @router.post("/api/students/{student_id}/avatar")
-async def upload_student_avatar(
+def upload_student_avatar(
     student_id: int,
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
@@ -561,7 +563,7 @@ async def upload_student_avatar(
     try:
         with open(dest, "wb") as f:
             while True:
-                chunk = await file.read(chunk_size)
+                chunk = file.file.read(chunk_size)
                 if not chunk:
                     break
                 size += len(chunk)

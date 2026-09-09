@@ -7,6 +7,7 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.models import Attendance, Student, User
 from app.permissions import ensure_class_operable, is_any_admin, is_teacher_class_owner
+from app.schemas import AttendanceCheckin
 from app.utils import parse_date
 
 router = APIRouter(tags=["考勤"])
@@ -51,15 +52,13 @@ def list_attendance(
 
 
 @router.post("/api/attendance/checkin")
-def checkin(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def checkin(payload: AttendanceCheckin, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """批量提交点名结果（存在则更新，不存在则新增）。"""
-    class_id = payload.get("class_id")
-    date = (payload.get("date") or "").strip()
-    records = payload.get("records") or []
+    class_id = payload.class_id
+    date = (payload.date or "").strip()
+    records = payload.records
     if not class_id or not date or not records:
         raise HTTPException(status_code=400, detail="请提供班级、日期和点名记录")
-    if not isinstance(records, list):
-        raise HTTPException(status_code=400, detail="点名记录格式错误")
     try:
         date = parse_date(date)
     except ValueError:
@@ -72,8 +71,8 @@ def checkin(payload: dict, user: User = Depends(get_current_user), db: Session =
 
     saved = 0
     for r in records:
-        student_id = r.get("student_id")
-        status = r.get("status", "出勤")
+        student_id = r.student_id
+        status = r.status
         if status not in ATTENDANCE_STATUS:
             continue
         # 仅接受本班在籍学生

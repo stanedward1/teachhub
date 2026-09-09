@@ -7,6 +7,9 @@ load_dotenv()
 # 仅供本地开发兜底，生产环境禁止使用
 _DEV_SECRET_KEY = "techhub-dev-secret-key"
 
+# 学生积分初始基础分（每个学生默认 100 分，加减分在此基础上累加）
+BASE_POINTS = 100
+
 # 允许上传的文件扩展名白名单
 ALLOWED_UPLOAD_EXTS = {
     # 图片

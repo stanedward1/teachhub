@@ -2,6 +2,7 @@ import logging
 import os
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -51,6 +52,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    """把 Pydantic 校验错误转为友好提示（否则前端只能拿到英文结构体）。"""
+    errors = exc.errors()
+    if errors:
+        loc = [str(x) for x in errors[0].get("loc", []) if x not in ("body", "query", "path")]
+        field = ".".join(loc) or "参数"
+        return JSONResponse(status_code=422, content={"detail": f"参数校验失败：{field}"})
+    return JSONResponse(status_code=422, content={"detail": "参数校验失败"})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc: Exception):
+    """兜底异常处理：记录完整堆栈，返回统一的 500 结构，避免泄漏内部细节。"""
+    logger.exception("未处理的异常: %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "服务器内部错误，请稍后重试"})
+
 
 @app.middleware("http")
 async def tenant_context_middleware(request, call_next):

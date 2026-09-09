@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import require_teacher, get_current_user
+from app.schemas import LeaveCreate, LeaveUpdate, ScoreCreate, ScoreUpdate
 from app.models import (
     Classroom,
     Communication,
@@ -34,7 +35,7 @@ from app.audit import (
     active_student_id_query,
     active_classroom_id_query,
 )
-from app.config import settings
+from app.config import BASE_POINTS, settings
 from app.security import hash_password
 from app.utils import safe_filename, to_dict, normalize_page, parse_date, clamp_score
 from app.permissions import (
@@ -96,26 +97,17 @@ def list_scores(
 
 
 @router.post("/api/scores")
-def create_score(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not payload.get("student_id") or payload.get("score") is None:
-        raise HTTPException(status_code=400, detail="请选择学生并填写成绩")
-    # 成绩值域/类型校验
-    try:
-        score = float(payload["score"])
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="成绩必须是数字")
-    if not (0 <= score <= 150):
-        raise HTTPException(status_code=400, detail="成绩应在 0-150 之间")
+def create_score(payload: ScoreCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 退学/毕业限制
-    ensure_student_operable(db, payload["student_id"])
+    ensure_student_operable(db, payload.student_id)
     # 教师只能为自己班级的学生创建成绩
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload["student_id"]):
+    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload.student_id):
         raise HTTPException(status_code=403, detail="无权为该学生创建成绩")
     s = Score(
-        student_id=payload["student_id"],
-        subject=payload.get("subject", "未分类"),
-        score=score,
-        exam_name=payload.get("exam_name"),
+        student_id=payload.student_id,
+        subject=payload.subject,
+        score=payload.score,
+        exam_name=payload.exam_name,
     )
     db.add(s)
     audit(db, user, "create_score", target=f"新增成绩-{student_name(db, s.student_id)}", student_id=s.student_id, detail=f"科目：{s.subject}；分数：{s.score}；考试：{s.exam_name or '日常测验'}")
@@ -125,7 +117,7 @@ def create_score(payload: dict, user: User = Depends(get_current_user), db: Sess
 
 
 @router.put("/api/scores/{score_id}")
-def update_score(score_id: int, payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_score(score_id: int, payload: ScoreUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     s = db.get(Score, score_id)
     if not s:
         raise HTTPException(status_code=404, detail="记录不存在")
@@ -134,24 +126,16 @@ def update_score(score_id: int, payload: dict, user: User = Depends(get_current_
     # 教师只能修改自己班级学生的成绩
     if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, s.student_id):
         raise HTTPException(status_code=403, detail="无权修改该成绩")
+    data = payload.model_dump(exclude_unset=True)
     for f in ("student_id", "subject", "score", "exam_name"):
-        if f in payload and payload[f] is not None:
-            # 成绩值域/类型校验
-            if f == "score":
-                try:
-                    v = float(payload["score"])
-                except (TypeError, ValueError):
-                    raise HTTPException(status_code=400, detail="成绩必须是数字")
-                if not (0 <= v <= 150):
-                    raise HTTPException(status_code=400, detail="成绩应在 0-150 之间")
-                payload["score"] = v
+        if f in data and data[f] is not None:
             # 教师不能将成绩转移到其他班级的学生
             if f == "student_id" and not is_any_admin(user):
-                if not is_student_in_teacher_classes(db, user.id, payload["student_id"]):
+                if not is_student_in_teacher_classes(db, user.id, data[f]):
                     raise HTTPException(status_code=403, detail="无权将成绩转移到该学生")
-            if f == "student_id" and payload["student_id"] != s.student_id:
-                ensure_student_operable(db, payload["student_id"])
-            setattr(s, f, payload[f])
+            if f == "student_id" and data[f] != s.student_id:
+                ensure_student_operable(db, data[f])
+            setattr(s, f, data[f])
     audit(db, user, "update_score", target=f"成绩#{score_id}-{student_name(db, s.student_id)}", student_id=s.student_id)
     db.commit()
     db.refresh(s)
@@ -254,21 +238,19 @@ def list_leaves(
 
 
 @router.post("/api/leaves")
-def create_leave(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not payload.get("student_id"):
-        raise HTTPException(status_code=400, detail="请选择学生")
+def create_leave(payload: LeaveCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 退学/毕业限制
-    ensure_student_operable(db, payload["student_id"])
+    ensure_student_operable(db, payload.student_id)
     # 教师只能为自己班级的学生创建请假
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload["student_id"]):
+    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload.student_id):
         raise HTTPException(status_code=403, detail="无权为该学生创建请假")
     x = Leave(
-        student_id=payload["student_id"],
-        reason=payload.get("reason"),
-        start_date=parse_date(payload.get("start_date")),
-        end_date=parse_date(payload.get("end_date")),
-        status=payload.get("status", "登记"),
-        image=payload.get("image"),
+        student_id=payload.student_id,
+        reason=payload.reason,
+        start_date=parse_date(payload.start_date),
+        end_date=parse_date(payload.end_date),
+        status=payload.status,
+        image=payload.image,
     )
     db.add(x)
     audit(db, user, "create_leave", target=f"新增请假-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"事由：{x.reason or '未填写'}；时间：{x.start_date or ''} ~ {x.end_date or ''}")
@@ -278,7 +260,7 @@ def create_leave(payload: dict, user: User = Depends(get_current_user), db: Sess
 
 
 @router.put("/api/leaves/{leave_id}")
-def update_leave(leave_id: int, payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_leave(leave_id: int, payload: LeaveUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(Leave, leave_id)
     if not x:
         raise HTTPException(status_code=404, detail="记录不存在")
@@ -287,9 +269,10 @@ def update_leave(leave_id: int, payload: dict, user: User = Depends(get_current_
     # 教师只能修改自己班级学生的请假
     if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, x.student_id):
         raise HTTPException(status_code=403, detail="无权修改该请假")
+    data = payload.model_dump(exclude_unset=True)
     for f in ("reason", "start_date", "end_date", "status", "image"):
-        if f in payload and payload[f] is not None:
-            setattr(x, f, parse_date(payload[f]) if f in ("start_date", "end_date") else payload[f])
+        if f in data and data[f] is not None:
+            setattr(x, f, parse_date(data[f]) if f in ("start_date", "end_date") else data[f])
     audit(db, user, "update_leave", target=f"请假#{leave_id}-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"事由：{x.reason or '未填写'}；时间：{x.start_date or ''} ~ {x.end_date or ''}")
     db.commit()
     db.refresh(x)
@@ -495,7 +478,7 @@ def list_exams(keyword: str = "", _=Depends(dep), db: Session = Depends(get_db))
 
 
 @router.post("/api/exams/upload")
-async def upload_exam(
+def upload_exam(
     title: str = "未命名试卷",
     exam_type: str = "单元测验",
     file: UploadFile = File(None),
@@ -521,7 +504,7 @@ async def upload_exam(
     try:
         with open(dest, "wb") as f:
             while True:
-                chunk = await file.read(chunk_size)
+                chunk = file.file.read(chunk_size)
                 if not chunk:
                     break
                 size += len(chunk)
@@ -700,7 +683,7 @@ def download_score_template(_=Depends(dep)):
 
 
 @router.post("/api/students/import")
-async def import_students(
+def import_students(
     file: UploadFile = File(...),
     user=Depends(dep),
     db: Session = Depends(get_db),
@@ -710,7 +693,7 @@ async def import_students(
     if ext not in {".xlsx", ".xls"}:
         raise HTTPException(status_code=400, detail="仅支持 .xlsx / .xls 格式")
 
-    contents = await file.read()
+    contents = file.file.read()
     wb = load_workbook(BytesIO(contents))
     ws = wb.active
 
@@ -828,7 +811,7 @@ async def import_students(
 
 
 @router.post("/api/scores/import")
-async def import_scores(
+def import_scores(
     file: UploadFile = File(...),
     user=Depends(dep),
     db: Session = Depends(get_db),
@@ -838,7 +821,7 @@ async def import_scores(
     if ext not in {".xlsx", ".xls"}:
         raise HTTPException(status_code=400, detail="仅支持 .xlsx / .xls 格式")
 
-    contents = await file.read()
+    contents = file.file.read()
     wb = load_workbook(BytesIO(contents))
     ws = wb.active
 
@@ -982,10 +965,11 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
         score_summary["by_subject"].setdefault(s.subject, []).append({"score": s.score, "exam": s.exam_name or "", "date": str(s.created_at)[:10]})
         score_summary["trend"].append({"subject": s.subject, "score": s.score, "exam": s.exam_name or "", "date": str(s.created_at)[:10]})
 
-    # 积分统计
+    # 积分统计（总分 = 初始基础分 100 + 加减分净变化）
     points = db.query(Point).filter(Point.student_id == student_id).all()
+    point_delta = sum(p.points for p in points)
     point_summary = {
-        "total": sum(p.points for p in points),
+        "total": BASE_POINTS + point_delta,
         "positive": sum(p.points for p in points if p.points > 0),
         "negative": sum(p.points for p in points if p.points < 0),
         "count": len(points),
@@ -1031,7 +1015,7 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
     # 五维雷达得分
     radar = {
         "academic": clamp_score(round(score_summary["avg"] if scores else 50, 1)),
-        "moral": clamp_score(round(50 + point_summary["total"] * 2, 1)) if points else 50,
+        "moral": clamp_score(round(50 + point_delta * 2, 1)) if points else 50,
         "attendance": clamp_score(round(100 - leave_summary["total"] * 5, 1)),
         "activity": clamp_score(round(50 + performance_summary["positive"] * 5, 1)),
         "skill": clamp_score(round(submission_summary["rate"], 1)),
@@ -1056,7 +1040,7 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
             "name": "品德",
             "score": radar["moral"],
             "source": "学生积分记录（积分管理模块，含表现联动加分/扣分）",
-            "method": "基准 50 分 + 积分总计 × 2（上限 100），无积分记录时默认 50 分",
+            "method": "基准 50 分 + 积分净变化 × 2（上限 100），无积分记录时默认 50 分",
             "indicators": [
                 f"积分总计 {point_summary['total']} 分",
                 f"加分 {point_summary['positive']} 分 / 扣分 {point_summary['negative']} 分",
@@ -1189,11 +1173,11 @@ def get_weekly_data(class_id: int, week_start: str = "", week_end: str = "", use
     for pr in point_ranking[:5]:
         name = student_map.get(pr.student_id, "")
         if name:
-            top5.append({"name": name, "points": pr.total})
+            top5.append({"name": name, "points": BASE_POINTS + pr.total})
     for pr in point_ranking[-5:]:
         name = student_map.get(pr.student_id, "")
         if name:
-            bottom5.append({"name": name, "points": pr.total})
+            bottom5.append({"name": name, "points": BASE_POINTS + pr.total})
 
     score_q = db.query(Score).filter(Score.student_id.in_(student_ids))
     if week_start and week_end:

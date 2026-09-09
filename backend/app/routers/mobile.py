@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user
+from app.config import BASE_POINTS
 from app.models import (
     ExcellentWork,
     Leave,
@@ -90,10 +91,11 @@ def mobile_student_overview(
         ],
     }
 
-    # 积分
+    # 积分（总分 = 初始基础分 100 + 加减分净变化）
     points = db.query(Point).filter(Point.student_id == student_id).all()
+    point_delta = sum(p.points for p in points)
     point_summary = {
-        "total": sum(p.points for p in points),
+        "total": BASE_POINTS + point_delta,
         "positive": sum(p.points for p in points if p.points > 0),
         "negative": sum(p.points for p in points if p.points < 0),
         "count": len(points),
@@ -140,7 +142,7 @@ def mobile_student_overview(
     # 五维雷达（与桌面端画像同口径）
     radar = {
         "academic": clamp_score(round(avg, 1)) if scores else 50,
-        "moral": clamp_score(round(50 + point_summary["total"] * 2, 1)) if points else 50,
+        "moral": clamp_score(round(50 + point_delta * 2, 1)) if points else 50,
         "attendance": clamp_score(round(100 - leave_summary["total"] * 5, 1)),
         "activity": clamp_score(round(50 + performance_summary["positive"] * 5, 1)),
         "skill": clamp_score(round(skill, 1)),

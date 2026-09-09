@@ -1,8 +1,16 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import Components from 'unplugin-vue-components/vite'
+import { ElementPlusResolver, VantResolver } from 'unplugin-vue-components/resolvers'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // 按需引入 Element Plus / Vant 组件及其样式，避免全量打包
+    Components({
+      resolvers: [ElementPlusResolver(), VantResolver()],
+    }),
+  ],
   server: {
     port: 5173,
     proxy: {

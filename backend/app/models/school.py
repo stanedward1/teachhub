@@ -26,7 +26,7 @@ class Classroom(Base):
     code = Column(String(50), nullable=False, unique=True)
     major = Column(String(100))
     grade = Column(String(50))
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # 班主任
+    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)  # 班主任
     is_graduated = Column(Boolean, nullable=False, default=False, server_default="0")  # 是否毕业
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

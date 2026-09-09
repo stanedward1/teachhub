@@ -26,6 +26,7 @@ from app.audit import (
     active_classroom_id_query,
 )
 from app.utils import to_dict, normalize_page, parse_date
+from app.schemas import ReturnRecordCreate, TalkCreate, WorkLogCreate
 from app.permissions import (
     is_any_admin,
     get_teacher_class_ids,
@@ -84,11 +85,11 @@ def list_work_logs(page: int = 1, page_size: int = 20, user: User = Depends(get_
 
 
 @router.post("/api/work-logs")
-def create_work_log(payload: dict, user=Depends(dep), db: Session = Depends(get_db)):
+def create_work_log(payload: WorkLogCreate, user=Depends(dep), db: Session = Depends(get_db)):
     x = WorkLog(
         teacher_id=user.id,
-        date=parse_date(payload.get("date")),
-        content=payload.get("content", ""),
+        date=parse_date(payload.date),
+        content=payload.content,
     )
     db.add(x)
     audit(db, user, "create_work_log", target=f"新增工作日志")
@@ -336,12 +337,10 @@ def list_talks(page: int = 1, page_size: int = 20, student_id: int | None = None
 
 
 @router.post("/api/talks")
-def create_talk(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not payload.get("student_id"):
-        raise HTTPException(status_code=400, detail="请选择学生")
+def create_talk(payload: TalkCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 教师只能与自己班级学生谈心
-    _check_student_permission(db, user, payload["student_id"])
-    x = Talk(student_id=payload["student_id"], teacher_id=user.id, content=payload.get("content", ""))
+    _check_student_permission(db, user, payload.student_id)
+    x = Talk(student_id=payload.student_id, teacher_id=user.id, content=payload.content)
     db.add(x)
     audit(db, user, "create_talk", target=f"新增谈心-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"内容：{(x.content or '')[:50]}")
     db.commit()
@@ -382,16 +381,14 @@ def list_return_records(page: int = 1, page_size: int = 20, student_id: int | No
 
 
 @router.post("/api/return-records")
-def create_return_record(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not payload.get("student_id"):
-        raise HTTPException(status_code=400, detail="请选择学生")
+def create_return_record(payload: ReturnRecordCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 教师只能为自己班级学生登记返校
-    _check_student_permission(db, user, payload["student_id"])
+    _check_student_permission(db, user, payload.student_id)
     x = ReturnRecord(
-        student_id=payload["student_id"],
-        return_date=parse_date(payload.get("return_date")),
-        reason=payload.get("reason"),
-        note=payload.get("note"),
+        student_id=payload.student_id,
+        return_date=parse_date(payload.return_date),
+        reason=payload.reason,
+        note=payload.note,
     )
     db.add(x)
     audit(db, user, "create_return_record", target=f"新增返校-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"返校日期：{x.return_date or ''}；事由：{(x.reason or '')[:50]}")

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -34,24 +34,59 @@ router = APIRouter(tags=["系统管理"])
 admin_dep = require_school_admin
 
 
+def _teachers_class_map(db: Session, teacher_ids):
+    """批量查教师班主任班级名与科任班级名，避免 N+1。返回 (head_map, subject_map)。"""
+    head_map: dict = {}
+    subject_map: dict = {}
+    if not teacher_ids:
+        return head_map, subject_map
+    head_rows = (
+        db.query(Classroom.teacher_id, Classroom.name)
+        .filter(Classroom.teacher_id.in_(teacher_ids))
+        .all()
+    )
+    for tid, name in head_rows:
+        head_map.setdefault(tid, []).append(name)
+    ct_rows = (
+        db.query(ClassTeacher.teacher_id, Classroom.name)
+        .join(Classroom, Classroom.id == ClassTeacher.class_id)
+        .filter(ClassTeacher.teacher_id.in_(teacher_ids))
+        .all()
+    )
+    for tid, name in ct_rows:
+        subject_map.setdefault(tid, []).append(name)
+    return head_map, subject_map
+
+
+def _users_out(db: Session, rows) -> list:
+    """批量序列化用户：一次查班级名 + 一次查教师班级，避免 N+1。"""
+    if not rows:
+        return []
+    class_ids = {u.class_id for u in rows if u.class_id}
+    class_map = (
+        {c.id: c.name for c in db.query(Classroom).filter(Classroom.id.in_(class_ids)).all()}
+        if class_ids else {}
+    )
+    teacher_ids = [u.id for u in rows if u.role == "teacher"]
+    head_map, subject_map = _teachers_class_map(db, teacher_ids)
+    items = []
+    for u in rows:
+        d = to_dict(u)
+        # 剥离敏感字段：密码哈希 + 安全状态，避免泄露
+        d.pop("password_hash", None)
+        d.pop("failed_attempts", None)
+        d.pop("locked_until", None)
+        d["class_name"] = class_map.get(u.class_id)
+        if u.role == "teacher":
+            d["head_classes"] = head_map.get(u.id, [])
+            d["subject_classes"] = subject_map.get(u.id, [])
+        items.append(d)
+    return items
+
+
 def _user_out(db: Session, u: User) -> dict:
-    d = to_dict(u)
-    d.pop("password_hash", None)
-    cls = db.get(Classroom, u.class_id) if u.class_id else None
-    d["class_name"] = cls.name if cls else None
-    # 教师：返回班主任/科任班级，用于列表与看板身份标识
-    if u.role == "teacher":
-        head_classes = db.query(Classroom).filter(Classroom.teacher_id == u.id).all()
-        subject_ids = [
-            ct.class_id
-            for ct in db.query(ClassTeacher).filter(ClassTeacher.teacher_id == u.id).all()
-        ]
-        subject_classes = (
-            db.query(Classroom).filter(Classroom.id.in_(subject_ids)).all() if subject_ids else []
-        )
-        d["head_classes"] = [c.name for c in head_classes]
-        d["subject_classes"] = [c.name for c in subject_classes]
-    return d
+    """单个用户序列化（含班主任/科任班级 + 剥离敏感字段）。"""
+    return _users_out(db, [u])[0]
 
 
 # ---------------- 账号管理 ----------------
@@ -63,7 +98,7 @@ def list_users(role: str = "", keyword: str = "", _=Depends(admin_dep), db: Sess
     if keyword:
         q = q.filter(User.name.contains(keyword) | User.username.contains(keyword))
     rows = q.order_by(User.id).all()
-    return {"items": [_user_out(db, u) for u in rows], "total": len(rows)}
+    return {"items": _users_out(db, rows), "total": len(rows)}
 
 
 @router.post("/api/admin/users")
@@ -338,22 +373,29 @@ def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
         if student_ids is not None else db.query(Leave).filter(Leave.created_at >= today).count()
     )
 
-    # 近 7 天请假详情（含人员姓名、类型、时长）
+    # 近 7 天请假详情（含人员姓名、类型、时长）：一次查询 + 批量加载，避免 N+1
+    week_end = date.today()
+    week_start = week_end - timedelta(days=6)
+    week_leave_q = db.query(Leave).filter(Leave.start_date >= week_start, Leave.start_date <= week_end)
+    if student_ids is not None:
+        week_leave_q = week_leave_q.filter(Leave.student_id.in_(student_ids))
+    week_leaves = week_leave_q.all()
+    stu_ids = {l.student_id for l in week_leaves}
+    stu_map = {s.id: s for s in db.query(Student).filter(Student.id.in_(stu_ids)).all()} if stu_ids else {}
+    cls_ids = {s.class_id for s in stu_map.values() if s.class_id}
+    cls_map = {c.id: c.name for c in db.query(Classroom).filter(Classroom.id.in_(cls_ids)).all()} if cls_ids else {}
+    leaves_by_day: dict = {}
+    for l in week_leaves:
+        leaves_by_day.setdefault(l.start_date, []).append(l)
     trend = []
     leave_details = []
     for i in range(6, -1, -1):
-        day = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
-        day_leaves_q = db.query(Leave).filter(Leave.start_date == day)
-        if student_ids is not None:
-            day_leaves_q = day_leaves_q.filter(Leave.student_id.in_(student_ids))
-        day_leaves = day_leaves_q.all()
+        day = week_end - timedelta(days=i)
+        day_leaves = leaves_by_day.get(day, [])
         items = []
         for l in day_leaves:
-            stu = db.get(Student, l.student_id)
-            class_name = ""
-            if stu and stu.class_id:
-                cls = db.get(Classroom, stu.class_id)
-                class_name = cls.name if cls else ""
+            stu = stu_map.get(l.student_id)
+            class_name = cls_map.get(stu.class_id) if stu and stu.class_id else ""
             duration = 1
             if l.start_date and l.end_date:
                 duration = (l.end_date - l.start_date).days + 1
@@ -365,8 +407,8 @@ def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
                 "start": l.start_date or "",
                 "end": l.end_date or "",
             })
-        trend.append({"date": day[5:], "count": len(day_leaves)})
-        leave_details.append({"date": day[5:], "count": len(day_leaves), "items": items})
+        trend.append({"date": day.strftime("%m-%d"), "count": len(day_leaves)})
+        leave_details.append({"date": day.strftime("%m-%d"), "count": len(day_leaves), "items": items})
 
     # 成绩分布（按考试名称分组，含百分比）
     score_q = db.query(Score)
@@ -403,12 +445,14 @@ def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
     leave_q = db.query(Leave)
     if student_ids is not None:
         leave_q = leave_q.filter(Leave.student_id.in_(student_ids))
-    for l in leave_q.order_by(Leave.id.desc()).limit(5).all():
-        stu = db.get(Student, l.student_id)
-        class_name = ""
-        if stu and stu.class_id:
-            cls = db.get(Classroom, stu.class_id)
-            class_name = cls.name if cls else ""
+    recent_leaves = leave_q.order_by(Leave.id.desc()).limit(5).all()
+    rstu_ids = {l.student_id for l in recent_leaves}
+    rstu_map = {s.id: s for s in db.query(Student).filter(Student.id.in_(rstu_ids)).all()} if rstu_ids else {}
+    rcls_ids = {s.class_id for s in rstu_map.values() if s.class_id}
+    rcls_map = {c.id: c.name for c in db.query(Classroom).filter(Classroom.id.in_(rcls_ids)).all()} if rcls_ids else {}
+    for l in recent_leaves:
+        stu = rstu_map.get(l.student_id)
+        class_name = rcls_map.get(stu.class_id) if stu and stu.class_id else ""
         recent.append(
             {
                 "type": "请假",
