@@ -1,4 +1,5 @@
 import { createApp } from 'vue'
+import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
@@ -9,6 +10,9 @@ import router from './router'
 import './style.css'
 
 const app = createApp(App)
+
+// 状态管理：Pinia（authStore 统一登录态，替代 utils/auth.js 的散落 localStorage 读取）
+app.use(createPinia())
 
 // 全量引入 Element Plus（项目几乎用到全部核心组件，按需引入在 dev 模式会
 // 反复触发依赖预构建重跑导致卡顿，全量引入可让 vite 启动时一次性预构建完成）

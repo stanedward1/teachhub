@@ -12,9 +12,9 @@ class Score(Base):
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
-    subject = Column(String(50), nullable=False)
+    subject = Column(String(50), nullable=False, index=True)
     score = Column(Float, nullable=False)
-    exam_name = Column(String(100))
+    exam_name = Column(String(100), index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -181,6 +181,6 @@ class Attendance(Base):
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     date = Column(Date, nullable=False, index=True)  # YYYY-MM-DD
-    status = Column(String(20), default="出勤")  # 出勤 / 缺勤 / 请假 / 迟到
+    status = Column(String(20), default="出勤", index=True)  # 出勤 / 缺勤 / 请假 / 迟到
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

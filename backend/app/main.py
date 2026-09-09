@@ -1,11 +1,13 @@
 import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
 from app.database import run_migrations
@@ -52,6 +54,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 限流：复用 auth 模块创建的 limiter 实例（slowapi 要求所有被 @limiter.limit 装饰的
+# 路由共享同一个 Limiter 实例，否则计数会各自独立、限流失效）。
+app.state.limiter = auth.limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.exception_handler(RequestValidationError)

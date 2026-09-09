@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.audit import audit
@@ -20,6 +22,12 @@ import os
 import uuid
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
+
+# 登录接口限流：按客户端 IP 维度限制登录尝试频率，配合应用层的账号锁定策略，
+# 防止攻击者绕过账号锁定、用分布式 IP 对同一账号进行暴力破解。
+# 注意：limiter 实例在 main.py 中创建并挂到 app.state，这里复用同一个实例
+# （slowapi 要求所有路由共享同一个 Limiter 实例才能正确累计计数）。
+limiter = Limiter(key_func=get_remote_address)
 
 # 登录失败锁定策略
 MAX_FAILED_ATTEMPTS = 5
@@ -125,7 +133,8 @@ def public_user(db: Session, user: User) -> dict:
 
 
 @router.post("/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     user, err_msg = _resolve_login_user(db, payload)
     if not user or not verify_password(payload.password, user.password_hash):
         if user:
@@ -183,7 +192,8 @@ def _ensure_student_profile(db: Session, class_id: int, name: str) -> Student:
 
 
 @router.post("/register")
-def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def register(request: Request, payload: RegisterRequest, db: Session = Depends(get_db)):
     """学生自助注册（仅允许系统中尚不存在「班级+姓名」的学生）。"""
     name = (payload.name or "").strip()
     if not name:

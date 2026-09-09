@@ -21,7 +21,7 @@ class Classroom(Base):
     __tablename__ = "classrooms"
 
     id = Column(Integer, primary_key=True, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"))
+    school_id = Column(Integer, ForeignKey("schools.id"), index=True)
     name = Column(String(100), nullable=False)
     code = Column(String(50), nullable=False, unique=True)
     major = Column(String(100))
@@ -49,8 +49,8 @@ class Student(Base):
     __tablename__ = "students"
 
     id = Column(Integer, primary_key=True, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True)
-    class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=True, index=True)
     name = Column(String(50), nullable=False)
     gender = Column(String(10), default="男")
     birth_date = Column(Date)

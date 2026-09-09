@@ -136,17 +136,18 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getUser, clearAuth, isPlatformAdmin, isSchoolAdmin } from '../utils/auth'
+import { useAuthStore } from '../stores/auth'
 
 document.title = 'TeachHub'
 
 const route = useRoute()
 const router = useRouter()
-const user = computed(() => getUser())
-const isAdmin = computed(() => getUser()?.role === 'admin' || isSchoolAdmin() || isPlatformAdmin())
-const isPlatform = computed(() => isPlatformAdmin())
+const auth = useAuthStore()
+const user = computed(() => auth.user)
+const isAdmin = computed(() => user.value?.role === 'admin' || auth.isSchoolAdmin || auth.isPlatformAdmin)
+const isPlatform = computed(() => auth.isPlatformAdmin)
 const roleText = computed(() => {
-  const r = getUser()?.role
+  const r = auth.user?.role
   if (r === 'super_admin') return '平台超管'
   if (r === 'school_admin') return '学校管理员'
   if (r === 'teacher') return '教师'
@@ -201,7 +202,7 @@ const breadcrumb = computed(() => {
 
 function onCommand(cmd) {
   if (cmd === 'logout') {
-    clearAuth()
+    auth.clearAuth()
     router.push('/admin/login')
   } else if (cmd === 'portal') {
     router.push('/')

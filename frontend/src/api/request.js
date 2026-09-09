@@ -8,18 +8,47 @@ const request = axios.create({
   timeout: 30000
 })
 
+// ===== 并发去重：相同「方法+URL+参数」的重复请求，取消前一个 =====
+// 场景：用户快速连续点击、搜索框输入抖动等导致的重复 GET/POST。
+const pending = new Map()
+
+function genKey(config) {
+  const { method, url, params, data } = config
+  return [method, url, JSON.stringify(params || {}), JSON.stringify(data || {})].join('&')
+}
+
+function removePending(config) {
+  const key = genKey(config)
+  if (pending.has(key)) {
+    pending.get(key).abort()
+    pending.delete(key)
+  }
+}
+
 request.interceptors.request.use((config) => {
   const token = getToken()
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  removePending(config)
+  const controller = new AbortController()
+  config.signal = controller.signal
+  pending.set(genKey(config), controller)
   return config
 })
 
 request.interceptors.response.use(
-  (response) => response.data,
+  (response) => {
+    removePending(response.config)
+    return response.data
+  },
   (error) => {
+    if (error.config) removePending(error.config)
     const status = error.response?.status
+    // 主动取消的请求不弹错误提示
+    if (axios.isCancel(error)) {
+      return Promise.reject(error)
+    }
     const detail = error.response?.data?.detail || error.message || '请求失败'
     const url = error.config?.url || ''
     const isLoginRequest = url.includes('/api/auth/login')

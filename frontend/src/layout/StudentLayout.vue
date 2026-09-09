@@ -37,16 +37,17 @@
 <script setup>
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { getUser, clearAuth } from '../utils/auth'
+import { useAuthStore } from '../stores/auth'
 
 document.title = 'StudyHub'
 
 const router = useRouter()
-const user = computed(() => getUser())
+const auth = useAuthStore()
+const user = computed(() => auth.user)
 
 function onCommand(cmd) {
   if (cmd === 'logout') {
-    clearAuth()
+    auth.clearAuth()
     router.push('/login')
   } else if (cmd === 'profile') {
     router.push('/profile')
