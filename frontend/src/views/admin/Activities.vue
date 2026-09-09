@@ -17,12 +17,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-pagination
-        style="margin-top: 16px; justify-content: flex-end"
-        layout="total, prev, pager, next"
-        :total="total" :page-size="pageSize" :current-page="page"
-        @current-change="onPage"
-      />
+      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" title="新增活动" width="520px">
@@ -47,13 +42,14 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SortBar from '../../components/SortBar.vue'
+import PaginationBar from '../../components/PaginationBar.vue'
 import { useSort } from '../../composables/useSort'
 import { activityApi, metaApi, studentApi } from '../../api'
 
 const rawItems = ref([])
 const classes = ref([])
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const total = ref(0)
 const loading = ref(false)
 const dialog = ref(false)
@@ -71,18 +67,13 @@ onMounted(async () => {
 async function load() {
   loading.value = true
   try {
-    const res = await activityApi.list({ page: page.value, page_size: pageSize })
+    const res = await activityApi.list({ page: page.value, page_size: pageSize.value })
     rawItems.value = res.items
     total.value = res.total
   } catch (e) {
   } finally {
     loading.value = false
   }
-}
-
-function onPage(p) {
-  page.value = p
-  load()
 }
 
 function openCreate() {

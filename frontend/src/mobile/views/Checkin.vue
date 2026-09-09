@@ -9,6 +9,13 @@
       <van-cell title="出勤率统计" is-link icon="bar-chart-o" @click="$router.push('/m/attendance-stats')" />
     </van-cell-group>
 
+    <!-- 快捷操作：默认全员出勤，只标异常 -->
+    <div class="m-quick" v-if="students.length">
+      <van-button size="small" type="primary" plain icon="completed" @click="markAllPresent">全员出勤</van-button>
+      <van-button size="small" type="warning" plain icon="refresh" @click="markAllAbsent">全员缺勤</van-button>
+      <span class="m-quick-tip">默认出勤，只点异常学生</span>
+    </div>
+
     <!-- 状态统计 -->
     <div class="m-summary" v-if="students.length">
       <van-tag v-for="s in statusCounts" :key="s.name" :type="statusType(s.name)" size="medium">
@@ -112,6 +119,18 @@ async function load() {
   }
 }
 
+// 一键全员出勤
+function markAllPresent() {
+  students.value.forEach((s) => { s.status = '出勤' })
+  showToast('已设为全员出勤')
+}
+
+// 一键全员缺勤（用于反选：先全缺勤，再把到校的标成出勤）
+function markAllAbsent() {
+  students.value.forEach((s) => { s.status = '缺勤' })
+  showToast('已设为全员缺勤，请点选到校学生')
+}
+
 function pickStatus(s) {
   currentStudent.value = s
   showAction.value = true
@@ -154,6 +173,17 @@ onMounted(loadClasses)
   display: flex;
   gap: 8px;
   padding: 12px 16px 0;
+}
+.m-quick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 0;
+  flex-wrap: wrap;
+}
+.m-quick-tip {
+  color: #969799;
+  font-size: 12px;
 }
 .m-footer {
   position: fixed;

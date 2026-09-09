@@ -95,6 +95,136 @@ def list_scores(
     return {"items": items, "total": total}
 
 
+@router.get("/api/scores/analysis")
+def score_analysis(
+    class_id: int | None = None,
+    student_id: int | None = None,
+    subject: str = "",
+    exam_name: str = "",
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """成绩分析：班级排名 + 学生成绩趋势 + 可选科目/考试维度。
+
+    - 提供 class_id 时返回该班级的成绩排名（按科目/考试聚合）；
+    - 提供 student_id 时返回该生的历次成绩趋势（含班级均分对比）。
+    二者可同时提供，也可只提供其一。
+    """
+    resp: dict = {"subjects": [], "exams": []}
+
+    # 汇总可选科目 / 考试（受同一租户 + 教师可见范围约束）
+    base_q = db.query(Score).filter(Score.student_id.in_(active_student_id_query(db)))
+    base_q, denied = apply_teacher_student_filter(db, user, base_q, Score)
+    if denied:
+        return resp
+
+    if class_id:
+        base_q, denied = apply_student_class_filter(db, user, base_q, class_id, Score)
+        if denied:
+            return resp
+
+    subjects = sorted({s for (s,) in base_q.with_entities(Score.subject).all()})
+    exams = sorted({e for (e,) in base_q.with_entities(Score.exam_name).filter(Score.exam_name.isnot(None)).all()})
+    resp["subjects"] = subjects
+    resp["exams"] = exams
+
+    # 1) 班级排名
+    if class_id:
+        rank_q = db.query(Score).filter(
+            Score.student_id.in_(active_student_id_query(db)),
+            Score.student_id.in_(
+                db.query(Student.id).filter(Student.class_id == class_id)
+            ),
+        )
+        if subject:
+            rank_q = rank_q.filter(Score.subject == subject)
+        if exam_name:
+            rank_q = rank_q.filter(Score.exam_name == exam_name)
+        rows = rank_q.all()
+        # 学生 -> 分数聚合（同一学生同科目可能有多条，取平均或最新）
+        rank_map: dict = {}
+        for r in rows:
+            rank_map.setdefault(r.student_id, []).append(r)
+        students = db.query(Student).filter(Student.id.in_(list(rank_map.keys()))).all()
+        student_map = {s.id: s for s in students}
+        ranking = []
+        for sid, scores in rank_map.items():
+            s = student_map.get(sid)
+            if not s:
+                continue
+            vals = [x.score for x in scores]
+            avg = round(sum(vals) / len(vals), 1)
+            ranking.append({
+                "student_id": sid,
+                "name": s.name,
+                "student_no": s.student_no,
+                "score": avg,
+                "count": len(vals),
+            })
+        ranking.sort(key=lambda x: x["score"], reverse=True)
+        for i, item in enumerate(ranking):
+            item["rank"] = i + 1
+        resp["ranking"] = ranking
+        resp["ranking_total"] = len(ranking)
+
+    # 2) 学生成绩趋势（含班级均分对比）
+    if student_id:
+        if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
+            raise HTTPException(status_code=403, detail="无权查看该学生成绩")
+        sc_rows = (
+            db.query(Score)
+            .filter(Score.student_id == student_id)
+            .order_by(Score.created_at)
+            .all()
+        )
+        # 该生所在班级，用于计算班级均分对比
+        stu = db.get(Student, student_id)
+        class_ids = [stu.class_id] if (stu and stu.class_id) else []
+        class_avg_by_exam: dict = {}
+        if class_ids:
+            class_scores = (
+                db.query(Score)
+                .filter(Score.student_id.in_(active_student_id_query(db)))
+                .filter(
+                    Score.student_id.in_(
+                        db.query(Student.id).filter(Student.class_id.in_(class_ids))
+                    )
+                )
+                .all()
+            )
+            exam_group: dict = {}
+            for r in class_scores:
+                key = (r.subject, r.exam_name or "")
+                exam_group.setdefault(key, []).append(r.score)
+            for key, vals in exam_group.items():
+                class_avg_by_exam[key] = round(sum(vals) / len(vals), 1)
+
+        trend = []
+        for r in sc_rows:
+            key = (r.subject, r.exam_name or "")
+            trend.append({
+                "subject": r.subject,
+                "score": r.score,
+                "exam": r.exam_name or "",
+                "date": str(r.created_at)[:10],
+                "class_avg": class_avg_by_exam.get(key),
+            })
+        resp["trend"] = trend
+
+        # 按科目分组的趋势（前端可绘制多折线）
+        by_subject: dict = {}
+        for r in sc_rows:
+            by_subject.setdefault(r.subject, []).append({
+                "score": r.score,
+                "exam": r.exam_name or "",
+                "date": str(r.created_at)[:10],
+                "class_avg": class_avg_by_exam.get((r.subject, r.exam_name or "")),
+            })
+        resp["by_subject"] = by_subject
+
+    return resp
+
+
 @router.post("/api/scores")
 def create_score(payload: ScoreCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 退学/毕业限制

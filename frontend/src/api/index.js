@@ -87,6 +87,7 @@ export const scoreApi = {
   create: (data) => request.post('/api/scores', data),
   update: (id, data) => request.put(`/api/scores/${id}`, data),
   remove: (id) => request.delete(`/api/scores/${id}`),
+  analysis: (params) => request.get('/api/scores/analysis', { params }),
   export: (params) => request.get('/api/scores/export', { params, responseType: 'blob' }),
   template: () => request.get('/api/scores/template', { responseType: 'blob' }),
   import: (formData) => request.post('/api/scores/import', formData, {
@@ -187,7 +188,8 @@ export const studentCommentApi = {
   list: (params) => request.get('/api/student-comments', { params }),
   create: (data) => request.post('/api/student-comments', data),
   update: (id, data) => request.put(`/api/student-comments/${id}`, data),
-  remove: (id) => request.delete(`/api/student-comments/${id}`)
+  remove: (id) => request.delete(`/api/student-comments/${id}`),
+  suggest: (studentId) => request.get('/api/student-comments/suggest', { params: { student_id: studentId } })
 }
 
 // ============ 系统管理 ============

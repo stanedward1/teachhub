@@ -19,18 +19,21 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-pagination
-        style="margin-top: 16px; justify-content: flex-end"
-        layout="total, prev, pager, next"
-        :total="total" :page-size="pageSize" :current-page="page"
-        @current-change="onPage"
-      />
+      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑评语' : '编写评语'" width="500px">
       <el-form label-width="80px">
         <el-form-item label="学生" required><StudentSelect v-model="form.student_id" showClassFilter /></el-form-item>
-        <el-form-item label="评语"><el-input v-model="form.content" type="textarea" :rows="4" /></el-form-item>
+        <el-form-item label="评语">
+          <el-input v-model="form.content" type="textarea" :rows="6" placeholder="可点击下方「AI 生成草稿」自动填充评语..." />
+          <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+            <el-button size="small" type="primary" plain :loading="suggesting" :disabled="!form.student_id" @click="suggestComment">
+              <el-icon style="margin-right: 4px;"><MagicStick /></el-icon>AI 生成草稿
+            </el-button>
+            <span style="font-size: 12px; color: #909399;">根据该生成绩、表现、考勤、积分自动生成，可再编辑</span>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
@@ -45,6 +48,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
+import PaginationBar from '../../components/PaginationBar.vue'
 import { useSort } from '../../composables/useSort'
 import { studentCommentApi } from '../../api'
 
@@ -54,12 +58,13 @@ const items = useSorted(rawItems)
 const studentId = ref(null)
 const classId = ref(null)
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const total = ref(0)
 const loading = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
+const suggesting = ref(false)
 const form = reactive({ student_id: null, content: '' })
 
 onMounted(load)
@@ -67,18 +72,13 @@ onMounted(load)
 async function load() {
   loading.value = true
   try {
-    const res = await studentCommentApi.list({ page: page.value, page_size: pageSize, student_id: studentId.value, class_id: classId.value })
+    const res = await studentCommentApi.list({ page: page.value, page_size: pageSize.value, student_id: studentId.value, class_id: classId.value })
     rawItems.value = res.items
     total.value = res.total
   } catch (e) {
   } finally {
     loading.value = false
   }
-}
-
-function onPage(p) {
-  page.value = p
-  load()
 }
 
 function openCreate() {

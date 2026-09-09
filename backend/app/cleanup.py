@@ -14,6 +14,7 @@ import os
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models import (
     Assignment,
     AssignmentAttachment,
@@ -235,13 +236,14 @@ def purge_user_data(db: Session, user_id: int) -> None:
 def delete_avatar_file(avatar_url: str | None) -> None:
     """删除头像文件（avatar 形如 /uploads/avatars/xxx.png）。
 
-    基于项目根目录（backend/ 上一级）解析相对路径；文件不存在则静默跳过。
+    基于 settings.UPLOAD_DIR（绝对路径 backend/uploads）解析存储位置，
+    与 auth.py / students.py 中 `_AVATAR_DIR = "uploads/avatars"`（cwd=backend）
+    实际写入的 backend/uploads/avatars 保持一致；文件不存在则静默跳过。
     """
     if not avatar_url or not avatar_url.startswith("/uploads/avatars/"):
         return
-    # avatar 路径形如 /uploads/avatars/xxx.png，实际存储在 <backend>/uploads/avatars/xxx.png
-    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    full = os.path.join(base, "uploads", "avatars", os.path.basename(avatar_url))
+    # avatar 形如 /uploads/avatars/xxx.png，实际存储在 <UPLOAD_DIR>/avatars/xxx.png
+    full = os.path.join(settings.UPLOAD_DIR, "avatars", os.path.basename(avatar_url))
     try:
         if os.path.exists(full):
             os.remove(full)

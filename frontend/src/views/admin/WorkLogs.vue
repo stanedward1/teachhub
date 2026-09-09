@@ -20,12 +20,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-pagination
-        style="margin-top: 16px; justify-content: flex-end"
-        layout="total, prev, pager, next"
-        :total="total" :page-size="pageSize" :current-page="page"
-        @current-change="onPage"
-      />
+      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑日志' : '写日志'" width="760px">
@@ -55,6 +50,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import SortBar from '../../components/SortBar.vue'
+import PaginationBar from '../../components/PaginationBar.vue'
 import { useSort } from '../../composables/useSort'
 import { workLogApi } from '../../api'
 
@@ -62,7 +58,7 @@ const rawItems = ref([])
 const { order, useSorted } = useSort('worklogs')
 const items = useSorted(rawItems)
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const total = ref(0)
 const loading = ref(false)
 const dialog = ref(false)
@@ -77,18 +73,13 @@ onMounted(load)
 async function load() {
   loading.value = true
   try {
-    const res = await workLogApi.list({ page: page.value, page_size: pageSize })
+    const res = await workLogApi.list({ page: page.value, page_size: pageSize.value })
     rawItems.value = res.items
     total.value = res.total
   } catch (e) {
   } finally {
     loading.value = false
   }
-}
-
-function onPage(p) {
-  page.value = p
-  load()
 }
 
 function today() {

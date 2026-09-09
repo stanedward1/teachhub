@@ -9,6 +9,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.audit import audit
+from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Classroom, School, Student, User
@@ -265,7 +266,7 @@ def change_password(
     return {"ok": True}
 
 
-_AVATAR_DIR = "uploads/avatars"
+_AVATAR_DIR = os.path.join(settings.UPLOAD_DIR, "avatars")
 _AVATAR_MAX_SIZE = 2 * 1024 * 1024  # 2MB
 _AVATAR_ALLOWED = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 

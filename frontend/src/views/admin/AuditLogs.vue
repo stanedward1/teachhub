@@ -36,12 +36,7 @@
         <el-table-column prop="detail" label="详情" min-width="180" show-overflow-tooltip />
         <el-table-column prop="created_at" label="时间" width="170" />
       </el-table>
-      <el-pagination
-        style="margin-top: 16px; justify-content: flex-end"
-        layout="total, prev, pager, next"
-        :total="total" :page-size="pageSize" :current-page="page"
-        @current-change="onPage"
-      />
+      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
     </div>
   </div>
 </template>
@@ -49,6 +44,7 @@
 <script setup>
 import { ref, onMounted, watch } from 'vue'
 import { useDebouncedRef } from '../../composables/useDebouncedRef'
+import PaginationBar from '../../components/PaginationBar.vue'
 import { adminApi } from '../../api'
 
 const items = ref([])
@@ -57,7 +53,7 @@ const keyword = useDebouncedRef('', 300)
 watch(keyword, () => load())
 const date = ref('')
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const total = ref(0)
 const loading = ref(false)
 const actions = ref([])
@@ -164,7 +160,7 @@ onMounted(async () => {
 async function load() {
   loading.value = true
   try {
-    const res = await adminApi.auditLogs({ action: action.value, keyword: keyword.value, date: date.value, page: page.value, page_size: pageSize })
+    const res = await adminApi.auditLogs({ action: action.value, keyword: keyword.value, date: date.value, page: page.value, page_size: pageSize.value })
     items.value = res.items
     total.value = res.total
   } catch (e) {
@@ -175,11 +171,6 @@ async function load() {
 
 function onDateChange() {
   page.value = 1
-  load()
-}
-
-function onPage(p) {
-  page.value = p
   load()
 }
 </script>

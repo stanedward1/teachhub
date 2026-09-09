@@ -6,9 +6,12 @@ from app.deps import require_teacher, get_current_user
 from app.models import (
     Activity,
     ClassPlan,
+    Leave,
     Performance,
     ReturnRecord,
     Schedule,
+    Score,
+    Student,
     StudentComment,
     Talk,
     TeacherPlan,
@@ -466,6 +469,87 @@ def delete_performance(performance_id: int, user: User = Depends(get_current_use
 
 
 # ---------------- 学生评语 ----------------
+@router.get("/api/student-comments/suggest")
+def suggest_student_comment(student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """基于学生已有数据（成绩/表现/考勤/积分）生成评语草稿，供教师参考编辑。"""
+    student = db.get(Student, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="学生不存在")
+    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
+        raise HTTPException(status_code=403, detail="无权为该学生生成评语")
+
+    # 成绩
+    scores = db.query(Score).filter(Score.student_id == student_id).all()
+    score_avg = round(sum(s.score for s in scores) / len(scores), 1) if scores else None
+    subjects = sorted({s.subject for s in scores})
+
+    # 表现 + 积分
+    performances = db.query(Performance).filter(Performance.student_id == student_id).all()
+    positive = [p for p in performances if p.ptype == "积极"]
+    negative = [p for p in performances if p.ptype == "消极"]
+    point_delta = sum((p.points or 0) for p in performances)
+
+    # 考勤
+    leaves = db.query(Leave).filter(Leave.student_id == student_id).all()
+
+    # 生成评语草稿（分段落，供教师删改）
+    parts = []
+    parts.append(f"{student.name}同学")
+
+    # 学业段
+    if scores:
+        parts.append(
+            f"本阶段共有 {len(scores)} 次成绩记录，平均分 {score_avg} 分"
+            + (f"，涵盖科目：{'、'.join(subjects)}。" if subjects else "。")
+        )
+        if score_avg is not None:
+            if score_avg >= 90:
+                parts.append("学业表现优异，成绩名列前茅，望继续保持。")
+            elif score_avg >= 75:
+                parts.append("学业基础扎实，仍有提升空间，建议针对薄弱环节加强练习。")
+            else:
+                parts.append("学业上需加倍努力，建议制定学习计划，夯实基础。")
+
+    # 表现段
+    if positive or negative:
+        seg = f"在校期间积极表现 {len(positive)} 次、消极表现 {len(negative)} 次"
+        if positive:
+            seg += f"，如「{positive[0].content}」等"
+        parts.append(seg + "。")
+        if len(positive) > len(negative):
+            parts.append("整体表现积极向上，望继续发扬。")
+        elif len(negative) > len(positive):
+            parts.append("需注意行为规范，及时纠正不足，期待看到进步。")
+        else:
+            parts.append("表现总体平稳，望在自我管理上更进一步。")
+
+    # 考勤段
+    if leaves:
+        parts.append(f"请假 {len(leaves)} 次，需关注作息与健康，保持良好出勤习惯。")
+    elif not leaves and (scores or performances):
+        parts.append("出勤情况良好，遵守校纪校规。")
+
+    # 积分/总结段
+    if point_delta != 0:
+        parts.append(f"综合积分较基准 {'+' if point_delta > 0 else ''}{point_delta} 分，希望再接再厉。")
+
+    content = "".join(parts)
+
+    return {
+        "student_id": student_id,
+        "student_name": student.name,
+        "content": content,
+        "summary": {
+            "score_avg": score_avg,
+            "score_count": len(scores),
+            "positive": len(positive),
+            "negative": len(negative),
+            "leave_count": len(leaves),
+            "point_delta": point_delta,
+        },
+    }
+
+
 @router.get("/api/student-comments")
 def list_student_comments(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     page, page_size = normalize_page(page, page_size)

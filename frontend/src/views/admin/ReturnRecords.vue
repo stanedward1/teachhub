@@ -19,12 +19,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-pagination
-        style="margin-top: 16px; justify-content: flex-end"
-        layout="total, prev, pager, next"
-        :total="total" :page-size="pageSize" :current-page="page"
-        @current-change="onPage"
-      />
+      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" title="新增返校记录" width="460px">
@@ -47,6 +42,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
+import PaginationBar from '../../components/PaginationBar.vue'
 import { useSort } from '../../composables/useSort'
 import { returnRecordApi } from '../../api'
 
@@ -56,7 +52,7 @@ const items = useSorted(rawItems)
 const studentId = ref(null)
 const classId = ref(null)
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const total = ref(0)
 const loading = ref(false)
 const dialog = ref(false)
@@ -68,18 +64,13 @@ onMounted(load)
 async function load() {
   loading.value = true
   try {
-    const res = await returnRecordApi.list({ page: page.value, page_size: pageSize, student_id: studentId.value, class_id: classId.value })
+    const res = await returnRecordApi.list({ page: page.value, page_size: pageSize.value, student_id: studentId.value, class_id: classId.value })
     rawItems.value = res.items
     total.value = res.total
   } catch (e) {
   } finally {
     loading.value = false
   }
-}
-
-function onPage(p) {
-  page.value = p
-  load()
 }
 
 function openCreate() {

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user, require_teacher
+from app.config import settings
 from app.audit import audit, batch_student_avatar_map
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
 from app.models import Classroom, ClassTeacher, School, Student, StudentBoardHistory, User
@@ -561,7 +562,7 @@ def reset_student_password(student_id: int, payload: dict, user: User = Depends(
     return {"ok": True}
 
 
-_AVATAR_DIR = "uploads/avatars"
+_AVATAR_DIR = os.path.join(settings.UPLOAD_DIR, "avatars")
 _AVATAR_MAX_SIZE = 2 * 1024 * 1024
 _AVATAR_ALLOWED = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 

@@ -34,10 +34,11 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(
         os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440")
     )
-    # 数据库连接串：默认 SQLite（单文件零配置），切换只需改此环境变量
+    # 数据库连接串：默认 MySQL（生产/开发统一），切换只需改此环境变量
     #   MySQL:      mysql+pymysql://user:pass@localhost:3306/teachhub?charset=utf8mb4
+    #   SQLite:     sqlite:///./teachhub.db
     #   PostgreSQL: postgresql://user:pass@localhost:5432/teachhub
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./teachhub.db")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "mysql+pymysql://root:root@127.0.0.1:3306/teachhub?charset=utf8mb4")
     UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
 
     # 上传约束

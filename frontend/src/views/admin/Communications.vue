@@ -9,7 +9,11 @@
 
     <div class="page-card">
       <el-table :data="items" v-loading="loading" style="width: 100%">
-        <el-table-column prop="student_name" label="学生" width="120" />
+        <el-table-column label="学生" width="120">
+          <template #default="{ row }">
+            <el-link type="primary" :underline="false" @click="openStudentCard(row)">{{ row.student_name }}</el-link>
+          </template>
+        </el-table-column>
         <el-table-column prop="method" label="方式" width="90">
           <template #default="{ row }">
             <el-tag size="small" type="info">{{ row.method }}</el-tag>
@@ -24,12 +28,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-pagination
-        style="margin-top: 16px; justify-content: flex-end"
-        layout="total, prev, pager, next"
-        :total="total" :page-size="pageSize" :current-page="page"
-        @current-change="onPage"
-      />
+      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" title="新增沟通记录" width="500px">
@@ -48,6 +47,8 @@
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
     </el-dialog>
+
+    <StudentCard v-model:visible="studentCardVisible" :student-id="studentCardId" />
   </div>
 </template>
 
@@ -56,6 +57,8 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
+import PaginationBar from '../../components/PaginationBar.vue'
+import StudentCard from '../../components/StudentCard.vue'
 import { useSort } from '../../composables/useSort'
 import { communicationApi } from '../../api'
 
@@ -65,30 +68,34 @@ const items = useSorted(rawItems)
 const studentId = ref(null)
 const classId = ref(null)
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const total = ref(0)
 const loading = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
 const form = reactive({ student_id: null, method: '电话', content: '', feedback: '' })
 
+// 跨模块学生卡片
+const studentCardVisible = ref(false)
+const studentCardId = ref(null)
+function openStudentCard(row) {
+  if (!row.student_id) return
+  studentCardId.value = row.student_id
+  studentCardVisible.value = true
+}
+
 onMounted(load)
 
 async function load() {
   loading.value = true
   try {
-    const res = await communicationApi.list({ page: page.value, page_size: pageSize, student_id: studentId.value, class_id: classId.value })
+    const res = await communicationApi.list({ page: page.value, page_size: pageSize.value, student_id: studentId.value, class_id: classId.value })
     rawItems.value = res.items
     total.value = res.total
   } catch (e) {
   } finally {
     loading.value = false
   }
-}
-
-function onPage(p) {
-  page.value = p
-  load()
 }
 
 function openCreate() {

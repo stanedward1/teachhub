@@ -10,6 +10,8 @@ TeachHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 | ---- | ---- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、设计决策 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、权限与多租户隔离规范、Git 规范、测试规范、发布流程 |
+| [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 33 张表、外键删除策略分层、软关联说明 |
+| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（方法 + 路径 + 权限 + 约定） |
 
 ## 核心特性
 

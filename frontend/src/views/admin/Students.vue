@@ -80,15 +80,14 @@
             <el-button link type="danger" :disabled="row.is_dropped_out" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
+        <template #empty>
+          <el-empty description="暂无学生">
+            <el-button type="primary" @click="openCreate">添加学生</el-button>
+            <el-button @click="openImport">批量导入</el-button>
+          </el-empty>
+        </template>
       </el-table>
-      <el-pagination
-        style="margin-top: 16px; justify-content: flex-end"
-        layout="total, prev, pager, next"
-        :total="total"
-        :page-size="pageSize"
-        :current-page="page"
-        @current-change="onPage"
-      />
+      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑学生' : '添加学生'" width="560px">
@@ -273,6 +272,7 @@ import { TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 echarts.use([PieChart, TooltipComponent, LegendComponent, CanvasRenderer])
 import SortBar from '../../components/SortBar.vue'
+import PaginationBar from '../../components/PaginationBar.vue'
 import { useSort } from '../../composables/useSort'
 import { studentApi, metaApi } from '../../api'
 
@@ -283,7 +283,7 @@ watch(keyword, () => load())
 const classId = ref(null)
 const droppedFilter = ref('false')
 const page = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const total = ref(0)
 const loading = ref(false)
 const dialog = ref(false)
@@ -337,7 +337,7 @@ onBeforeUnmount(() => {
 async function load() {
   loading.value = true
   try {
-    const res = await studentApi.list({ page: page.value, page_size: pageSize, keyword: keyword.value, class_id: classId.value, dropped_out: droppedFilter.value })
+    const res = await studentApi.list({ page: page.value, page_size: pageSize.value, keyword: keyword.value, class_id: classId.value, dropped_out: droppedFilter.value })
     rawItems.value = res.items
     total.value = res.total
   } catch (e) {
