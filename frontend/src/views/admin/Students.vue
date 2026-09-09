@@ -266,7 +266,11 @@
 <script setup>
 import { ref, reactive, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { PieChart } from 'echarts/charts'
+import { TooltipComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+echarts.use([PieChart, TooltipComponent, LegendComponent, CanvasRenderer])
 import SortBar from '../../components/SortBar.vue'
 import { useSort } from '../../composables/useSort'
 import { studentApi, metaApi } from '../../api'

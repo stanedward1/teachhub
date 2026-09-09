@@ -65,7 +65,11 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { RadarChart } from 'echarts/charts'
+import { TooltipComponent, RadarComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+echarts.use([RadarChart, TooltipComponent, RadarComponent, CanvasRenderer])
 import { mobileApi } from '../api/mobile'
 
 const route = useRoute()

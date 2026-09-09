@@ -1,5 +1,10 @@
 import { createApp } from 'vue'
-import * as ElementPlusIconsVue from '@element-plus/icons-vue'
+import {
+  ArrowDown, Back, Bell, Briefcase, Calendar, ChatDotRound, Clock, CollectionTag,
+  Document, Expand, Folder, Fold, Key, Loading, Lock, Menu, Monitor, Notebook,
+  Odometer, Reading, Right, School, Setting, SortDown, SortUp, Star, Switch,
+  Tickets, Upload, UploadFilled, User,
+} from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
 import './style.css'
@@ -10,16 +15,15 @@ import 'element-plus/es/components/message-box/style/css'
 
 const app = createApp(App)
 
-// 只注册项目实际用到的图标（避免把 @element-plus/icons-vue 全量打入主包）
-const USED_ICONS = [
-  'ArrowDown', 'Back', 'Briefcase', 'ChatDotRound', 'Clock', 'CollectionTag',
-  'Document', 'Key', 'Loading', 'Lock', 'Menu', 'Monitor', 'Notebook', 'Odometer',
-  'Reading', 'Right', 'Setting', 'SortDown', 'SortUp', 'Star', 'Switch',
-  'UploadFilled', 'User',
-]
-for (const name of USED_ICONS) {
-  const comp = ElementPlusIconsVue[name]
-  if (comp) app.component(name, comp)
+// 具名导入 + 只注册项目实际用到的图标（tree-shaking 生效，避免把整个图标库打进主包）
+const ICONS = {
+  ArrowDown, Back, Bell, Briefcase, Calendar, ChatDotRound, Clock, CollectionTag,
+  Document, Expand, Folder, Fold, Key, Loading, Lock, Menu, Monitor, Notebook,
+  Odometer, Reading, Right, School, Setting, SortDown, SortUp, Star, Switch,
+  Tickets, Upload, UploadFilled, User,
+}
+for (const [name, comp] of Object.entries(ICONS)) {
+  app.component(name, comp)
 }
 
 app.use(router)

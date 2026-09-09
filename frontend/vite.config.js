@@ -30,7 +30,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           'vendor-vue': ['vue', 'vue-router'],
-          'vendor-element': ['element-plus', '@element-plus/icons-vue'],
           'vendor-echarts': ['echarts'],
           'vendor-markdown': ['marked', 'dompurify'],
         }

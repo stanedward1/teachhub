@@ -183,7 +183,11 @@
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart, RadarChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, RadarComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+echarts.use([LineChart, RadarChart, GridComponent, TooltipComponent, RadarComponent, CanvasRenderer])
 import { studentApi } from '../../api'
 
 const route = useRoute()
