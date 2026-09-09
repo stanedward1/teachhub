@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user, require_teacher
 from app.audit import audit, batch_student_avatar_map
-from app.cleanup import delete_avatar_file, purge_student_data
+from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
 from app.models import Classroom, ClassTeacher, School, Student, StudentBoardHistory, User
 from app.security import hash_password, validate_password_strength
 from app.schemas import StudentCreate, StudentUpdate
@@ -500,6 +500,8 @@ def delete_student(student_id: int, user: User = Depends(get_current_user), db: 
 
     # 账号与头像：在档案删除成功后清理（账号删除失败不影响档案已删的结果）
     if account:
+        # 删除账号前先级联清理引用该账号的业务数据，避免 MySQL 外键约束拒绝删除
+        purge_user_data(db, account.id)
         db.delete(account)
         db.commit()
     delete_avatar_file(avatar_url)

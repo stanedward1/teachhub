@@ -45,7 +45,7 @@
                 {{ c.score }} 分
               </el-tag>
               <span class="comment-time">{{ c.created_at }}</span>
-              <el-button v-if="c.teacher_id === currentUser?.id || currentUser?.role === 'admin'"
+              <el-button v-if="c.teacher_id === currentUser?.id || isAdmin"
                 link type="danger" size="small" @click="removeComment(c)">删除</el-button>
             </div>
             <div class="comment-content">{{ c.content }}</div>
@@ -73,7 +73,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import { homeworkApi } from '../../api'
-import { getUser } from '../../utils/auth'
+import { getUser, isSchoolAdmin, isPlatformAdmin } from '../../utils/auth'
 
 const route = useRoute()
 const submission = ref(null)
@@ -81,6 +81,8 @@ const loading = ref(true)
 const saving = ref(false)
 const form = reactive({ content: '', score: null })
 const currentUser = getUser()
+// 学校管理员 / 平台超管可删除任意点评
+const isAdmin = isSchoolAdmin() || isPlatformAdmin()
 
 onMounted(load)
 

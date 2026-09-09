@@ -4,7 +4,7 @@
       <div class="m-avatar">{{ user?.name?.[0] || 'T' }}</div>
       <div>
         <div class="m-name">{{ user?.name || '教师' }}</div>
-        <div class="m-role">{{ user?.role === 'admin' ? '管理员' : '班主任' }}</div>
+        <div class="m-role">{{ isAdmin ? '管理员' : '班主任' }}</div>
       </div>
     </div>
 
@@ -19,9 +19,10 @@
 </template>
 
 <script setup>
-import { getUser } from '../../utils/auth'
+import { getUser, isSchoolAdmin, isPlatformAdmin } from '../../utils/auth'
 
 const user = getUser()
+const isAdmin = isSchoolAdmin() || isPlatformAdmin()
 </script>
 
 <style scoped>

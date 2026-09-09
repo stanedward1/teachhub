@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.audit import audit
-from app.cleanup import delete_avatar_file, purge_student_data
+from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
 from app.database import get_db
 from app.deps import get_current_user, require_school_admin, require_super_admin, require_teacher
 from app.permissions import ensure_same_school, get_teacher_class_ids, is_any_admin, is_platform_admin
@@ -228,6 +228,10 @@ def delete_user(user_id: int, user=Depends(admin_dep), db: Session = Depends(get
         if stu:
             purge_student_data(db, stu.id)
             db.delete(stu)
+
+    # 删除账号前，级联清理所有引用该 users.id 的业务数据，
+    # 否则 MySQL 外键约束会拒绝删除（返回 500）
+    purge_user_data(db, u.id)
 
     audit(db, user, "delete_user", target=f"{u.username} ({u.name})", detail=f"role={u.role}")
     db.delete(u)

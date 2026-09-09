@@ -144,7 +144,7 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const user = computed(() => auth.user)
-const isAdmin = computed(() => user.value?.role === 'admin' || auth.isSchoolAdmin || auth.isPlatformAdmin)
+const isAdmin = computed(() => auth.isSchoolAdmin || auth.isPlatformAdmin)
 const isPlatform = computed(() => auth.isPlatformAdmin)
 const roleText = computed(() => {
   const r = auth.user?.role

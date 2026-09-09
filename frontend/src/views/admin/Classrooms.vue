@@ -95,9 +95,10 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { studentApi, adminApi } from '../../api'
-import { getUser } from '../../utils/auth'
+import { isSchoolAdmin, isPlatformAdmin } from '../../utils/auth'
 
-const isAdmin = getUser()?.role === 'admin'
+// 学校管理员 / 平台超管可管理班级（新增/删除/配置班主任与科任）；教师仅可查看
+const isAdmin = isSchoolAdmin() || isPlatformAdmin()
 const items = ref([])
 const teachers = ref([])
 const loading = ref(false)
