@@ -27,7 +27,15 @@ from app.audit import (
     active_classroom_id_query,
 )
 from app.utils import to_dict, normalize_page, parse_date
-from app.schemas import ReturnRecordCreate, TalkCreate, WorkLogCreate
+from app.schemas import (
+    PerformanceOut,
+    ReturnRecordCreate,
+    ReturnRecordOut,
+    StudentCommentOut,
+    TalkCreate,
+    TalkOut,
+    WorkLogCreate,
+)
 from app.permissions import (
     is_any_admin,
     get_teacher_class_ids,
@@ -39,7 +47,7 @@ from app.permissions import (
     ensure_class_operable,
 )
 
-router = APIRouter(tags=["班级日志"])
+router = APIRouter(prefix="/api", tags=["班级日志"])
 
 dep = require_teacher
 
@@ -69,7 +77,7 @@ def _check_class_permission(db: Session, user: User, class_id: int):
 
 
 # ---------------- 工作日志 ----------------
-@router.get("/api/work-logs")
+@router.get("/work-logs")
 def list_work_logs(page: int = 1, page_size: int = 20, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     page, page_size = normalize_page(page, page_size)
     q = db.query(WorkLog)
@@ -81,7 +89,7 @@ def list_work_logs(page: int = 1, page_size: int = 20, user: User = Depends(get_
     return {"items": [to_dict(x) for x in rows], "total": total}
 
 
-@router.post("/api/work-logs")
+@router.post("/work-logs")
 def create_work_log(payload: WorkLogCreate, user=Depends(dep), db: Session = Depends(get_db)):
     x = WorkLog(
         teacher_id=user.id,
@@ -95,7 +103,7 @@ def create_work_log(payload: WorkLogCreate, user=Depends(dep), db: Session = Dep
     return to_dict(x)
 
 
-@router.put("/api/work-logs/{log_id}")
+@router.put("/work-logs/{log_id}")
 def update_work_log(log_id: int, payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(WorkLog, log_id)
     if not x:
@@ -112,7 +120,7 @@ def update_work_log(log_id: int, payload: dict, user: User = Depends(get_current
     return to_dict(x)
 
 
-@router.delete("/api/work-logs/{log_id}")
+@router.delete("/work-logs/{log_id}")
 def delete_work_log(log_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(WorkLog, log_id)
     if not x:
@@ -127,7 +135,7 @@ def delete_work_log(log_id: int, user: User = Depends(get_current_user), db: Ses
 
 # ---------------- 班级计划 / 教师计划 ----------------
 def _plan_crud(model, prefix, router):
-    @router.get(f"/api/{prefix}")
+    @router.get(f"/{prefix}")
     def list_plans(page: int = 1, page_size: int = 20, plan_type: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
         page, page_size = normalize_page(page, page_size)
         q = db.query(model)
@@ -140,7 +148,7 @@ def _plan_crud(model, prefix, router):
         rows = q.order_by(model.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
         return {"items": [to_dict(x) for x in rows], "total": total}
 
-    @router.post(f"/api/{prefix}")
+    @router.post(f"/{prefix}")
     def create_plan(payload: dict, user=Depends(dep), db: Session = Depends(get_db)):
         title = (payload.get("title") or "").strip()
         if not title:
@@ -157,7 +165,7 @@ def _plan_crud(model, prefix, router):
         db.refresh(x)
         return to_dict(x)
 
-    @router.put(f"/api/{prefix}/{{item_id}}")
+    @router.put(f"/{prefix}/{{item_id}}")
     def update_plan(item_id: int, payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
         x = db.get(model, item_id)
         if not x:
@@ -172,7 +180,7 @@ def _plan_crud(model, prefix, router):
         db.refresh(x)
         return to_dict(x)
 
-    @router.delete(f"/api/{prefix}/{{item_id}}")
+    @router.delete(f"/{prefix}/{{item_id}}")
     def delete_plan(item_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
         x = db.get(model, item_id)
         if not x:
@@ -190,7 +198,7 @@ _plan_crud(TeacherPlan, "teacher-plans", router)
 
 
 # ---------------- 课程表 ----------------
-@router.get("/api/schedules")
+@router.get("/schedules")
 def list_schedules(class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     q = db.query(Schedule)
     # 排除毕业班级的课程表
@@ -211,7 +219,7 @@ def list_schedules(class_id: int | None = None, user: User = Depends(get_current
     return {"items": [to_dict(x) for x in rows], "total": len(rows)}
 
 
-@router.post("/api/schedules")
+@router.post("/schedules")
 def create_schedule(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not payload.get("class_id"):
         raise HTTPException(status_code=400, detail="请选择班级")
@@ -239,7 +247,7 @@ def create_schedule(payload: dict, user: User = Depends(get_current_user), db: S
     return to_dict(x)
 
 
-@router.delete("/api/schedules/{schedule_id}")
+@router.delete("/schedules/{schedule_id}")
 def delete_schedule(schedule_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(Schedule, schedule_id)
     if not x:
@@ -255,7 +263,7 @@ def delete_schedule(schedule_id: int, user: User = Depends(get_current_user), db
 
 
 # ---------------- 班级活动 ----------------
-@router.get("/api/activities")
+@router.get("/activities")
 def list_activities(page: int = 1, page_size: int = 20, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     page, page_size = normalize_page(page, page_size)
     q = db.query(Activity)
@@ -273,7 +281,7 @@ def list_activities(page: int = 1, page_size: int = 20, user: User = Depends(get
     return {"items": [to_dict(x) for x in rows], "total": total}
 
 
-@router.post("/api/activities")
+@router.post("/activities")
 def create_activity(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     title = (payload.get("title") or "").strip()
     if not title:
@@ -297,7 +305,7 @@ def create_activity(payload: dict, user: User = Depends(get_current_user), db: S
     return to_dict(x)
 
 
-@router.delete("/api/activities/{activity_id}")
+@router.delete("/activities/{activity_id}")
 def delete_activity(activity_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(Activity, activity_id)
     if not x:
@@ -315,7 +323,7 @@ def delete_activity(activity_id: int, user: User = Depends(get_current_user), db
 
 
 # ---------------- 师生谈心 ----------------
-@router.get("/api/talks")
+@router.get("/talks")
 def list_talks(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     page, page_size = normalize_page(page, page_size)
     q = _filter_student_query(db, Talk, user)
@@ -333,7 +341,7 @@ def list_talks(page: int = 1, page_size: int = 20, student_id: int | None = None
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
-@router.post("/api/talks")
+@router.post("/talks", response_model=TalkOut, status_code=201)
 def create_talk(payload: TalkCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 教师只能与自己班级学生谈心
     _check_student_permission(db, user, payload.student_id)
@@ -345,7 +353,7 @@ def create_talk(payload: TalkCreate, user: User = Depends(get_current_user), db:
     return attach_student(db, to_dict(x), x.student_id)
 
 
-@router.delete("/api/talks/{talk_id}")
+@router.delete("/talks/{talk_id}")
 def delete_talk(talk_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(Talk, talk_id)
     if not x:
@@ -359,7 +367,7 @@ def delete_talk(talk_id: int, user: User = Depends(get_current_user), db: Sessio
 
 
 # ---------------- 返校记录 ----------------
-@router.get("/api/return-records")
+@router.get("/return-records")
 def list_return_records(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     page, page_size = normalize_page(page, page_size)
     q = _filter_student_query(db, ReturnRecord, user)
@@ -377,7 +385,7 @@ def list_return_records(page: int = 1, page_size: int = 20, student_id: int | No
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
-@router.post("/api/return-records")
+@router.post("/return-records", response_model=ReturnRecordOut, status_code=201)
 def create_return_record(payload: ReturnRecordCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 教师只能为自己班级学生登记返校
     _check_student_permission(db, user, payload.student_id)
@@ -394,7 +402,7 @@ def create_return_record(payload: ReturnRecordCreate, user: User = Depends(get_c
     return attach_student(db, to_dict(x), x.student_id)
 
 
-@router.delete("/api/return-records/{record_id}")
+@router.delete("/return-records/{record_id}")
 def delete_return_record(record_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(ReturnRecord, record_id)
     if not x:
@@ -408,7 +416,7 @@ def delete_return_record(record_id: int, user: User = Depends(get_current_user),
 
 
 # ---------------- 学生表现 ----------------
-@router.get("/api/performances")
+@router.get("/performances")
 def list_performances(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, ptype: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     page, page_size = normalize_page(page, page_size)
     q = _filter_student_query(db, Performance, user)
@@ -428,7 +436,7 @@ def list_performances(page: int = 1, page_size: int = 20, student_id: int | None
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
-@router.post("/api/performances")
+@router.post("/performances", response_model=PerformanceOut, status_code=201)
 def create_performance(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not payload.get("student_id"):
         raise HTTPException(status_code=400, detail="请选择学生")
@@ -455,7 +463,7 @@ def create_performance(payload: dict, user: User = Depends(get_current_user), db
     return attach_student(db, to_dict(x), x.student_id)
 
 
-@router.delete("/api/performances/{performance_id}")
+@router.delete("/performances/{performance_id}")
 def delete_performance(performance_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(Performance, performance_id)
     if not x:
@@ -469,7 +477,7 @@ def delete_performance(performance_id: int, user: User = Depends(get_current_use
 
 
 # ---------------- 学生评语 ----------------
-@router.get("/api/student-comments/suggest")
+@router.get("/student-comments/suggest")
 def suggest_student_comment(student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """基于学生已有数据（成绩/表现/考勤/积分）生成评语草稿，供教师参考编辑。"""
     student = db.get(Student, student_id)
@@ -550,7 +558,7 @@ def suggest_student_comment(student_id: int, user: User = Depends(get_current_us
     }
 
 
-@router.get("/api/student-comments")
+@router.get("/student-comments")
 def list_student_comments(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     page, page_size = normalize_page(page, page_size)
     q = _filter_student_query(db, StudentComment, user)
@@ -568,7 +576,7 @@ def list_student_comments(page: int = 1, page_size: int = 20, student_id: int | 
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
-@router.post("/api/student-comments")
+@router.post("/student-comments", response_model=StudentCommentOut, status_code=201)
 def create_student_comment(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not payload.get("student_id"):
         raise HTTPException(status_code=400, detail="请选择学生")
@@ -582,7 +590,7 @@ def create_student_comment(payload: dict, user: User = Depends(get_current_user)
     return attach_student(db, to_dict(x), x.student_id)
 
 
-@router.put("/api/student-comments/{comment_id}")
+@router.put("/student-comments/{comment_id}", response_model=StudentCommentOut)
 def update_student_comment(comment_id: int, payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(StudentComment, comment_id)
     if not x:
@@ -597,7 +605,7 @@ def update_student_comment(comment_id: int, payload: dict, user: User = Depends(
     return attach_student(db, to_dict(x), x.student_id)
 
 
-@router.delete("/api/student-comments/{comment_id}")
+@router.delete("/student-comments/{comment_id}")
 def delete_student_comment(comment_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(StudentComment, comment_id)
     if not x:

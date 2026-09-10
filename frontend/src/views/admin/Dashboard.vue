@@ -243,7 +243,6 @@ function renderCharts() {
       value: val.count || 0,
       percent: val.percent || 0,
     }))
-    const total = distData.reduce((s, d) => s + d.value, 0) || 1
     distChart.setOption({
       title: selectedExam.value
         ? { text: selectedExam.value, left: 'center', top: 6, textStyle: { fontSize: 13, color: '#4b5563', fontWeight: 500 } }

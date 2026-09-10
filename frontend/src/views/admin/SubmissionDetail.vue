@@ -45,7 +45,8 @@
                 {{ c.score }} 分
               </el-tag>
               <span class="comment-time">{{ c.created_at }}</span>
-              <el-button v-if="c.teacher_id === currentUser?.id || isAdmin"
+              <el-button
+v-if="c.teacher_id === currentUser?.id || isAdmin"
                 link type="danger" size="small" @click="removeComment(c)">删除</el-button>
             </div>
             <div class="comment-content">{{ c.content }}</div>

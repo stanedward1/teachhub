@@ -1,19 +1,17 @@
-from typing import Optional
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, description="教师=用户名，学生=姓名")
     password: str = Field(..., min_length=1, description="密码")
-    class_id: Optional[int] = Field(None, description="学生登录时的班级 ID")
-    school_id: Optional[int] = Field(None, description="学校 ID（教师/学校管理员/学生登录必填）")
+    class_id: int | None = Field(None, description="学生登录时的班级 ID")
+    school_id: int | None = Field(None, description="学校 ID（教师/学校管理员/学生登录必填）")
 
 
 class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="学生姓名（作为用户名）")
     password: str = Field("123456", min_length=6, max_length=50, description="密码，默认 123456")
-    class_id: Optional[int] = Field(None, description="班级 ID")
+    class_id: int | None = Field(None, description="班级 ID")
 
 
 class PasswordRequest(BaseModel):
@@ -27,72 +25,72 @@ class ScoreCreate(BaseModel):
     student_id: int = Field(..., gt=0)
     subject: str = Field("未分类", max_length=50)
     score: float = Field(..., ge=0, le=150)
-    exam_name: Optional[str] = None
+    exam_name: str | None = None
 
 
 class ScoreUpdate(BaseModel):
-    student_id: Optional[int] = Field(None, gt=0)
-    subject: Optional[str] = Field(None, max_length=50)
-    score: Optional[float] = Field(None, ge=0, le=150)
-    exam_name: Optional[str] = None
+    student_id: int | None = Field(None, gt=0)
+    subject: str | None = Field(None, max_length=50)
+    score: float | None = Field(None, ge=0, le=150)
+    exam_name: str | None = None
 
 
 # ============ 请假 ============
 class LeaveCreate(BaseModel):
     student_id: int = Field(..., gt=0)
-    reason: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
+    reason: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
     status: str = "登记"
-    image: Optional[str] = None
+    image: str | None = None
 
 
 class LeaveUpdate(BaseModel):
-    reason: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    status: Optional[str] = None
-    image: Optional[str] = None
+    reason: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    status: str | None = None
+    image: str | None = None
 
 
 # ============ 学生 ============
 class StudentCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
     student_no: str = Field(..., min_length=1, max_length=50)
-    class_id: Optional[int] = None
+    class_id: int | None = None
     gender: str = "男"
-    birth_date: Optional[str] = None
-    major: Optional[str] = None
-    parent_name: Optional[str] = None
-    parent_phone: Optional[str] = None
+    birth_date: str | None = None
+    major: str | None = None
+    parent_name: str | None = None
+    parent_phone: str | None = None
     student_type: str = "day"
-    school_id: Optional[int] = None
+    school_id: int | None = None
     is_dropped_out: bool = False
 
 
 class StudentUpdate(BaseModel):
-    name: Optional[str] = None
-    gender: Optional[str] = None
-    birth_date: Optional[str] = None
-    class_id: Optional[int] = None
-    major: Optional[str] = None
-    parent_name: Optional[str] = None
-    parent_phone: Optional[str] = None
-    student_type: Optional[str] = None
-    is_dropped_out: Optional[bool] = None
+    name: str | None = None
+    gender: str | None = None
+    birth_date: str | None = None
+    class_id: int | None = None
+    major: str | None = None
+    parent_name: str | None = None
+    parent_phone: str | None = None
+    student_type: str | None = None
+    is_dropped_out: bool | None = None
 
 
 # ============ 班级日志 ============
 class WorkLogCreate(BaseModel):
-    date: Optional[str] = None
+    date: str | None = None
     content: str = ""
 
 
 class ReturnRecordCreate(BaseModel):
     student_id: int = Field(..., gt=0)
-    return_date: Optional[str] = None
-    reason: Optional[str] = None
-    note: Optional[str] = None
+    return_date: str | None = None
+    reason: str | None = None
+    note: str | None = None
 
 
 class TalkCreate(BaseModel):
@@ -110,4 +108,147 @@ class AttendanceCheckin(BaseModel):
     class_id: int = Field(..., gt=0)
     date: str = Field(..., min_length=1)
     records: list[AttendanceRecord] = Field(default_factory=list)
+
+
+# ============================================================
+# 响应模型（Out）：补全 OpenAPI 文档与响应序列化校验。
+# 使用 from_attributes=True 使 ORM 对象可直接被 response_model 序列化；
+# 字段均为可选，避免与 to_dict 返回的实际字段不一致导致校验报错。
+# ============================================================
+
+class _ORMOut(BaseModel):
+    """响应模型基类：允许从 ORM 对象直接取值，并忽略未知字段。"""
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+
+class ScoreOut(_ORMOut):
+    id: int | None = None
+    student_id: int | None = None
+    subject: str | None = None
+    score: float | None = None
+    exam_name: str | None = None
+    created_at: str | None = None
+    # 序列化时由 audit.attach_student 附加
+    student_name: str | None = None
+    student_no: str | None = None
+
+
+class LeaveOut(_ORMOut):
+    id: int | None = None
+    student_id: int | None = None
+    reason: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    status: str | None = None
+    image: str | None = None
+    created_at: str | None = None
+    student_name: str | None = None
+    student_no: str | None = None
+
+
+class CommunicationOut(_ORMOut):
+    id: int | None = None
+    student_id: int | None = None
+    method: str | None = None
+    content: str | None = None
+    feedback: str | None = None
+    created_at: str | None = None
+    student_name: str | None = None
+    student_no: str | None = None
+
+
+class StudentOut(_ORMOut):
+    id: int | None = None
+    name: str | None = None
+    student_no: str | None = None
+    gender: str | None = None
+    class_id: int | None = None
+    major: str | None = None
+    parent_name: str | None = None
+    parent_phone: str | None = None
+    student_type: str | None = None
+    is_dropped_out: bool | None = None
+
+
+class ClassroomOut(_ORMOut):
+    id: int | None = None
+    name: str | None = None
+    code: str | None = None
+    major: str | None = None
+    grade: str | None = None
+    teacher_id: int | None = None
+    is_graduated: bool | None = None
+
+
+class SchoolOut(_ORMOut):
+    id: int | None = None
+    name: str | None = None
+
+
+class PerformanceOut(_ORMOut):
+    id: int | None = None
+    student_id: int | None = None
+    ptype: str | None = None
+    content: str | None = None
+    points: int | None = None
+    created_at: str | None = None
+    student_name: str | None = None
+    student_no: str | None = None
+
+
+class TalkOut(_ORMOut):
+    id: int | None = None
+    student_id: int | None = None
+    teacher_id: int | None = None
+    content: str | None = None
+    created_at: str | None = None
+    student_name: str | None = None
+    student_no: str | None = None
+
+
+class ReturnRecordOut(_ORMOut):
+    id: int | None = None
+    student_id: int | None = None
+    return_date: str | None = None
+    reason: str | None = None
+    note: str | None = None
+    created_at: str | None = None
+    student_name: str | None = None
+    student_no: str | None = None
+
+
+class StudentCommentOut(_ORMOut):
+    id: int | None = None
+    student_id: int | None = None
+    content: str | None = None
+    created_at: str | None = None
+    student_name: str | None = None
+    student_no: str | None = None
+
+
+class AttendanceOut(_ORMOut):
+    id: int | None = None
+    class_id: int | None = None
+    student_id: int | None = None
+    date: str | None = None
+    status: str | None = None
+
+
+class WorkLogOut(_ORMOut):
+    id: int | None = None
+    teacher_id: int | None = None
+    date: str | None = None
+    content: str | None = None
+
+
+class UserOut(_ORMOut):
+    id: int | None = None
+    username: str | None = None
+    name: str | None = None
+    role: str | None = None
+    avatar: str | None = None
+    phone: str | None = None
+    school_id: int | None = None
+    class_id: int | None = None
+    must_change_password: bool | None = None
 

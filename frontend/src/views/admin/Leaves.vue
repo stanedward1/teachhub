@@ -5,7 +5,7 @@
         <el-option label="登记" value="登记" />
         <el-option label="已销假" value="已销假" />
       </el-select>
-      <StudentSelect v-model="studentId" v-model:classId="classId" showClassFilter placeholder="按学生筛选" style="width: 320px" @update:model-value="load" @update:classId="load" />
+      <StudentSelect v-model="studentId" v-model:class-id="classId" show-class-filter placeholder="按学生筛选" style="width: 320px" @update:model-value="load" @update:class-id="load" />
       <div class="spacer"></div>
       <el-button type="primary" @click="openCreate">登记请假</el-button>
       <SortBar v-model="order" />
@@ -39,12 +39,12 @@
           </el-empty>
         </template>
       </el-table>
-      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
+      <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑请假' : '登记请假'" width="460px">
       <el-form label-width="80px">
-        <el-form-item label="学生" required><StudentSelect v-model="form.student_id" showClassFilter /></el-form-item>
+        <el-form-item label="学生" required><StudentSelect v-model="form.student_id" show-class-filter /></el-form-item>
         <el-form-item label="事由"><el-input v-model="form.reason" /></el-form-item>
         <el-form-item label="开始日期"><el-date-picker v-model="form.start_date" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item>
         <el-form-item label="结束日期"><el-date-picker v-model="form.end_date" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item>

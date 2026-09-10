@@ -33,7 +33,7 @@
             <el-upload
               v-if="!row.is_dropped_out"
               :show-file-list="false"
-              :before-upload="(f) => beforeAvatarUpload(f, row)"
+              :before-upload="beforeAvatarUpload"
               :http-request="(opt) => handleStudentAvatar(opt, row)"
               accept=".jpg,.jpeg,.png,.gif,.webp"
             >
@@ -87,7 +87,7 @@
           </el-empty>
         </template>
       </el-table>
-      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
+      <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑学生' : '添加学生'" width="560px">
@@ -274,7 +274,7 @@ echarts.use([PieChart, TooltipComponent, LegendComponent, CanvasRenderer])
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import { useSort } from '../../composables/useSort'
-import { studentApi, metaApi } from '../../api'
+import { studentApi } from '../../api'
 
 const rawItems = ref([])
 const classes = ref([])
@@ -574,7 +574,7 @@ async function doImport() {
 }
 
 // 头像上传
-function beforeAvatarUpload(file, row) {
+function beforeAvatarUpload(file) {
   const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
   if (!allowed.includes(file.type)) {
     ElMessage.error('仅支持 JPG/PNG/GIF/WebP 格式')

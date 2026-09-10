@@ -20,7 +20,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
+      <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑日志' : '写日志'" width="760px">

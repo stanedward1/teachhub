@@ -17,7 +17,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
+      <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" title="新增活动" width="520px">
@@ -44,7 +44,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import { useSort } from '../../composables/useSort'
-import { activityApi, metaApi, studentApi } from '../../api'
+import { activityApi, studentApi } from '../../api'
 
 const rawItems = ref([])
 const classes = ref([])

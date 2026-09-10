@@ -108,11 +108,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { reportApi, metaApi, studentApi } from '../../api'
+import { reportApi, studentApi } from '../../api'
 
 const classes = ref([])
 const classId = ref(null)

@@ -1,5 +1,5 @@
 """学生考勤点名。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.audit import audit
@@ -10,15 +10,15 @@ from app.permissions import ensure_class_operable, is_any_admin, is_teacher_clas
 from app.schemas import AttendanceCheckin
 from app.utils import parse_date
 
-router = APIRouter(tags=["考勤"])
+router = APIRouter(prefix="/api", tags=["考勤"])
 
 ATTENDANCE_STATUS = ("出勤", "缺勤", "请假", "迟到")
 
 
-@router.get("/api/attendance")
+@router.get("/attendance")
 def list_attendance(
-    class_id: int,
-    date: str,
+    class_id: int = Query(..., gt=0, description="班级 ID"),
+    date: str = Query(..., min_length=1, description="考勤日期（YYYY-MM-DD）"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -51,7 +51,7 @@ def list_attendance(
     return {"items": items, "total": len(items), "class_id": class_id, "date": date}
 
 
-@router.post("/api/attendance/checkin")
+@router.post("/attendance/checkin", status_code=201)
 def checkin(payload: AttendanceCheckin, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """批量提交点名结果（存在则更新，不存在则新增）。"""
     class_id = payload.class_id
@@ -100,11 +100,11 @@ def checkin(payload: AttendanceCheckin, user: User = Depends(get_current_user), 
     return {"ok": True, "count": saved}
 
 
-@router.get("/api/attendance/summary")
+@router.get("/attendance/summary")
 def attendance_summary(
-    class_id: int,
-    start_date: str,
-    end_date: str,
+    class_id: int = Query(..., gt=0, description="班级 ID"),
+    start_date: str = Query(..., min_length=1, description="开始日期（YYYY-MM-DD）"),
+    end_date: str = Query(..., min_length=1, description="结束日期（YYYY-MM-DD）"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):

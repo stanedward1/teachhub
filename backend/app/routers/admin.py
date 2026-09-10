@@ -30,7 +30,7 @@ from app.models import (
 from app.security import hash_password, validate_password_strength
 from app.utils import gen_student_no, to_dict, normalize_page
 
-router = APIRouter(tags=["系统管理"])
+router = APIRouter(prefix="/api", tags=["系统管理"])
 
 # 账号管理 / 系统设置：仅学校管理员及以上（教师不可管理账号与全校设置）
 admin_dep = require_school_admin
@@ -115,7 +115,7 @@ def _user_out(db: Session, u: User) -> dict:
 
 
 # ---------------- 账号管理 ----------------
-@router.get("/api/admin/users")
+@router.get("/admin/users")
 def list_users(role: str = "", keyword: str = "", _=Depends(admin_dep), db: Session = Depends(get_db)):
     q = db.query(User)
     if role:
@@ -126,7 +126,7 @@ def list_users(role: str = "", keyword: str = "", _=Depends(admin_dep), db: Sess
     return {"items": _users_out(db, rows), "total": len(rows)}
 
 
-@router.post("/api/admin/users")
+@router.post("/admin/users")
 def create_user(payload: dict, user=Depends(admin_dep), db: Session = Depends(get_db)):
     username = (payload.get("username") or "").strip()
     password = payload.get("password") or "123456"
@@ -182,7 +182,7 @@ def create_user(payload: dict, user=Depends(admin_dep), db: Session = Depends(ge
     return _user_out(db, u)
 
 
-@router.put("/api/admin/users/{user_id}")
+@router.put("/admin/users/{user_id}")
 def update_user(user_id: int, payload: dict, user=Depends(admin_dep), db: Session = Depends(get_db)):
     u = db.get(User, user_id)
     if not u:
@@ -204,7 +204,7 @@ def update_user(user_id: int, payload: dict, user=Depends(admin_dep), db: Sessio
     return _user_out(db, u)
 
 
-@router.put("/api/admin/users/{user_id}/password")
+@router.put("/admin/users/{user_id}/password")
 def reset_password(user_id: int, payload: dict, user=Depends(admin_dep), db: Session = Depends(get_db)):
     u = db.get(User, user_id)
     if not u:
@@ -223,7 +223,7 @@ def reset_password(user_id: int, payload: dict, user=Depends(admin_dep), db: Ses
     return {"ok": True}
 
 
-@router.delete("/api/admin/users/{user_id}")
+@router.delete("/admin/users/{user_id}")
 def delete_user(user_id: int, user=Depends(admin_dep), db: Session = Depends(get_db)):
     u = db.get(User, user_id)
     if not u:
@@ -265,13 +265,13 @@ def delete_user(user_id: int, user=Depends(admin_dep), db: Session = Depends(get
 
 
 # ---------------- 系统设置 ----------------
-@router.get("/api/settings")
+@router.get("/settings")
 def get_settings(_=Depends(admin_dep), db: Session = Depends(get_db)):
     rows = db.query(Setting).all()
     return {"items": [to_dict(s) for s in rows]}
 
 
-@router.put("/api/settings/{key}")
+@router.put("/settings/{key}")
 def set_setting(key: str, payload: dict, user=Depends(admin_dep), db: Session = Depends(get_db)):
     # 校内唯一：按 (school_id, key) 定位，避免跨校同名配置冲突
     s = db.query(Setting).filter(
@@ -286,7 +286,7 @@ def set_setting(key: str, payload: dict, user=Depends(admin_dep), db: Session = 
     return {"ok": True}
 
 
-@router.post("/api/settings/upgrade-grade")
+@router.post("/settings/upgrade-grade")
 def upgrade_grade(user=Depends(admin_dep), db: Session = Depends(get_db)):
     """年级升级：一年级→二年级……入学年份递增。"""
     classes = db.query(Classroom).all()
@@ -316,7 +316,7 @@ def _visible_audit_class_ids(db: Session, user: User):
     return [c.id for c in db.query(Classroom).filter(Classroom.teacher_id == user.id).all()]
 
 
-@router.get("/api/admin/audit-logs/actions")
+@router.get("/admin/audit-logs/actions")
 def list_audit_log_actions(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -329,7 +329,7 @@ def list_audit_log_actions(
     return {"items": [r[0] for r in rows]}
 
 
-@router.get("/api/admin/audit-logs")
+@router.get("/admin/audit-logs")
 def list_audit_logs(
     action: str = "",
     keyword: str = "",
@@ -372,7 +372,7 @@ def list_audit_logs(
 
 
 # ---------------- 看板统计 ----------------
-@router.get("/api/stats/dashboard")
+@router.get("/stats/dashboard")
 def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
     # 教师只能查看自己负责班级的数据；管理员查看全校。
     # 均排除毕业班级与退学学生（看板不展示）。
@@ -594,7 +594,7 @@ def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
 
 
 # ---------------- 平台超管：跨校概览 ----------------
-@router.get("/api/admin/platform/overview")
+@router.get("/admin/platform/overview")
 def platform_overview(user=Depends(require_super_admin), db: Session = Depends(get_db)):
     """平台超管视角的全局统计：学校数、班级数、教师数、学生数及分校明细。"""
     schools = db.query(School).order_by(School.id).all()

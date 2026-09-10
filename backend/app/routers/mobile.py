@@ -24,7 +24,7 @@ from app.permissions import filter_students_by_teacher, is_any_admin, is_student
 from app.routers.students import _student_out, _students_out
 from app.utils import clamp_score
 
-router = APIRouter(tags=["移动端"])
+router = APIRouter(prefix="/api", tags=["移动端"])
 
 
 def _light_student(d: dict) -> dict:
@@ -41,7 +41,7 @@ def _light_student(d: dict) -> dict:
     }
 
 
-@router.get("/api/mobile/students")
+@router.get("/mobile/students")
 def mobile_students(
     class_id: int | None = None,
     keyword: str = "",
@@ -63,7 +63,7 @@ def mobile_students(
     return {"items": items, "total": len(items)}
 
 
-@router.get("/api/mobile/students/{student_id}/overview")
+@router.get("/mobile/students/{student_id}/overview")
 def mobile_student_overview(
     student_id: int,
     user: User = Depends(get_current_user),

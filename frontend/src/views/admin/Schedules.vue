@@ -59,7 +59,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { metaApi, scheduleApi, studentApi } from '../../api'
+import { scheduleApi, studentApi } from '../../api'
 
 const days = ['一', '二', '三', '四', '五']
 const classes = ref([])

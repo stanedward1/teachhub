@@ -194,9 +194,6 @@ const breadcrumb = computed(() => {
   const name = titles[p]
   if (!name) return ['TeachHub']
   // 尝试从路由路径推断所属分组
-  for (const [key, val] of Object.entries(titles)) {
-    if (key === p) return [name]
-  }
   return [name]
 })
 

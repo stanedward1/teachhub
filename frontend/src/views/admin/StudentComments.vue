@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="toolbar">
-      <StudentSelect v-model="studentId" v-model:classId="classId" showClassFilter placeholder="按学生筛选" style="width: 320px" @update:model-value="load" @update:classId="load" />
+      <StudentSelect v-model="studentId" v-model:class-id="classId" show-class-filter placeholder="按学生筛选" style="width: 320px" @update:model-value="load" @update:class-id="load" />
       <SortBar v-model="order" />
       <div class="spacer"></div>
       <el-button type="primary" @click="openCreate">编写评语</el-button>
@@ -19,12 +19,12 @@
           </template>
         </el-table-column>
       </el-table>
-      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
+      <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑评语' : '编写评语'" width="500px">
       <el-form label-width="80px">
-        <el-form-item label="学生" required><StudentSelect v-model="form.student_id" showClassFilter /></el-form-item>
+        <el-form-item label="学生" required><StudentSelect v-model="form.student_id" show-class-filter /></el-form-item>
         <el-form-item label="评语">
           <el-input v-model="form.content" type="textarea" :rows="6" placeholder="可点击下方「AI 生成草稿」自动填充评语..." />
           <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">

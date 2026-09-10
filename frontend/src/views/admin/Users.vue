@@ -74,7 +74,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { adminApi, metaApi, studentApi } from '../../api'
+import { adminApi, studentApi } from '../../api'
 import { getUser } from '../../utils/auth'
 
 const items = ref([])

@@ -37,7 +37,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { metaApi, studentApi, seatApi } from '../../api'
+import { studentApi, seatApi } from '../../api'
 
 const classes = ref([])
 const classId = ref(null)

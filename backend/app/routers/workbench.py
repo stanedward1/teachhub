@@ -10,7 +10,15 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import require_teacher, get_current_user
-from app.schemas import LeaveCreate, LeaveUpdate, ScoreCreate, ScoreUpdate
+from app.schemas import (
+    CommunicationOut,
+    LeaveCreate,
+    LeaveOut,
+    LeaveUpdate,
+    ScoreCreate,
+    ScoreOut,
+    ScoreUpdate,
+)
 from app.models import (
     Classroom,
     Communication,
@@ -53,13 +61,13 @@ from app.permissions import (
 )
 from app.routers.students import _student_out
 
-router = APIRouter(tags=["教师工作台"])
+router = APIRouter(prefix="/api", tags=["教师工作台"])
 
 dep = require_teacher
 
 
 # ---------------- 成绩 ----------------
-@router.get("/api/scores")
+@router.get("/scores")
 def list_scores(
     page: int = 1,
     page_size: int = 20,
@@ -95,7 +103,7 @@ def list_scores(
     return {"items": items, "total": total}
 
 
-@router.get("/api/scores/analysis")
+@router.get("/scores/analysis")
 def score_analysis(
     class_id: int | None = None,
     student_id: int | None = None,
@@ -225,7 +233,7 @@ def score_analysis(
     return resp
 
 
-@router.post("/api/scores")
+@router.post("/scores", response_model=ScoreOut, status_code=201)
 def create_score(payload: ScoreCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 退学/毕业限制
     ensure_student_operable(db, payload.student_id)
@@ -245,7 +253,7 @@ def create_score(payload: ScoreCreate, user: User = Depends(get_current_user), d
     return attach_student(db, to_dict(s), s.student_id)
 
 
-@router.put("/api/scores/{score_id}")
+@router.put("/scores/{score_id}", response_model=ScoreOut)
 def update_score(score_id: int, payload: ScoreUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     s = db.get(Score, score_id)
     if not s:
@@ -271,7 +279,7 @@ def update_score(score_id: int, payload: ScoreUpdate, user: User = Depends(get_c
     return attach_student(db, to_dict(s), s.student_id)
 
 
-@router.delete("/api/scores/{score_id}")
+@router.delete("/scores/{score_id}")
 def delete_score(score_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     s = db.get(Score, score_id)
     if not s:
@@ -303,7 +311,7 @@ def _empty_score_export():
     )
 
 
-@router.get("/api/scores/export")
+@router.get("/scores/export")
 def export_scores(student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     q = db.query(Score)
     # 排除退学学生
@@ -342,7 +350,7 @@ def export_scores(student_id: int | None = None, class_id: int | None = None, us
 
 
 # ---------------- 请假/考勤 ----------------
-@router.get("/api/leaves")
+@router.get("/leaves")
 def list_leaves(
     page: int = 1,
     page_size: int = 20,
@@ -376,7 +384,7 @@ def list_leaves(
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
-@router.post("/api/leaves")
+@router.post("/leaves", response_model=LeaveOut, status_code=201)
 def create_leave(payload: LeaveCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 退学/毕业限制
     ensure_student_operable(db, payload.student_id)
@@ -398,7 +406,7 @@ def create_leave(payload: LeaveCreate, user: User = Depends(get_current_user), d
     return attach_student(db, to_dict(x), x.student_id)
 
 
-@router.put("/api/leaves/{leave_id}")
+@router.put("/leaves/{leave_id}", response_model=LeaveOut)
 def update_leave(leave_id: int, payload: LeaveUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(Leave, leave_id)
     if not x:
@@ -418,7 +426,7 @@ def update_leave(leave_id: int, payload: LeaveUpdate, user: User = Depends(get_c
     return attach_student(db, to_dict(x), x.student_id)
 
 
-@router.delete("/api/leaves/{leave_id}")
+@router.delete("/leaves/{leave_id}")
 def delete_leave(leave_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(Leave, leave_id)
     if not x:
@@ -435,7 +443,7 @@ def delete_leave(leave_id: int, user: User = Depends(get_current_user), db: Sess
 
 
 # ---------------- 家校沟通 ----------------
-@router.get("/api/communications")
+@router.get("/communications")
 def list_communications(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     page, page_size = normalize_page(page, page_size)
     q = db.query(Communication)
@@ -459,7 +467,7 @@ def list_communications(page: int = 1, page_size: int = 20, student_id: int | No
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
-@router.post("/api/communications")
+@router.post("/communications", response_model=CommunicationOut, status_code=201)
 def create_communication(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not payload.get("student_id"):
         raise HTTPException(status_code=400, detail="请选择学生")
@@ -481,7 +489,7 @@ def create_communication(payload: dict, user: User = Depends(get_current_user), 
     return attach_student(db, to_dict(x), x.student_id)
 
 
-@router.delete("/api/communications/{communication_id}")
+@router.delete("/communications/{communication_id}")
 def delete_communication(communication_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     x = db.get(Communication, communication_id)
     if not x:
@@ -498,7 +506,7 @@ def delete_communication(communication_id: int, user: User = Depends(get_current
 
 
 # ---------------- 资源 ----------------
-@router.get("/api/resources")
+@router.get("/resources")
 def list_resources(keyword: str = "", _=Depends(dep), db: Session = Depends(get_db)):
     q = db.query(Resource)
     if keyword:
@@ -507,7 +515,7 @@ def list_resources(keyword: str = "", _=Depends(dep), db: Session = Depends(get_
     return {"items": [to_dict(x) for x in rows], "total": len(rows)}
 
 
-@router.post("/api/resources")
+@router.post("/resources")
 def create_resource(payload: dict, user=Depends(dep), db: Session = Depends(get_db)):
     name = (payload.get("name") or "").strip()
     if not name:
@@ -525,7 +533,7 @@ def create_resource(payload: dict, user=Depends(dep), db: Session = Depends(get_
     return to_dict(x)
 
 
-@router.delete("/api/resources/{resource_id}")
+@router.delete("/resources/{resource_id}")
 def delete_resource(resource_id: int, user=Depends(dep), db: Session = Depends(get_db)):
     x = db.get(Resource, resource_id)
     if not x:
@@ -537,7 +545,7 @@ def delete_resource(resource_id: int, user=Depends(dep), db: Session = Depends(g
 
 
 # ---------------- 试卷（文件上传管理） ----------------
-@router.get("/api/exams")
+@router.get("/exams")
 def list_exams(keyword: str = "", _=Depends(dep), db: Session = Depends(get_db)):
     q = db.query(Exam)
     if keyword:
@@ -546,7 +554,7 @@ def list_exams(keyword: str = "", _=Depends(dep), db: Session = Depends(get_db))
     return {"items": [to_dict(x) for x in rows], "total": len(rows)}
 
 
-@router.post("/api/exams/upload")
+@router.post("/exams/upload")
 def upload_exam(
     title: str = "未命名试卷",
     exam_type: str = "单元测验",
@@ -604,7 +612,7 @@ def upload_exam(
     return to_dict(x)
 
 
-@router.put("/api/exams/{exam_id}")
+@router.put("/exams/{exam_id}")
 def update_exam(exam_id: int, payload: dict, user=Depends(dep), db: Session = Depends(get_db)):
     x = db.get(Exam, exam_id)
     if not x:
@@ -618,7 +626,7 @@ def update_exam(exam_id: int, payload: dict, user=Depends(dep), db: Session = De
     return to_dict(x)
 
 
-@router.get("/api/exams/{exam_id}/download")
+@router.get("/exams/{exam_id}/download")
 def download_exam(exam_id: int, _=Depends(dep), db: Session = Depends(get_db)):
     x = db.get(Exam, exam_id)
     if not x or not x.filepath:
@@ -629,7 +637,7 @@ def download_exam(exam_id: int, _=Depends(dep), db: Session = Depends(get_db)):
     return FileResponse(file_path, filename=x.filename or x.filepath, media_type="application/octet-stream")
 
 
-@router.delete("/api/exams/{exam_id}")
+@router.delete("/exams/{exam_id}")
 def delete_exam(exam_id: int, user=Depends(dep), db: Session = Depends(get_db)):
     x = db.get(Exam, exam_id)
     if not x:
@@ -646,7 +654,7 @@ def delete_exam(exam_id: int, user=Depends(dep), db: Session = Depends(get_db)):
 
 
 # ---------------- 座位表 ----------------
-@router.get("/api/seats")
+@router.get("/seats")
 def get_seat(class_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 教师只能查看自己负责班级的座位
     if not is_any_admin(user):
@@ -664,7 +672,7 @@ def get_seat(class_id: int, user: User = Depends(get_current_user), db: Session 
     return {"layout": layout, "columns": s.columns}
 
 
-@router.put("/api/seats")
+@router.put("/seats")
 def save_seat(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     class_id = payload.get("class_id")
     if not class_id:
@@ -716,7 +724,7 @@ def _validate_score_row(row_data: dict, row_num: int) -> list[str]:
     return errors
 
 
-@router.get("/api/students/template")
+@router.get("/students/template")
 def download_student_template(_=Depends(dep)):
     """下载学生导入模板。"""
     wb = Workbook()
@@ -733,7 +741,7 @@ def download_student_template(_=Depends(dep)):
     return StreamingResponse(buf, media_type=_EXCEL_MIME, headers={"Content-Disposition": "attachment; filename=student_template.xlsx"})
 
 
-@router.get("/api/scores/template")
+@router.get("/scores/template")
 def download_score_template(_=Depends(dep)):
     """下载成绩导入模板。"""
     wb = Workbook()
@@ -749,7 +757,7 @@ def download_score_template(_=Depends(dep)):
     return StreamingResponse(buf, media_type=_EXCEL_MIME, headers={"Content-Disposition": "attachment; filename=score_template.xlsx"})
 
 
-@router.post("/api/students/import")
+@router.post("/students/import")
 def import_students(
     file: UploadFile = File(...),
     user=Depends(dep),
@@ -877,7 +885,7 @@ def import_students(
     return {"success": success, "total": total, "errors": all_errors[:50]}
 
 
-@router.post("/api/scores/import")
+@router.post("/scores/import")
 def import_scores(
     file: UploadFile = File(...),
     user=Depends(dep),
@@ -978,7 +986,7 @@ def import_scores(
     return {"success": success, "total": total, "errors": all_errors[:50]}
 
 
-@router.get("/api/import-history")
+@router.get("/import-history")
 def list_import_history(
     import_type: str = "",
     page: int = 1,
@@ -1008,7 +1016,7 @@ def list_import_history(
 
 
 # ---------------- 学生数字画像 ----------------
-@router.get("/api/students/{student_id}/profile")
+@router.get("/students/{student_id}/profile")
 def get_student_profile(student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """获取学生综合数字画像数据。"""
     student = db.get(Student, student_id)
@@ -1150,7 +1158,7 @@ def get_student_profile(student_id: int, user: User = Depends(get_current_user),
     }
 
 
-@router.post("/api/students/{student_id}/tags")
+@router.post("/students/{student_id}/tags")
 def add_student_tag(student_id: int, payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 退学/毕业限制
     ensure_student_operable(db, student_id)
@@ -1172,7 +1180,7 @@ def add_student_tag(student_id: int, payload: dict, user: User = Depends(get_cur
     return to_dict(t)
 
 
-@router.delete("/api/students/{student_id}/tags/{tag_id}")
+@router.delete("/students/{student_id}/tags/{tag_id}")
 def remove_student_tag(student_id: int, tag_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 退学/毕业限制
     ensure_student_operable(db, student_id)
@@ -1188,7 +1196,7 @@ def remove_student_tag(student_id: int, tag_id: int, user: User = Depends(get_cu
 
 
 # ---------------- 班级周报 ----------------
-@router.get("/api/reports/weekly-data")
+@router.get("/reports/weekly-data")
 def get_weekly_data(class_id: int, week_start: str = "", week_end: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 教师只能查看自己班级的周报数据
     if not is_any_admin(user):
@@ -1274,7 +1282,7 @@ def get_weekly_data(class_id: int, week_start: str = "", week_end: str = "", use
     }
 
 
-@router.get("/api/reports")
+@router.get("/reports")
 def list_reports(class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     q = db.query(WeeklyReport)
     # 排除毕业班级的周报
@@ -1307,7 +1315,7 @@ def list_reports(class_id: int | None = None, user: User = Depends(get_current_u
     return {"items": items, "total": len(rows)}
 
 
-@router.post("/api/reports")
+@router.post("/reports")
 def save_report(payload: dict, user=Depends(dep), db: Session = Depends(get_db)):
     report_id = payload.get("id")
     title = payload.get("title", "").strip()
@@ -1351,7 +1359,7 @@ def save_report(payload: dict, user=Depends(dep), db: Session = Depends(get_db))
     return to_dict(r)
 
 
-@router.delete("/api/reports/{report_id}")
+@router.delete("/reports/{report_id}")
 def delete_report(report_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     r = db.get(WeeklyReport, report_id)
     if not r:

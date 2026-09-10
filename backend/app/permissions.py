@@ -1,5 +1,5 @@
 """班级权限检查模块"""
-from typing import List, Optional
+from typing import List
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -24,12 +24,12 @@ def is_any_admin(user) -> bool:
     return user.role in ("super_admin", "school_admin")
 
 
-def get_user_school_id(user) -> Optional[int]:
+def get_user_school_id(user) -> int | None:
     """返回用户所属学校 ID（super_admin 返回 None，表示不限制）。"""
     return getattr(user, "school_id", None)
 
 
-def ensure_same_school(user, target_school_id: Optional[int]) -> None:
+def ensure_same_school(user, target_school_id: int | None) -> None:
     """校验目标资源属于当前用户学校；平台超管不受限，否则越权抛 403。"""
     if is_platform_admin(user):
         return
@@ -111,7 +111,7 @@ def apply_teacher_student_filter(db: Session, user: User, q, model):
     return q.filter(model.student_id.in_(student_ids)), False
 
 
-def apply_student_class_filter(db: Session, user: User, q, class_id: Optional[int], model=None):
+def apply_student_class_filter(db: Session, user: User, q, class_id: int | None, model=None):
     """在班级筛选上叠加权限控制。
 
     返回 (query, 是否被拒绝)。teacher 访问非自己班级时返回 (q, True) 应直接返回空。
@@ -189,7 +189,7 @@ def filter_students_by_teacher(db: Session, teacher_id: int, is_admin: bool):
     return query.order_by(Student.id)
 
 
-def get_student_account(db: Session, class_id: int, name: str) -> Optional[User]:
+def get_student_account(db: Session, class_id: int, name: str) -> User | None:
     """通过「班级 + 姓名」定位学生登录账号（role=student），不存在返回 None。"""
     if not class_id or not name:
         return None
@@ -200,7 +200,7 @@ def get_student_account(db: Session, class_id: int, name: str) -> Optional[User]
     )
 
 
-def get_student_by_account(db: Session, user: User) -> Optional[Student]:
+def get_student_by_account(db: Session, user: User) -> Student | None:
     """通过学生登录账号（User）定位其学生档案（Student），不存在返回 None。"""
     if not user or user.class_id is None:
         return None
@@ -211,7 +211,7 @@ def get_student_by_account(db: Session, user: User) -> Optional[Student]:
     )
 
 
-def get_student_avatar(db: Session, student) -> Optional[str]:
+def get_student_avatar(db: Session, student) -> str | None:
     """通过学生档案定位其登录账号头像（users.avatar），不存在返回 None。
 
     头像统一存于 users.avatar，students 表不再冗余存储。

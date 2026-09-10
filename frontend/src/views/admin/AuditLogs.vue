@@ -36,7 +36,7 @@
         <el-table-column prop="detail" label="详情" min-width="180" show-overflow-tooltip />
         <el-table-column prop="created_at" label="时间" width="170" />
       </el-table>
-      <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
+      <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </div>
   </div>
 </template>

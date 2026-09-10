@@ -21,7 +21,7 @@
 </template>
 
 <script setup>
-const props = defineProps({
+defineProps({
   total: { type: Number, default: 0 },
   page: { type: Number, default: 1 },
   pageSize: { type: Number, default: 20 },

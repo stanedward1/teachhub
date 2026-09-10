@@ -5,7 +5,7 @@
       <el-tab-pane label="成绩列表" name="list">
         <div class="toolbar">
           <el-input v-model="subject" placeholder="按科目筛选" clearable style="width: 180px" @clear="load" />
-          <StudentSelect v-model="studentId" v-model:classId="classId" showClassFilter placeholder="按学生筛选" style="width: 320px" @update:model-value="load" @update:classId="load" />
+          <StudentSelect v-model="studentId" v-model:class-id="classId" show-class-filter placeholder="按学生筛选" style="width: 320px" @update:model-value="load" @update:class-id="load" />
           <el-button @click="load">查询</el-button>
           <div class="spacer"></div>
           <el-button @click="downloadTemplate">下载模板</el-button>
@@ -38,14 +38,14 @@
               </el-empty>
             </template>
           </el-table>
-          <PaginationBar v-model:page="page" v-model:pageSize="pageSize" :total="total" @change="load" />
+          <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
         </div>
       </el-tab-pane>
 
       <!-- 成绩分析 -->
       <el-tab-pane label="成绩分析" name="analysis">
         <div class="toolbar">
-          <StudentSelect v-model="analysisClassId" showClassFilter placeholder="选择班级" style="width: 280px" @update:model-value="loadAnalysis" />
+          <StudentSelect v-model="analysisClassId" show-class-filter placeholder="选择班级" style="width: 280px" @update:model-value="loadAnalysis" />
           <el-select v-model="analysisSubject" placeholder="全部科目" clearable filterable style="width: 160px" @change="loadAnalysis">
             <el-option v-for="s in analysisSubjects" :key="s" :label="s" :value="s" />
           </el-select>
@@ -98,7 +98,7 @@
 
     <el-dialog v-model="dialog" :title="editing ? '编辑成绩' : '录入成绩'" width="440px">
       <el-form label-width="80px">
-        <el-form-item label="学生" required><StudentSelect v-model="form.student_id" showClassFilter /></el-form-item>
+        <el-form-item label="学生" required><StudentSelect v-model="form.student_id" show-class-filter /></el-form-item>
         <el-form-item label="科目" required><el-input v-model="form.subject" /></el-form-item>
         <el-form-item label="成绩" required><el-input-number v-model="form.score" :min="0" :max="100" /></el-form-item>
         <el-form-item label="考试名称"><el-input v-model="form.exam_name" /></el-form-item>
@@ -295,7 +295,6 @@ function renderTrendChart() {
   }
   const series = []
   const legendData = []
-  let hasAvg = false
   for (const [subj, d] of Object.entries(bySubject)) {
     legendData.push(subj)
     series.push({
@@ -304,7 +303,6 @@ function renderTrendChart() {
       symbol: 'circle', symbolSize: 6,
     })
     if (d.avgs.some(v => v != null)) {
-      hasAvg = true
       legendData.push(`${subj}·班级均分`)
       series.push({
         name: `${subj}·班级均分`, type: 'line', data: d.avgs,
