@@ -10,6 +10,19 @@
       <el-table :data="items" v-loading="loading" style="width: 100%">
         <el-table-column prop="title" label="活动标题" min-width="220" />
         <el-table-column prop="content" label="内容" min-width="240" />
+        <el-table-column label="配图" width="90" align="center">
+          <template #default="{ row }">
+            <el-image
+              v-if="row.filepath"
+              :src="'/uploads/' + row.filepath"
+              :preview-src-list="['/uploads/' + row.filepath]"
+              preview-teleported
+              fit="cover"
+              style="width: 48px; height: 48px; border-radius: 6px"
+            />
+            <span v-else style="color: #c0c4cc">—</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="created_at" label="时间" width="170" />
         <el-table-column label="操作" width="100" fixed="right">
           <template #default="{ row }">
@@ -29,6 +42,21 @@
           </el-select>
         </el-form-item>
         <el-form-item label="内容"><el-input v-model="form.content" type="textarea" :rows="4" /></el-form-item>
+        <el-form-item label="配图">
+          <el-upload :show-file-list="false" :http-request="doUpload" :limit="1" accept="image/*">
+            <el-button>选择图片</el-button>
+          </el-upload>
+          <div v-if="form.filepath" class="preview">
+            <el-image
+              :src="'/uploads/' + form.filepath"
+              :preview-src-list="['/uploads/' + form.filepath]"
+              preview-teleported
+              fit="cover"
+              style="width: 120px; height: 80px; border-radius: 6px"
+            />
+            <el-button link type="danger" @click="clearImage">移除</el-button>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
@@ -44,7 +72,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import { useSort } from '../../composables/useSort'
-import { activityApi, studentApi } from '../../api'
+import { activityApi, studentApi, uploadFile } from '../../api'
 
 const rawItems = ref([])
 const classes = ref([])
@@ -56,7 +84,7 @@ const dialog = ref(false)
 const saving = ref(false)
 const { order, useSorted } = useSort('activities')
 const items = useSorted(rawItems)
-const form = reactive({ title: '', class_id: null, content: '' })
+const form = reactive({ title: '', class_id: null, content: '', filepath: '' })
 
 onMounted(async () => {
   const res = await studentApi.classrooms()
@@ -77,8 +105,17 @@ async function load() {
 }
 
 function openCreate() {
-  Object.assign(form, { title: '', class_id: null, content: '' })
+  Object.assign(form, { title: '', class_id: null, content: '', filepath: '' })
   dialog.value = true
+}
+
+async function doUpload({ file }) {
+  const res = await uploadFile(file)
+  form.filepath = res.filepath
+}
+
+function clearImage() {
+  form.filepath = ''
 }
 
 async function save() {
@@ -102,3 +139,12 @@ async function remove(row) {
   load()
 }
 </script>
+
+<style scoped>
+.preview {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+</style>

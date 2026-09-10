@@ -49,7 +49,7 @@
 | POST | `/submissions/{id}/excellent` | 教师+ | 评优秀 |
 | DELETE | `/submissions/{id}/excellent` | 教师+ | 取消优秀 |
 | GET | `/excellent` | 登录 | 优秀作品列表 |
-| GET | `/excellent/{id}` | 登录 | 优秀作品详情 |
+| GET | `/excellent/{id}` | 登录 | 优秀作品详情（含 `note` 评选评语 + `teacher_comments` 批改评语列表） |
 | POST | `/excellent/{id}/comments` | 登录 | 发表评论 |
 
 ## 四、基础数据
