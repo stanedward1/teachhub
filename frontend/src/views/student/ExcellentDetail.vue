@@ -14,7 +14,21 @@
         </div>
       </div>
       <div v-if="item.note" class="teacher-note">
-        <el-icon><Star /></el-icon> 教师点评：{{ item.note }}
+        <el-icon><Star /></el-icon> 评选评语：{{ item.note }}
+      </div>
+      <div v-if="item.teacher_comments?.length" class="teacher-comments">
+        <div class="tc-title">批改评语（{{ item.teacher_comments.length }}）</div>
+        <div v-for="tc in item.teacher_comments" :key="tc.id" class="tc-item">
+          <el-avatar :size="28">{{ tc.teacher_name?.[0] || '师' }}</el-avatar>
+          <div class="tc-body">
+            <div class="tc-head">
+              <span class="tc-name">{{ tc.teacher_name }}</span>
+              <el-tag v-if="tc.score != null" size="small" type="warning">{{ tc.score }} 分</el-tag>
+              <span class="tc-time">{{ tc.created_at }}</span>
+            </div>
+            <div class="tc-content">{{ tc.content }}</div>
+          </div>
+        </div>
       </div>
       <el-divider />
       <h4>作业内容</h4>
@@ -122,6 +136,50 @@ async function submit() {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.teacher-comments {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+}
+.tc-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e40af;
+  margin-bottom: 10px;
+}
+.tc-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #dbeafe;
+}
+.tc-item:last-child {
+  border-bottom: none;
+}
+.tc-body {
+  flex: 1;
+}
+.tc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tc-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+.tc-time {
+  font-size: 12px;
+  color: #9ca3af;
+}
+.tc-content {
+  font-size: 14px;
+  color: #111827;
+  margin-top: 2px;
 }
 .attach {
   margin-top: 12px;

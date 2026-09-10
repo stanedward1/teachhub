@@ -596,6 +596,20 @@ def get_excellent(
         cd["user_name"] = cu.name if cu else None
         cd["user_avatar"] = cu.avatar if cu else None
         comment_items.append(cd)
+    # 聚合该提交的「批改评语」（submission_comments），与评优时的 note 打通展示
+    teacher_comments = []
+    if s:
+        tcs = (
+            db.query(SubmissionComment)
+            .filter(SubmissionComment.submission_id == s.id)
+            .order_by(SubmissionComment.id.asc())
+            .all()
+        )
+        for tc in tcs:
+            tcd = to_dict(tc)
+            t = db.get(User, tc.teacher_id)
+            tcd["teacher_name"] = t.name if t else None
+            teacher_comments.append(tcd)
     return {
         "id": e.id,
         "note": e.note,
@@ -607,6 +621,7 @@ def get_excellent(
         "student_avatar": get_student_avatar(db, stu),
         "class_name": cls.name if cls else None,
         "comments": comment_items,
+        "teacher_comments": teacher_comments,
     }
 
 
