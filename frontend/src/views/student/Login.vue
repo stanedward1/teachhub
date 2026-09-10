@@ -88,7 +88,9 @@ async function loadClasses() {
   try {
     const res = await metaApi.classes(schoolId.value)
     classes.value = res.items
-  } catch (e) {}
+  } catch (e) {
+    console.error('[StudentLogin] 加载班级列表失败:', e)
+  }
 }
 
 function onSchoolChange() {
@@ -102,7 +104,9 @@ onMounted(async () => {
   try {
     const res = await authApi.publicSchools()
     schools.value = res.items || []
-  } catch (e) {}
+  } catch (e) {
+    console.error('[StudentLogin] 加载学校列表失败:', e)
+  }
   await loadClasses()
 })
 

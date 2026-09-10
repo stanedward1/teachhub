@@ -119,7 +119,9 @@ onMounted(async () => {
     try {
       const res = await adminApi.users({ role: 'teacher' })
       teachers.value = res.items || []
-    } catch (e) {}
+    } catch (e) {
+      console.error('[Classrooms] 加载教师列表失败:', e)
+    }
   }
   load()
 })

@@ -167,6 +167,7 @@
 | DELETE | `/users/{id}` | 管理员 | 删除账号 |
 | GET | `/audit-logs` | 登录 | 审计日志 |
 | GET | `/audit-logs/actions` | 登录 | 审计操作类型 |
+| GET | `/audit-logs/stats` | 登录 | 审计行为统计（教师活跃度/操作分布/日趋势） |
 | GET | `/platform/overview` | 超管 | 平台概览 |
 
 ## 八、其他

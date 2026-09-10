@@ -1,5 +1,37 @@
 <template>
   <div>
+    <!-- 教师行为统计（产品化洞察） -->
+    <div class="page-card stats-card">
+      <div class="stats-head">
+        <h3 class="stats-title">教师行为统计 <span class="stats-sub">（近 {{ stats.days || 30 }} 天，共 {{ stats.total || 0 }} 条操作）</span></h3>
+      </div>
+      <div class="stats-grid">
+        <div class="stats-col">
+          <div class="stats-col-title">教师活跃度 Top</div>
+          <div v-if="stats.by_teacher?.length" class="stats-list">
+            <div v-for="(t, i) in stats.by_teacher.slice(0, 10)" :key="t.username" class="stats-row">
+              <span class="rank">{{ i + 1 }}</span>
+              <span class="name">{{ t.username }}</span>
+              <el-progress :percentage="teacherPercent(t.count)" :stroke-width="8" :show-text="false" class="bar" />
+              <span class="num">{{ t.count }}</span>
+            </div>
+          </div>
+          <div v-else class="empty-state">暂无数据</div>
+        </div>
+        <div class="stats-col">
+          <div class="stats-col-title">操作类型分布</div>
+          <div v-if="stats.by_action?.length" class="stats-list">
+            <div v-for="a in stats.by_action.slice(0, 10)" :key="a.action" class="stats-row">
+              <span class="name">{{ actionText(a.action) }}</span>
+              <el-progress :percentage="actionPercent(a.count)" :stroke-width="8" :show-text="false" class="bar" />
+              <span class="num">{{ a.count }}</span>
+            </div>
+          </div>
+          <div v-else class="empty-state">暂无数据</div>
+        </div>
+      </div>
+    </div>
+
     <div class="toolbar">
       <el-select v-model="action" placeholder="全部操作" clearable filterable style="width: 200px" @change="load">
         <el-option v-for="a in actions" :key="a" :label="actionText(a)" :value="a" />
@@ -48,6 +80,7 @@ import PaginationBar from '../../components/PaginationBar.vue'
 import { adminApi } from '../../api'
 
 const items = ref([])
+const stats = ref({ by_teacher: [], by_action: [], by_day: [], total: 0, days: 30 })
 const action = ref('')
 const keyword = useDebouncedRef('', 300)
 watch(keyword, () => load())
@@ -153,9 +186,31 @@ onMounted(async () => {
     actions.value = res.items || []
   } catch (e) {
     actions.value = Object.keys(ACTION_CN)
+    console.error('[AuditLogs] 加载操作类型失败:', e)
   }
   load()
+  loadStats()
 })
+
+async function loadStats() {
+  try {
+    stats.value = await adminApi.auditLogStats({ days: 30 })
+  } catch (e) {
+    console.error('[AuditLogs] 加载行为统计失败:', e)
+  }
+}
+
+// 教师活跃度百分比（相对最高值）
+function teacherPercent(count) {
+  const max = stats.value.by_teacher?.[0]?.count || 1
+  return Math.round((count / max) * 100)
+}
+
+// 操作类型百分比（相对最高值）
+function actionPercent(count) {
+  const max = stats.value.by_action?.[0]?.count || 1
+  return Math.round((count / max) * 100)
+}
 
 async function load() {
   loading.value = true
@@ -164,6 +219,7 @@ async function load() {
     items.value = res.items
     total.value = res.total
   } catch (e) {
+    console.error('[AuditLogs] 加载日志列表失败:', e)
   } finally {
     loading.value = false
   }
@@ -174,3 +230,21 @@ function onDateChange() {
   load()
 }
 </script>
+
+<style scoped>
+.stats-card { margin-bottom: 16px; }
+.stats-head { margin-bottom: 12px; }
+.stats-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.stats-sub { font-size: 12px; font-weight: 400; color: var(--text-tertiary); margin-left: 6px; }
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.stats-col-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 10px; }
+.stats-list { display: flex; flex-direction: column; gap: 8px; }
+.stats-row { display: flex; align-items: center; gap: 8px; }
+.stats-row .rank { width: 18px; font-size: 12px; color: var(--text-tertiary); text-align: center; }
+.stats-row .name { min-width: 80px; font-size: 13px; color: var(--text-primary); white-space: nowrap; }
+.stats-row .bar { flex: 1; }
+.stats-row .num { width: 36px; text-align: right; font-size: 12px; color: var(--text-tertiary); }
+@media (max-width: 768px) {
+  .stats-grid { grid-template-columns: 1fr; }
+}
+</style>

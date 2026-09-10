@@ -96,6 +96,53 @@ class ReturnRecordCreate(BaseModel):
 class TalkCreate(BaseModel):
     student_id: int = Field(..., gt=0)
     content: str = ""
+    images: list[str] | None = None
+
+
+# ============ 家校沟通 ============
+class CommunicationCreate(BaseModel):
+    student_id: int = Field(..., gt=0, description="学生 ID")
+    method: str = Field("电话", max_length=20, description="沟通方式：电话/微信/面谈/其他")
+    content: str = Field("", description="沟通内容（支持 Markdown 图文混排）")
+    feedback: str = Field("", description="家长反馈")
+
+
+# ============ 教学资源 ============
+class ResourceCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200, description="资源名称")
+    category: str = Field("其他", max_length=50)
+    filename: str | None = None
+    filepath: str | None = None
+
+
+# ============ 试卷 ============
+class ExamUpdate(BaseModel):
+    title: str | None = Field(None, max_length=200)
+    exam_type: str | None = Field(None, max_length=50)
+
+
+# ============ 座位表 ============
+class SeatSave(BaseModel):
+    class_id: int = Field(..., gt=0, description="班级 ID")
+    layout: list = Field(default_factory=list, description="座位布局二维数组")
+    columns: int = Field(6, ge=1, le=20)
+
+
+# ============ 周报 ============
+class ReportSave(BaseModel):
+    id: int | None = Field(None, description="周报 ID，传入则更新，否则新建")
+    title: str = Field(..., min_length=1, max_length=200)
+    class_id: int | None = None
+    content: str = ""
+    week_start: str | None = None
+    week_end: str | None = None
+    data_snapshot: dict = Field(default_factory=dict)
+
+
+# ============ 学生标签 ============
+class StudentTagCreate(BaseModel):
+    tag: str = Field(..., min_length=1, max_length=50, description="标签文本")
+    category: str = Field("自定义", max_length=20, description="学业/品德/技能/自定义")
 
 
 # ============ 考勤 ============
@@ -201,6 +248,7 @@ class TalkOut(_ORMOut):
     student_id: int | None = None
     teacher_id: int | None = None
     content: str | None = None
+    images: list[str] | None = None
     created_at: str | None = None
     student_name: str | None = None
     student_no: str | None = None

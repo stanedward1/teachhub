@@ -329,6 +329,69 @@ def list_audit_log_actions(
     return {"items": [r[0] for r in rows]}
 
 
+@router.get("/admin/audit-logs/stats")
+def audit_log_stats(
+    days: int = 30,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """审计日志统计（产品化：教师行为洞察）。
+
+    返回：
+    - by_teacher：按操作人聚合的操作次数（活跃度）
+    - by_action：按操作类型聚合的次数（操作分布）
+    - by_day：按日期聚合的次数（近 N 天趋势）
+    - total：统计区间内日志总数
+    权限与 list_audit_logs 一致：管理员看全校，班主任看自己班级。
+    """
+    days = max(1, min(days, 90))
+    class_ids = _visible_audit_class_ids(db, user)
+    if class_ids == []:
+        raise HTTPException(status_code=403, detail="仅班主任或管理员可查看审计日志")
+
+    since = datetime.now() - timedelta(days=days)
+    q = db.query(OperationLog).filter(OperationLog.created_at >= since)
+    if not is_platform_admin(user):
+        q = q.filter(OperationLog.school_id == user.school_id)
+    if class_ids is not None:
+        q = q.filter(OperationLog.class_id.in_(class_ids))
+
+    rows = q.all()
+    total = len(rows)
+
+    by_teacher: dict = {}
+    by_action: dict = {}
+    by_day: dict = {}
+    for r in rows:
+        uname = r.username or "未知"
+        by_teacher[uname] = by_teacher.get(uname, 0) + 1
+        by_action[r.action] = by_action.get(r.action, 0) + 1
+        day = r.created_at.strftime("%Y-%m-%d") if r.created_at else ""
+        if day:
+            by_day[day] = by_day.get(day, 0) + 1
+
+    # 教师活跃度：按次数倒序，Top 20
+    teacher_list = sorted(
+        [{"username": k, "count": v} for k, v in by_teacher.items()],
+        key=lambda x: -x["count"],
+    )[:20]
+    # 操作分布：按次数倒序
+    action_list = sorted(
+        [{"action": k, "count": v} for k, v in by_action.items()],
+        key=lambda x: -x["count"],
+    )
+    # 日趋势：按日期升序
+    day_list = [{"date": k, "count": v} for k, v in sorted(by_day.items())]
+
+    return {
+        "total": total,
+        "days": days,
+        "by_teacher": teacher_list,
+        "by_action": action_list,
+        "by_day": day_list,
+    }
+
+
 @router.get("/admin/audit-logs")
 def list_audit_logs(
     action: str = "",
@@ -372,6 +435,101 @@ def list_audit_logs(
 
 
 # ---------------- 看板统计 ----------------
+def _build_alerts(db: Session, user: User, class_ids: list, student_ids: list) -> dict:
+    """聚合异常预警，返回可行动的洞察列表。
+
+    - 连续缺勤：近 7 天缺勤次数 >= 3 的学生
+    - 成绩骤降：最近一次考试较上一次下降 >= 20 分的学生
+    - 待处理请假：状态为「登记」（未销假）的请假记录
+    仅统计在籍学生，教师仅看自己负责班级、管理员看全校。
+    """
+    alerts = {"absenteeism": [], "score_drop": [], "pending_leave": []}
+    if not student_ids:
+        return alerts
+
+    # 班级名映射（学生 -> 班级名）
+    stu_rows = db.query(Student).filter(Student.id.in_(student_ids)).all()
+    cls_map = {c.id: c.name for c in db.query(Classroom).filter(Classroom.id.in_(class_ids)).all()} if class_ids else {}
+    stu_name = {s.id: s.name for s in stu_rows}
+    stu_cls = {s.id: cls_map.get(s.class_id, "") for s in stu_rows}
+
+    # 1) 连续缺勤：近 7 天缺勤 >= 3 次
+    att_start = (datetime.now() - timedelta(days=6)).strftime("%Y-%m-%d")
+    att_rows = (
+        db.query(Attendance)
+        .filter(
+            Attendance.student_id.in_(student_ids),
+            Attendance.status == "缺勤",
+            Attendance.date >= att_start,
+        )
+        .all()
+    )
+    absent_count: dict = {}
+    for r in att_rows:
+        absent_count[r.student_id] = absent_count.get(r.student_id, 0) + 1
+    for sid, cnt in absent_count.items():
+        if cnt >= 3:
+            alerts["absenteeism"].append({
+                "student_id": sid,
+                "name": stu_name.get(sid, "未知"),
+                "class_name": stu_cls.get(sid, ""),
+                "count": cnt,
+            })
+    alerts["absenteeism"].sort(key=lambda x: -x["count"])
+
+    # 2) 成绩骤降：最近一次考试较上一次下降 >= 20 分
+    score_rows = (
+        db.query(Score)
+        .filter(Score.student_id.in_(student_ids))
+        .order_by(Score.student_id, Score.created_at)
+        .all()
+    )
+    last_by_student: dict = {}
+    for s in score_rows:
+        key = s.student_id
+        if key not in last_by_student:
+            last_by_student[key] = []
+        last_by_student[key].append(s)
+    for sid, scs in last_by_student.items():
+        if len(scs) < 2:
+            continue
+        prev, latest = scs[-2], scs[-1]
+        drop = round(prev.score - latest.score, 1)
+        if drop >= 20:
+            alerts["score_drop"].append({
+                "student_id": sid,
+                "name": stu_name.get(sid, "未知"),
+                "class_name": stu_cls.get(sid, ""),
+                "subject": latest.subject,
+                "prev": prev.score,
+                "latest": latest.score,
+                "drop": drop,
+            })
+    alerts["score_drop"].sort(key=lambda x: -x["drop"])
+
+    # 3) 待处理请假（状态=登记，未销假）
+    pending_leaves = (
+        db.query(Leave)
+        .filter(Leave.student_id.in_(student_ids), Leave.status == "登记")
+        .order_by(Leave.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    alerts["pending_leave"] = [
+        {
+            "leave_id": l.id,
+            "name": stu_name.get(l.student_id, "未知"),
+            "class_name": stu_cls.get(l.student_id, ""),
+            "reason": l.reason or "未填写",
+            "start": str(l.start_date) if l.start_date else "",
+            "end": str(l.end_date) if l.end_date else "",
+        }
+        for l in pending_leaves
+    ]
+
+    return alerts
+
+
 @router.get("/stats/dashboard")
 def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
     # 教师只能查看自己负责班级的数据；管理员查看全校。
@@ -571,9 +729,13 @@ def dashboard(user=Depends(require_teacher), db: Session = Depends(get_db)):
         subject_classes = []
     identity = {"head_classes": head_classes, "subject_classes": subject_classes}
 
+    # 异常预警（可行动的洞察）：连续缺勤 / 成绩骤降 / 待处理请假
+    alerts = _build_alerts(db, user, class_ids, student_ids)
+
     return {
         "identity": identity,
         "attendance": attendance,
+        "alerts": alerts,
         "counts": {
             "student": student_count,
             "class": class_count,

@@ -23,13 +23,13 @@
       <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </div>
 
-    <el-dialog v-model="dialog" :title="editing ? '编辑日志' : '写日志'" width="760px">
+    <el-dialog v-model="dialog" :title="editing ? '编辑日志' : '写日志'" width="820px">
       <el-form label-width="60px">
         <el-form-item label="日期">
           <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" style="width: 200px" />
         </el-form-item>
         <el-form-item label="内容">
-          <MarkdownEditor v-model="form.content" :rows="10" />
+          <MarkdownEditor v-model="form.content" />
         </el-form-item>
       </el-form>
       <template #footer>

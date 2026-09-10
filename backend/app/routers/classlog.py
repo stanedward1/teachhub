@@ -113,6 +113,12 @@ def _encode_filepath(value) -> str | None:
     return json.dumps(paths, ensure_ascii=False)
 
 
+def _serialize_talk(d: dict) -> dict:
+    """把谈心记录字典里的 images 字段统一解析为字符串列表。"""
+    d["images"] = _parse_filepath(d.get("images"))
+    return d
+
+
 # ---------------- 工作日志 ----------------
 @router.get("/work-logs")
 def list_work_logs(page: int = 1, page_size: int = 20, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -375,19 +381,24 @@ def list_talks(page: int = 1, page_size: int = 20, student_id: int | None = None
         q = q.filter(Talk.student_id == student_id)
     total = q.count()
     rows = q.order_by(Talk.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return {"items": serialize_list_with_students(db, rows), "total": total}
+    return {"items": [_serialize_talk(x) for x in serialize_list_with_students(db, rows)], "total": total}
 
 
 @router.post("/talks", response_model=TalkOut, status_code=201)
 def create_talk(payload: TalkCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 教师只能与自己班级学生谈心
     _check_student_permission(db, user, payload.student_id)
-    x = Talk(student_id=payload.student_id, teacher_id=user.id, content=payload.content)
+    x = Talk(
+        student_id=payload.student_id,
+        teacher_id=user.id,
+        content=payload.content,
+        images=_encode_filepath(payload.images),
+    )
     db.add(x)
     audit(db, user, "create_talk", target=f"新增谈心-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"内容：{(x.content or '')[:50]}")
     db.commit()
     db.refresh(x)
-    return attach_student(db, to_dict(x), x.student_id)
+    return _serialize_talk(attach_student(db, to_dict(x), x.student_id))
 
 
 @router.delete("/talks/{talk_id}")

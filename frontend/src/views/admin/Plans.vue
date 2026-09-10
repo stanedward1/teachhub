@@ -33,7 +33,7 @@
       </el-table>
     </div>
 
-    <el-dialog v-model="dialog" :title="editing ? '编辑' : '新建'" width="680px">
+    <el-dialog v-model="dialog" :title="editing ? '编辑' : '新建'" width="820px">
       <el-form label-width="80px">
         <el-form-item label="标题" required><el-input v-model="form.title" /></el-form-item>
         <el-form-item label="类型">
@@ -42,7 +42,7 @@
             <el-radio value="总结">总结</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="内容"><MarkdownEditor v-model="form.content" :rows="8" /></el-form-item>
+        <el-form-item label="内容"><MarkdownEditor v-model="form.content" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>

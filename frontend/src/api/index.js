@@ -205,6 +205,7 @@ export const adminApi = {
   dashboard: () => request.get('/api/stats/dashboard'),
   auditLogs: (params) => request.get('/api/admin/audit-logs', { params }),
   auditLogActions: () => request.get('/api/admin/audit-logs/actions'),
+  auditLogStats: (params) => request.get('/api/admin/audit-logs/stats', { params }),
   platformOverview: () => request.get('/api/admin/platform/overview')
 }
 

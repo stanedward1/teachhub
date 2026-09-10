@@ -41,7 +41,9 @@ onMounted(async () => {
     res.items.forEach((s) => (map[s.key] = s.value))
     schoolName.value = map.school_name || ''
     semester.value = map.semester || ''
-  } catch (e) {}
+  } catch (e) {
+    console.error('[Settings] 加载设置失败:', e)
+  }
 })
 
 async function saveSettings() {

@@ -37,7 +37,8 @@ import { uploadFile } from '../api'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
-  rows: { type: Number, default: 10 }
+  rows: { type: Number, default: 18 },
+  height: { type: String, default: '560px' }
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -112,16 +113,19 @@ async function doUpload({ file }) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0;
+  min-height: v-bind(height);
 }
 .md-panes :deep(.el-textarea__inner) {
   border: none;
   border-radius: 0;
   box-shadow: none;
+  min-height: v-bind(height);
 }
 .md-preview {
   border-left: 1px solid #e5e7eb;
   padding: 12px;
-  max-height: 360px;
+  max-height: v-bind(height);
+  min-height: v-bind(height);
   overflow-y: auto;
   background: #fff;
 }

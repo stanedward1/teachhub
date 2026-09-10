@@ -50,7 +50,9 @@ onMounted(async () => {
   try {
     const res = await studentApi.classrooms({ graduated: 'false' })
     classes.value = res.items || []
-  } catch (e) {}
+  } catch (e) {
+    console.error('[StudentSelect] 加载班级列表失败:', e)
+  }
   loadStudents(localClassId.value)
 })
 

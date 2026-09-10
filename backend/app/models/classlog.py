@@ -85,6 +85,7 @@ class Talk(Base):
     teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     content = Column(Text)
+    images = Column(Text)  # 多张配图路径，JSON 数组字符串
     created_at = Column(DateTime, server_default=func.now())
 
 

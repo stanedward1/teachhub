@@ -45,7 +45,9 @@ const data = ref({ oj: [], tutorials: [] })
 onMounted(async () => {
   try {
     data.value = await metaApi.practice()
-  } catch (e) {}
+  } catch (e) {
+    console.error('[Practice] 加载练习推荐失败:', e)
+  }
 })
 </script>
 

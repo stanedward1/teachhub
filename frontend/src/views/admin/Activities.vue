@@ -8,24 +8,14 @@
 
     <div class="page-card">
       <el-table :data="items" v-loading="loading" style="width: 100%">
-        <el-table-column prop="title" label="活动标题" min-width="220" />
-        <el-table-column prop="content" label="内容" min-width="240" />
-        <el-table-column label="配图" width="90" align="center">
-          <template #default="{ row }">
-            <el-image
-              v-if="row.filepath && row.filepath.length"
-              :src="'/uploads/' + row.filepath[0]"
-              :preview-src-list="row.filepath.map(p => '/uploads/' + p)"
-              preview-teleported
-              fit="cover"
-              style="width: 48px; height: 48px; border-radius: 6px"
-            />
-            <span v-else style="color: #c0c4cc">—</span>
-          </template>
+        <el-table-column prop="title" label="活动标题" min-width="200" />
+        <el-table-column label="内容预览" min-width="260">
+          <template #default="{ row }">{{ plainText(row.content).slice(0, 80) }}</template>
         </el-table-column>
         <el-table-column prop="created_at" label="时间" width="170" />
-        <el-table-column label="操作" width="100" fixed="right">
+        <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
+            <el-button link type="primary" @click="preview(row)">查看</el-button>
             <el-button link type="danger" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -33,7 +23,7 @@
       <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </div>
 
-    <el-dialog v-model="dialog" title="新增活动" width="520px">
+    <el-dialog v-model="dialog" title="新增活动" width="820px">
       <el-form label-width="80px">
         <el-form-item label="标题" required><el-input v-model="form.title" /></el-form-item>
         <el-form-item label="班级">
@@ -41,29 +31,8 @@
             <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="内容"><el-input v-model="form.content" type="textarea" :rows="4" /></el-form-item>
-        <el-form-item label="配图">
-          <el-upload
-            :show-file-list="false"
-            :http-request="doUpload"
-            accept="image/*"
-            multiple
-          >
-            <el-button>选择图片</el-button>
-          </el-upload>
-          <div class="preview-list">
-            <div v-for="(p, i) in form.filepath" :key="p" class="preview-item">
-              <el-image
-                :src="'/uploads/' + p"
-                :preview-src-list="form.filepath.map(x => '/uploads/' + x)"
-                :initial-index="i"
-                preview-teleported
-                fit="cover"
-                style="width: 120px; height: 80px; border-radius: 6px"
-              />
-              <el-button link type="danger" @click="removeImage(i)">移除</el-button>
-            </div>
-          </div>
+        <el-form-item label="内容">
+          <MarkdownEditor v-model="form.content" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -71,16 +40,22 @@
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="previewDialog" title="活动详情" width="720px">
+      <Markdown :content="previewContent" />
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import Markdown from '../../components/Markdown.vue'
+import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import { useSort } from '../../composables/useSort'
-import { activityApi, studentApi, uploadFile } from '../../api'
+import { activityApi, studentApi } from '../../api'
 
 const rawItems = ref([])
 const classes = ref([])
@@ -90,15 +65,21 @@ const total = ref(0)
 const loading = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
+const previewDialog = ref(false)
+const previewContent = ref('')
 const { order, useSorted } = useSort('activities')
 const items = useSorted(rawItems)
-const form = reactive({ title: '', class_id: null, content: '', filepath: [] })
+const form = reactive({ title: '', class_id: null, content: '' })
 
 onMounted(async () => {
   const res = await studentApi.classrooms()
   classes.value = res.items
   load()
 })
+
+function plainText(md) {
+  return (md || '').replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]').replace(/[-#*`>]/g, '').trim()
+}
 
 async function load() {
   loading.value = true
@@ -113,17 +94,13 @@ async function load() {
 }
 
 function openCreate() {
-  Object.assign(form, { title: '', class_id: null, content: '', filepath: [] })
+  Object.assign(form, { title: '', class_id: null, content: '' })
   dialog.value = true
 }
 
-async function doUpload({ file }) {
-  const res = await uploadFile(file)
-  form.filepath.push(res.filepath)
-}
-
-function removeImage(i) {
-  form.filepath.splice(i, 1)
+function preview(row) {
+  previewContent.value = row.content
+  previewDialog.value = true
 }
 
 async function save() {
@@ -147,18 +124,3 @@ async function remove(row) {
   load()
 }
 </script>
-
-<style scoped>
-.preview-list {
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.preview-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-</style>

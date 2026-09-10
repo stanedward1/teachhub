@@ -50,6 +50,7 @@ techhub/
 │   │   ├── permissions.py     # 班级权限 + 租户辅助（is_any_admin / get_student_account 等）
 │   │   ├── utils.py           # to_dict / safe_filename / gen_student_no / normalize_page
 │   │   ├── audit.py           # 操作审计日志（含 school_id）+ 批量查询辅助
+│   │   ├── observability.py   # 可观测性：访问日志中间件 + /metrics（Prometheus 指标，零依赖）
 │   │   ├── schemas.py         # Pydantic 请求/响应模型
 │   │   ├── cleanup.py         # 级联清理（purge_student_data / purge_user_data，叶子→根拓扑倒序）
 │   │   ├── models/            # SQLAlchemy 模型（按域分组）
@@ -237,7 +238,18 @@ docker compose up -d --build
 - 模型变更必须配套新增 Alembic revision（`backend/alembic/versions/`），保证「迁移链 = 模型 schema」
 - 新增字段/表后，用 `alembic revision --autogenerate` 生成迁移脚本并人工核对
 
-## 10. 关键设计决策（ADR 摘要）
+## 10. 可观测性
+
+- **访问日志中间件**（`app/observability.py`）：最外层 HTTP 中间件，结构化记录每个请求的 `方法 + 路径 + 状态码 + 耗时`；耗时 ≥ 1s 的慢请求提升到 WARN 级别并附加 `[SLOW]` 标记，便于日志采集系统（ELK / Loki）快速定位。
+- **`/metrics` 端点**：输出 Prometheus 文本格式，聚合以下指标（进程内内存计数，零第三方依赖）：
+  - `teachhub_http_requests_total`：累计请求数（按路径）
+  - `teachhub_http_status_total`：响应状态码分布
+  - `teachhub_http_duration_seconds_bucket`：请求耗时直方图（分桶，按路径）
+  - `teachhub_slow_requests_total`：慢请求（≥1s）计数
+  - `teachhub_inflight_requests`：当前进行中的请求数（gauge）
+- **接入方式**：Prometheus 抓取 `/metrics`，Grafana 可视化。单实例部署下内存计数即可满足；多副本横向扩展时，应改用 Redis 共享计数或接入 `prometheus-fastapi` + 独立 exporter。
+
+## 11. 关键设计决策（ADR 摘要）
 
 | 决策 | 选择 | 理由 |
 | ---- | ---- | ---- |

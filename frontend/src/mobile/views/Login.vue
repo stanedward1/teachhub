@@ -81,7 +81,9 @@ onMounted(async () => {
       schoolName.value = schools.value[saved].name
       schoolDefaultIndex.value = saved
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error('[MobileLogin] 加载学校列表失败:', e)
+  }
 })
 
 function onSchoolConfirm({ selectedOptions }) {

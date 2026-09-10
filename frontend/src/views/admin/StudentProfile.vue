@@ -332,7 +332,9 @@ async function addTag() {
     ElMessage.success('标签添加成功')
     tagDialog.value = false
     profile.value = await studentApi.profile(route.params.id)
-  } catch (e) {} finally { tagSaving.value = false }
+  } catch (e) {
+    console.error('[StudentProfile] 添加标签失败:', e)
+  } finally { tagSaving.value = false }
 }
 
 async function removeTag(tag) {
@@ -340,7 +342,9 @@ async function removeTag(tag) {
     await studentApi.removeTag(route.params.id, tag.id)
     ElMessage.success('标签已移除')
     profile.value = await studentApi.profile(route.params.id)
-  } catch (e) {}
+  } catch (e) {
+    console.error('[StudentProfile] 移除标签失败:', e)
+  }
 }
 </script>
 

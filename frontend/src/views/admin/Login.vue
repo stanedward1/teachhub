@@ -61,7 +61,9 @@ onMounted(async () => {
   try {
     const res = await authApi.publicSchools()
     schools.value = res.items || []
-  } catch (e) {}
+  } catch (e) {
+    console.error('[Login] 加载学校列表失败:', e)
+  }
 })
 
 watch(schoolId, (v) => setLastSchoolId(v))

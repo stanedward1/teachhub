@@ -93,6 +93,37 @@
       <div ref="distRef" style="width: 100%; height: 300px;"></div>
     </div>
 
+    <!-- 异常预警（可行动的洞察） -->
+    <div v-if="hasAlerts" class="page-card">
+      <h3 class="card-title">异常预警</h3>
+      <div class="alert-group">
+        <div v-if="alerts.absenteeism?.length" class="alert-block">
+          <div class="alert-head"><el-icon color="#dc2626"><WarningFilled /></el-icon><span class="alert-title">连续缺勤</span><span class="alert-count">{{ alerts.absenteeism.length }}</span></div>
+          <div class="alert-tags">
+            <el-tag v-for="a in alerts.absenteeism" :key="a.student_id" type="danger" effect="plain" size="small">
+              {{ a.name }}（{{ a.class_name }}）缺勤 {{ a.count }} 次
+            </el-tag>
+          </div>
+        </div>
+        <div v-if="alerts.score_drop?.length" class="alert-block">
+          <div class="alert-head"><el-icon color="#f59e0b"><TrendCharts /></el-icon><span class="alert-title">成绩骤降</span><span class="alert-count">{{ alerts.score_drop.length }}</span></div>
+          <div class="alert-tags">
+            <el-tag v-for="a in alerts.score_drop" :key="a.student_id" type="warning" effect="plain" size="small">
+              {{ a.name }}（{{ a.class_name }}）{{ a.subject }} 降 {{ a.drop }} 分
+            </el-tag>
+          </div>
+        </div>
+        <div v-if="alerts.pending_leave?.length" class="alert-block">
+          <div class="alert-head"><el-icon color="#2563eb"><Bell /></el-icon><span class="alert-title">待处理请假</span><span class="alert-count">{{ alerts.pending_leave.length }}</span></div>
+          <div class="alert-tags">
+            <el-tag v-for="a in alerts.pending_leave" :key="a.leave_id" type="primary" effect="plain" size="small">
+              {{ a.name }}（{{ a.class_name }}）{{ a.reason }}
+            </el-tag>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 最近动态 -->
     <div class="page-card">
       <h3 class="card-title">最近班级动态</h3>
@@ -165,6 +196,13 @@ const stats = computed(() => {
 const leaveDetailDays = computed(() => data.value.leave_details || [])
 const identity = computed(() => data.value.identity || {})
 
+// 异常预警数据
+const alerts = computed(() => data.value.alerts || { absenteeism: [], score_drop: [], pending_leave: [] })
+const hasAlerts = computed(() => {
+  const a = alerts.value
+  return (a.absenteeism?.length || 0) + (a.score_drop?.length || 0) + (a.pending_leave?.length || 0) > 0
+})
+
 function navigateTo(route) {
   if (route) router.push(route)
 }
@@ -178,7 +216,9 @@ function attRateColor(rate) {
 onMounted(async () => {
   try {
     data.value = await adminApi.dashboard()
-  } catch (e) {}
+  } catch (e) {
+    console.error('[Dashboard] 加载看板数据失败:', e)
+  }
   await nextTick()
   setTimeout(() => renderCharts(), 0)
   window.addEventListener('resize', resize)
@@ -337,4 +377,10 @@ function renderCharts() {
   font-weight: 700;
   color: #10b981;
 }
+.alert-group { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
+.alert-block { padding: 12px 14px; background: #fafafa; border-radius: var(--radius-md); }
+.alert-head { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.alert-title { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+.alert-count { margin-left: auto; font-size: 12px; color: #fff; background: #dc2626; border-radius: 10px; padding: 0 8px; line-height: 18px; }
+.alert-tags { display: flex; flex-wrap: wrap; gap: 8px; }
 </style>

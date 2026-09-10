@@ -1,5 +1,6 @@
 import logging
 import os
+from logging.handlers import TimedRotatingFileHandler
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -11,15 +12,50 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
 from app.database import run_migrations
+from app.observability import render_metrics, request_logging_middleware
 from app.routers import admin, attendance, auth, classlog, homework, meta, mobile, students, uploads, workbench
 from app.security import decode_token
 from app.tenant import reset_tenant, set_tenant  # 导入即注册 ORM 租户隔离事件
 
 # 基础日志配置
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
+LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
+
+
+def _setup_file_logging() -> None:
+    """把日志落盘到 backend/logs/teachhub.log（按天滚动，保留 30 天）。
+
+    必须在 run_migrations() 之后调用：alembic 的 command.upgrade 会重置
+    root logger 的 handler，若在此之前 addHandler 会被清空。
+
+    同时显式把文件 handler 挂到 teachhub.access，并解除 uvicorn dictConfig
+    （disable_existing_loggers=True）对该 logger 的禁用，确保访问日志落盘。
+    """
+    handler = TimedRotatingFileHandler(
+        os.path.join(LOG_DIR, "teachhub.log"),
+        when="midnight",
+        interval=1,
+        backupCount=30,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    handler.setLevel(logging.INFO)
+
+    root = logging.getLogger()
+    if not any(isinstance(h, TimedRotatingFileHandler) for h in root.handlers):
+        root.addHandler(handler)
+
+    # 访问日志 logger：强制启用并直接挂 handler，避免被 uvicorn 禁用
+    access = logging.getLogger("teachhub.access")
+    access.disabled = False
+    access.propagate = False
+    access.setLevel(logging.INFO)
+    if not any(isinstance(h, TimedRotatingFileHandler) for h in access.handlers):
+        access.addHandler(handler)
+
+
 logger = logging.getLogger("teachhub")
 
 # 确保上传目录存在
@@ -109,6 +145,10 @@ async def tenant_context_middleware(request, call_next):
             reset_tenant(tokens)
 
 
+# 访问日志 + 指标中间件（置于最外层，确保能记录到所有请求的最终状态与耗时）
+app.middleware("http")(request_logging_middleware)
+
+
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
 app.include_router(auth.router)
@@ -126,6 +166,9 @@ app.include_router(uploads.router)
 # 不再用 create_all 兜底建表，避免与 Alembic 交叉导致版本号/表结构不一致。
 run_migrations()
 
+# 迁移完成后配置日志落盘（alembic 会重置 root handler，须在其后设置）
+_setup_file_logging()
+
 
 @app.get("/")
 def root():
@@ -135,3 +178,11 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus 指标端点：供 Prometheus / Grafana 抓取。"""
+    from fastapi.responses import PlainTextResponse
+
+    return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")
