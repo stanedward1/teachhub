@@ -13,9 +13,9 @@
         <el-table-column label="配图" width="90" align="center">
           <template #default="{ row }">
             <el-image
-              v-if="row.filepath"
-              :src="'/uploads/' + row.filepath"
-              :preview-src-list="['/uploads/' + row.filepath]"
+              v-if="row.filepath && row.filepath.length"
+              :src="'/uploads/' + row.filepath[0]"
+              :preview-src-list="row.filepath.map(p => '/uploads/' + p)"
               preview-teleported
               fit="cover"
               style="width: 48px; height: 48px; border-radius: 6px"
@@ -43,18 +43,26 @@
         </el-form-item>
         <el-form-item label="内容"><el-input v-model="form.content" type="textarea" :rows="4" /></el-form-item>
         <el-form-item label="配图">
-          <el-upload :show-file-list="false" :http-request="doUpload" :limit="1" accept="image/*">
+          <el-upload
+            :show-file-list="false"
+            :http-request="doUpload"
+            accept="image/*"
+            multiple
+          >
             <el-button>选择图片</el-button>
           </el-upload>
-          <div v-if="form.filepath" class="preview">
-            <el-image
-              :src="'/uploads/' + form.filepath"
-              :preview-src-list="['/uploads/' + form.filepath]"
-              preview-teleported
-              fit="cover"
-              style="width: 120px; height: 80px; border-radius: 6px"
-            />
-            <el-button link type="danger" @click="clearImage">移除</el-button>
+          <div class="preview-list">
+            <div v-for="(p, i) in form.filepath" :key="p" class="preview-item">
+              <el-image
+                :src="'/uploads/' + p"
+                :preview-src-list="form.filepath.map(x => '/uploads/' + x)"
+                :initial-index="i"
+                preview-teleported
+                fit="cover"
+                style="width: 120px; height: 80px; border-radius: 6px"
+              />
+              <el-button link type="danger" @click="removeImage(i)">移除</el-button>
+            </div>
           </div>
         </el-form-item>
       </el-form>
@@ -84,7 +92,7 @@ const dialog = ref(false)
 const saving = ref(false)
 const { order, useSorted } = useSort('activities')
 const items = useSorted(rawItems)
-const form = reactive({ title: '', class_id: null, content: '', filepath: '' })
+const form = reactive({ title: '', class_id: null, content: '', filepath: [] })
 
 onMounted(async () => {
   const res = await studentApi.classrooms()
@@ -105,17 +113,17 @@ async function load() {
 }
 
 function openCreate() {
-  Object.assign(form, { title: '', class_id: null, content: '', filepath: '' })
+  Object.assign(form, { title: '', class_id: null, content: '', filepath: [] })
   dialog.value = true
 }
 
 async function doUpload({ file }) {
   const res = await uploadFile(file)
-  form.filepath = res.filepath
+  form.filepath.push(res.filepath)
 }
 
-function clearImage() {
-  form.filepath = ''
+function removeImage(i) {
+  form.filepath.splice(i, 1)
 }
 
 async function save() {
@@ -141,10 +149,16 @@ async function remove(row) {
 </script>
 
 <style scoped>
-.preview {
+.preview-list {
   margin-top: 8px;
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
+}
+.preview-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
 }
 </style>

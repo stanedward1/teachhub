@@ -71,7 +71,7 @@ class Activity(Base):
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     content = Column(Text)
-    filepath = Column(String(500))
+    filepath = Column(Text)  # 多张配图路径，JSON 数组字符串（兼容旧单值字符串）
     created_at = Column(DateTime, server_default=func.now())
 
 

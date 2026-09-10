@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -74,6 +76,41 @@ def _check_class_permission(db: Session, user: User, class_id: int):
     """教师只能操作自己负责班级的数据。"""
     if not is_any_admin(user) and not is_teacher_class_owner(db, user.id, class_id):
         raise HTTPException(status_code=403, detail="无权操作该班级的数据")
+
+
+def _serialize_activity(x) -> dict:
+    """把 Activity 转为对外字典，filepath 统一输出为字符串列表（兼容旧单值字符串）。"""
+    d = to_dict(x)
+    d["filepath"] = _parse_filepath(d.get("filepath"))
+    return d
+
+
+def _parse_filepath(value) -> list[str]:
+    """把存储的 filepath 解析为列表。兼容旧数据（普通字符串单图）与新的 JSON 数组。"""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [v for v in value if v]
+    # 已是 JSON 数组字符串
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            return [v for v in parsed if isinstance(v, str) and v]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    # 旧数据：单个普通路径字符串
+    return [value]
+
+
+def _encode_filepath(value) -> str | None:
+    """把前端传入的 filepath（字符串或列表）编码为存储格式（JSON 数组字符串）。"""
+    if not value:
+        return None
+    paths = value if isinstance(value, list) else [value]
+    paths = [p for p in paths if isinstance(p, str) and p]
+    if not paths:
+        return None
+    return json.dumps(paths, ensure_ascii=False)
 
 
 # ---------------- 工作日志 ----------------
@@ -278,7 +315,7 @@ def list_activities(page: int = 1, page_size: int = 20, user: User = Depends(get
             return {"items": [], "total": 0}
     total = q.count()
     rows = q.order_by(Activity.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return {"items": [to_dict(x) for x in rows], "total": total}
+    return {"items": [_serialize_activity(x) for x in rows], "total": total}
 
 
 @router.post("/activities")
@@ -296,13 +333,13 @@ def create_activity(payload: dict, user: User = Depends(get_current_user), db: S
         class_id=payload.get("class_id"),
         title=title,
         content=payload.get("content", ""),
-        filepath=payload.get("filepath"),
+        filepath=_encode_filepath(payload.get("filepath")),
     )
     db.add(x)
     audit(db, user, "create_activity", target=f"新增活动")
     db.commit()
     db.refresh(x)
-    return to_dict(x)
+    return _serialize_activity(x)
 
 
 @router.delete("/activities/{activity_id}")
