@@ -293,9 +293,13 @@ def get_submission(
     stu = db.get(Student, s.student_id)
     d["student_name"] = stu.name if stu else None
     d["student_avatar"] = get_student_avatar(db, stu)
-    d["is_excellent"] = (
-        db.query(ExcellentWork).filter(ExcellentWork.submission_id == submission_id).first() is not None
+    # 评优信息：是否优秀 + 评选评语（note），供学生端详情展示
+    excellent = (
+        db.query(ExcellentWork).filter(ExcellentWork.submission_id == submission_id).first()
     )
+    d["is_excellent"] = excellent is not None
+    d["excellent_id"] = excellent.id if excellent else None
+    d["excellent_note"] = excellent.note if excellent else None
     comments = (
         db.query(SubmissionComment)
         .filter(SubmissionComment.submission_id == submission_id)

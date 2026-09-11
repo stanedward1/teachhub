@@ -42,7 +42,7 @@
 | DELETE | `/assignments/{id}` | 教师+ | 删除作业 |
 | GET | `/assignments/{id}/submissions` | 登录 | 提交列表 |
 | POST | `/assignments/{id}/submissions` | 学生 | 提交作业 |
-| GET | `/submissions/{id}` | 登录 | 提交详情（含点评） |
+| GET | `/submissions/{id}` | 登录 | 提交详情（含点评 + 评优信息 excellent_id/excellent_note） |
 | POST | `/submissions/{id}/comments` | 教师+ | 添加点评（含评分 0-100） |
 | DELETE | `/submissions/{sid}/comments/{cid}` | 教师+ | 删除点评 |
 | GET | `/my-submissions` | 学生 | 我的提交 |

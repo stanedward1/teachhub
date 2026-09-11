@@ -21,6 +21,37 @@
       </div>
     </div>
 
+    <div v-if="submitted && submission" class="page-card feedback-card">
+      <div class="fb-head">
+        <h3>教师反馈</h3>
+        <el-tag v-if="submission.is_excellent" type="success" size="small">优秀作品</el-tag>
+      </div>
+      <div v-if="submission.is_excellent && submission.excellent_note" class="note-box">
+        <el-icon><Star /></el-icon>
+        <span>评优评语：{{ submission.excellent_note }}</span>
+      </div>
+      <div class="teacher-panel">
+        <div class="tp-title">
+          <el-icon><ChatDotRound /></el-icon>
+          教师点评（{{ submission.comments?.length || 0 }}）
+        </div>
+        <div v-if="submission.comments?.length" class="tp-list">
+          <div v-for="c in submission.comments" :key="c.id" class="tp-item">
+            <el-avatar :size="28">{{ c.teacher_name?.[0] || '师' }}</el-avatar>
+            <div class="tp-body">
+              <div class="tp-head">
+                <span class="tp-name">{{ c.teacher_name }}</span>
+                <el-tag v-if="c.score != null" size="small" type="warning">{{ c.score }} 分</el-tag>
+                <span class="tp-time">{{ c.created_at }}</span>
+              </div>
+              <div class="tp-content">{{ c.content }}</div>
+            </div>
+          </div>
+        </div>
+        <div v-else class="tp-empty">教师暂未点评，请耐心等待</div>
+      </div>
+    </div>
+
     <div class="page-card submit-card">
       <h3>提交作业</h3>
       <MarkdownEditor v-model="content" :rows="8" />
@@ -52,6 +83,7 @@ const submitted = ref(false)
 const submitting = ref(false)
 const filepath = ref('')
 const filename = ref('')
+const submission = ref(null)
 
 onMounted(async () => {
   await load()
@@ -63,9 +95,19 @@ async function load() {
   const subs = await homeworkApi.submissions(route.params.id)
   if (subs.items.length > 0) {
     submitted.value = true
-    content.value = subs.items[0].content || ''
-    filepath.value = subs.items[0].filepath || ''
-    filename.value = subs.items[0].filename || ''
+    const s = subs.items[0]
+    content.value = s.content || ''
+    filepath.value = s.filepath || ''
+    filename.value = s.filename || ''
+    await loadFeedback(s.id)
+  }
+}
+
+async function loadFeedback(submissionId) {
+  try {
+    submission.value = await homeworkApi.submissionDetail(submissionId)
+  } catch (e) {
+    console.error('[HomeworkDetail] 加载教师反馈失败:', e)
   }
 }
 
@@ -82,14 +124,16 @@ async function submit() {
   }
   submitting.value = true
   try {
-    await homeworkApi.submit(route.params.id, {
+    const res = await homeworkApi.submit(route.params.id, {
       content: content.value,
       filepath: filepath.value,
       filename: filename.value
     })
     ElMessage.success('提交成功')
     submitted.value = true
+    if (res?.id) await loadFeedback(res.id)
   } catch (e) {
+    console.error('[HomeworkDetail] 提交作业失败:', e)
   } finally {
     submitting.value = false
   }
@@ -107,6 +151,82 @@ async function submit() {
 }
 .submit-card {
   margin-top: 16px;
+}
+.feedback-card {
+  margin-top: 16px;
+}
+.fb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.fb-head h3 {
+  margin: 0;
+}
+.note-box {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  color: #92400e;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.teacher-panel {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+}
+.tp-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e40af;
+  margin-bottom: 10px;
+}
+.tp-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #dbeafe;
+}
+.tp-item:last-child {
+  border-bottom: none;
+}
+.tp-body {
+  flex: 1;
+}
+.tp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tp-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+.tp-time {
+  font-size: 12px;
+  color: #9ca3af;
+}
+.tp-content {
+  font-size: 14px;
+  color: #111827;
+  margin-top: 2px;
+  white-space: pre-wrap;
+}
+.tp-empty {
+  font-size: 13px;
+  color: #9ca3af;
+  padding: 6px 0;
 }
 .submit-card h3 {
   margin: 0 0 12px;

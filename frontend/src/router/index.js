@@ -19,6 +19,7 @@ const routes = [
       { path: 'excellent', name: 'excellent', component: () => import('../views/student/ExcellentList.vue') },
       { path: 'excellent/:id', name: 'excellent-detail', component: () => import('../views/student/ExcellentDetail.vue') },
       { path: 'my-submissions', name: 'my-submissions', component: () => import('../views/student/MySubmissions.vue') },
+      { path: 'my-submissions/:id', name: 'my-submission-detail', component: () => import('../views/student/SubmissionDetail.vue') },
       { path: 'practice', name: 'practice', component: () => import('../views/student/Practice.vue') },
       { path: 'profile', name: 'profile', component: () => import('../views/student/Profile.vue') }
     ]

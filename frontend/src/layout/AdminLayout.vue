@@ -202,7 +202,9 @@ function onCommand(cmd) {
     auth.clearAuth()
     router.push('/admin/login')
   } else if (cmd === 'portal') {
-    router.push('/')
+    // 学生端首页需以学生身份登录：先退出管理端会话，再跳学生端登录页
+    auth.clearAuth()
+    router.push('/login')
   } else if (cmd === 'change-password') {
     router.push('/admin/change-password')
   }
