@@ -58,7 +58,7 @@
         clearable
         filterable
         style="width: 200px"
-        @change="load"
+        @change="reload"
       >
         <el-option v-for="a in actions" :key="a" :label="actionText(a)" :value="a" />
       </el-select>
@@ -67,8 +67,8 @@
         placeholder="搜索学生姓名"
         clearable
         style="width: 200px"
-        @keyup.enter="load"
-        @clear="load"
+        @keyup.enter="reload"
+        @clear="reload"
       />
       <el-date-picker
         v-model="date"
@@ -77,9 +77,9 @@
         value-format="YYYY-MM-DD"
         clearable
         style="width: 160px"
-        @change="onDateChange"
+        @change="reload"
       />
-      <el-button @click="load">查询</el-button>
+      <el-button @click="reload">查询</el-button>
       <div class="spacer"></div>
     </div>
 
@@ -125,20 +125,25 @@ import { ref, onMounted, watch } from 'vue'
 import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import PaginationBar from '../../components/PaginationBar.vue'
 import StateView from '../../components/StateView.vue'
+import { useCrudList } from '../../composables/useCrudList'
 import { adminApi } from '../../api'
 
-const items = ref([])
 const stats = ref({ by_teacher: [], by_action: [], by_day: [], total: 0, days: 30 })
 const action = ref('')
 const keyword = useDebouncedRef('', 300)
-watch(keyword, () => load())
 const date = ref('')
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
 const actions = ref([])
+const { items, page, pageSize, total, loading, error, load, reload } = useCrudList(
+  adminApi.auditLogs,
+  {
+    buildParams: () => ({
+      action: action.value,
+      keyword: keyword.value,
+      date: date.value,
+    }),
+  }
+)
+watch(keyword, reload)
 
 // 操作类型 -> 中文（覆盖后端全部 64 种操作）
 const ACTION_CN = {
@@ -259,32 +264,6 @@ function teacherPercent(count) {
 function actionPercent(count) {
   const max = stats.value.by_action?.[0]?.count || 1
   return Math.round((count / max) * 100)
-}
-
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await adminApi.auditLogs({
-      action: action.value,
-      keyword: keyword.value,
-      date: date.value,
-      page: page.value,
-      page_size: pageSize.value,
-    })
-    items.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-    console.error('[AuditLogs] 加载日志列表失败:', e)
-  } finally {
-    loading.value = false
-  }
-}
-
-function onDateChange() {
-  page.value = 1
-  load()
 }
 </script>
 

@@ -1,11 +1,10 @@
 """数据导入业务逻辑：学生/成绩批量导入 + 模板下载 + 导入历史。"""
 import json
-import os
 from io import BytesIO
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,6 +20,7 @@ from app.services.workbench._common import (
     parse_date,
     to_dict,
 )
+from app.services.workbench.importer import ROW_FAIL, ROW_OK, run_import
 
 _EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -53,23 +53,11 @@ def download_student_template() -> StreamingResponse:
 
 
 def import_students(db: Session, user, file) -> dict:
-    """批量导入学生数据。"""
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in {".xlsx", ".xls"}:
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx / .xls 格式")
+    """批量导入学生数据。
 
-    contents = file.file.read()
-    wb = load_workbook(BytesIO(contents))
-    ws = wb.active
-
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
-    if not rows:
-        raise HTTPException(status_code=400, detail="文件中没有数据行")
-
-    all_errors = []
-    success = 0
-    total = 0
-
+    文件解析、行级事务、审计与导入历史由 :func:`run_import` 统一处理；
+    这里只提供「解析 + 业务校验 + 写入」的单行逻辑。
+    """
     if not is_any_admin(user):
         teacher_class_ids = get_teacher_class_ids(db, user.id)
     else:
@@ -78,14 +66,9 @@ def import_students(db: Session, user, file) -> dict:
     class_objs = db.query(Classroom).all()
     classrooms = {c.name: c.id for c in class_objs}
     class_school = {c.id: c.school_id for c in class_objs}
-    graduated_class_ids = {
-        c.id for c in db.query(Classroom).filter(Classroom.is_graduated.is_(True)).all()
-    }
+    graduated_class_ids = {c.id for c in class_objs if c.is_graduated}
 
-    for row_num, row in enumerate(rows, start=2):
-        if not any(row):
-            continue
-        total += 1
+    def handle_row(session: Session, row: tuple, row_num: int) -> tuple[int, list[str]]:
         data = {
             "student_no": str(row[0] or "").strip(),
             "name": str(row[1] or "").strip(),
@@ -101,71 +84,55 @@ def import_students(db: Session, user, file) -> dict:
 
         errors = _validate_student_row(data, row_num)
         if errors:
-            all_errors.extend(errors)
-            continue
+            return ROW_FAIL, errors
 
-        if db.query(Student).filter(Student.student_no == data["student_no"]).first():
-            all_errors.append(f"第{row_num}行：学号 {data['student_no']} 已存在")
-            continue
+        if session.query(Student).filter(Student.student_no == data["student_no"]).first():
+            return ROW_FAIL, [f"第{row_num}行：学号 {data['student_no']} 已存在"]
 
         class_id = classrooms.get(data["class_name"])
         if not class_id:
-            all_errors.append(f"第{row_num}行：班级「{data['class_name']}」不存在")
-            continue
+            return ROW_FAIL, [f"第{row_num}行：班级「{data['class_name']}」不存在"]
 
         if class_id in graduated_class_ids:
-            all_errors.append(f"第{row_num}行：班级「{data['class_name']}」已毕业，无法导入学生")
-            continue
+            return ROW_FAIL, [f"第{row_num}行：班级「{data['class_name']}」已毕业，无法导入学生"]
 
         if teacher_class_ids is not None and class_id not in teacher_class_ids:
-            all_errors.append(f"第{row_num}行：教师只能导入到自己负责的班级「{data['class_name']}」")
-            continue
+            return ROW_FAIL, [f"第{row_num}行：教师只能导入到自己负责的班级「{data['class_name']}」"]
 
-        try:
-            s = Student(
-                student_no=data["student_no"],
+        session.add(Student(
+            student_no=data["student_no"],
+            name=data["name"],
+            gender=data["gender"],
+            class_id=class_id,
+            school_id=class_school.get(class_id),
+            major=data["major"],
+            birth_date=parse_date(data["birth_date"]),
+            parent_name=data["parent_name"],
+            parent_phone=data["parent_phone"],
+            student_type=data["student_type"],
+        ))
+        session.flush()
+
+        exists_user = get_student_account(session, class_id, data["name"])
+        if not exists_user:
+            session.add(User(
+                username=data["name"],
+                password_hash=hash_password("123456"),
                 name=data["name"],
-                gender=data["gender"],
-                class_id=class_id,
+                role="student",
                 school_id=class_school.get(class_id),
-                major=data["major"],
-                birth_date=parse_date(data["birth_date"]),
-                parent_name=data["parent_name"],
-                parent_phone=data["parent_phone"],
-                student_type=data["student_type"],
-            )
-            db.add(s)
-            db.flush()
-            exists_user = get_student_account(db, class_id, data["name"])
-            if not exists_user:
-                db.add(User(
-                    username=data["name"],
-                    password_hash=hash_password("123456"),
-                    name=data["name"],
-                    role="student",
-                    school_id=class_school.get(class_id),
-                    class_id=class_id,
-                ))
-            success += 1
-        except Exception as e:
-            db.rollback()
-            all_errors.append(f"第{row_num}行：导入失败 - {str(e)}")
+                class_id=class_id,
+            ))
+        return ROW_OK, []
 
-    db.commit()
-    audit(db, user, "import_students", target=f"{file.filename or ''} 成功{success}条")
-
-    db.add(ImportHistory(
+    return run_import(
+        db,
+        user,
+        file,
         import_type="student",
-        filename=file.filename or "",
-        total_rows=total,
-        success_rows=success,
-        error_rows=len(all_errors),
-        errors=json.dumps(all_errors[:100], ensure_ascii=False),
-        user_id=user.id,
-    ))
-    db.commit()
-
-    return {"success": success, "total": total, "errors": all_errors[:50]}
+        audit_action="import_students",
+        handle_row=handle_row,
+    )
 
 
 def list_import_history(db: Session, user, import_type: str = "", page: int = 1, page_size: int = 20) -> dict:

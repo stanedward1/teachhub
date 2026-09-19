@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-select v-model="graduatedFilter" style="width: 120px" @change="load">
+      <el-select v-model="graduatedFilter" style="width: 120px" @change="reload">
         <el-option label="在读班级" value="false" />
         <el-option label="已毕业" value="true" />
         <el-option label="全部" value="" />
@@ -134,19 +134,22 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StateView from '../../components/StateView.vue'
+import { useCrudList } from '../../composables/useCrudList'
 import { studentApi, adminApi } from '../../api'
 import { isSchoolAdmin, isPlatformAdmin } from '../../utils/auth'
 
 // 学校管理员 / 平台超管可管理班级（新增/删除/配置班主任与科任）；教师仅可查看
 const isAdmin = isSchoolAdmin() || isPlatformAdmin()
-const items = ref([])
 const teachers = ref([])
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
 const graduatedFilter = ref('false')
+const { items, loading, error, load, reload, remove } = useCrudList(studentApi.classrooms, {
+  removeApi: studentApi.deleteClassroom,
+  buildParams: () => ({ graduated: graduatedFilter.value }),
+  removeTip: (row) => `确定删除班级「${row.name}」吗？`,
+})
 const form = reactive({
   name: '',
   code: '',
@@ -173,19 +176,6 @@ onMounted(async () => {
   }
   load()
 })
-
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await studentApi.classrooms({ graduated: graduatedFilter.value })
-    items.value = res.items
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
 
 function openCreate() {
   editing.value = null
@@ -235,13 +225,6 @@ async function save() {
   } finally {
     saving.value = false
   }
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm(`确定删除班级「${row.name}」吗？`, '提示', { type: 'warning' })
-  await studentApi.deleteClassroom(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 
 function openTeachers(row) {

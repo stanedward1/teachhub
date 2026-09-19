@@ -6,24 +6,24 @@
         placeholder="搜索姓名/学号"
         clearable
         style="width: 220px"
-        @keyup.enter="load"
-        @clear="load"
+        @keyup.enter="reload"
+        @clear="reload"
       />
       <el-select
         v-model="classId"
         placeholder="全部班级"
         clearable
         style="width: 180px"
-        @change="load"
+        @change="reload"
       >
         <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
       </el-select>
-      <el-select v-model="droppedFilter" style="width: 120px" @change="onPage(1)">
+      <el-select v-model="droppedFilter" style="width: 120px" @change="reload">
         <el-option label="在籍学生" value="false" />
         <el-option label="已退学" value="true" />
         <el-option label="全部" value="" />
       </el-select>
-      <el-button @click="load">查询</el-button>
+      <el-button @click="reload">查询</el-button>
       <SortBar v-model="order" />
       <div class="spacer"></div>
       <el-button @click="downloadTemplate">下载模板</el-button>
@@ -152,12 +152,12 @@
  */
 import { ref, onMounted, watch } from 'vue'
 import { useDebouncedRef } from '../../composables/useDebouncedRef'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import ImportDialog from '../../components/ImportDialog.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { downloadExcel } from '../../composables/useDownload'
 import { studentApi } from '../../api'
 import StudentFormDialog from './students/StudentFormDialog.vue'
@@ -166,20 +166,41 @@ import BoardHistoryDialog from './students/BoardHistoryDialog.vue'
 import BoardTypeChart from './students/BoardTypeChart.vue'
 import StudentAvatarCell from './students/StudentAvatarCell.vue'
 
-const rawItems = ref([])
 const classes = ref([])
 const keyword = useDebouncedRef('', 300)
-watch(keyword, () => load())
 const classId = ref(null)
 const droppedFilter = ref('false')
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
 
 // 通学生/寄宿生图表
 const chartRef = ref(null)
+
+// 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（查询参数与删除文案）
+const {
+  items: rawItems,
+  page,
+  pageSize,
+  total,
+  loading,
+  error,
+  load,
+  reload,
+  remove,
+} = useCrudList(studentApi.list, {
+  removeApi: studentApi.remove,
+  buildParams: () => ({
+    keyword: keyword.value,
+    class_id: classId.value,
+    dropped_out: droppedFilter.value,
+  }),
+  removeTip: (row) => `确定删除学生「${row.name}」吗？`,
+  onLoaded: () => {
+    // 数据加载完成后联动刷新通学生/寄宿生统计
+    if (classId.value) chartRef.value?.reload()
+  },
+})
+
+// 搜索条件变化必须重置页码：否则在第 3 页改关键词会拿新条件查旧页码，结果错乱
+watch(keyword, reload)
 
 // 学生表单弹窗
 const formDialog = ref(false)
@@ -206,33 +227,6 @@ onMounted(async () => {
   load()
 })
 
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await studentApi.list({
-      page: page.value,
-      page_size: pageSize.value,
-      keyword: keyword.value,
-      class_id: classId.value,
-      dropped_out: droppedFilter.value,
-    })
-    rawItems.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-  // 加载通学生/寄宿生统计
-  if (classId.value) chartRef.value?.reload()
-}
-
-function onPage(p) {
-  page.value = p
-  load()
-}
-
 function openCreate() {
   formStudent.value = null
   formDialog.value = true
@@ -241,13 +235,6 @@ function openCreate() {
 function openEdit(row) {
   formStudent.value = row
   formDialog.value = true
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm(`确定删除学生「${row.name}」吗？`, '提示', { type: 'warning' })
-  await studentApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 
 async function exportExcel() {

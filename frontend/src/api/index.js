@@ -44,6 +44,8 @@ export const homeworkApi = {
   updateAssignment: (id, data) => request.put(`/api/homework/assignments/${id}`, data),
   deleteAssignment: (id) => request.delete(`/api/homework/assignments/${id}`),
   submissions: (id) => request.get(`/api/homework/assignments/${id}/submissions`),
+  // 未交名单：该作业下发班级中尚未提交的学生
+  unsubmitted: (id) => request.get(`/api/homework/assignments/${id}/unsubmitted`),
   submissionDetail: (id) => request.get(`/api/homework/submissions/${id}`),
   addSubmissionComment: (id, data) =>
     request.post(`/api/homework/submissions/${id}/comments`, data),

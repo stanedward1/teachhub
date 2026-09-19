@@ -19,11 +19,16 @@ class School(Base):
 
 class Classroom(Base):
     __tablename__ = "classrooms"
+    # 班级编码校内唯一。原为全局唯一（unique=True），导致不同学校无法复用同一套编码
+    # （如两所学校都有 "2024级计算机1班"），导入时会被误判为重复。
+    __table_args__ = (
+        UniqueConstraint("school_id", "code", name="uq_classroom_school_code"),
+    )
 
     id = Column(Integer, primary_key=True)
     school_id = Column(Integer, ForeignKey("schools.id"), index=True)
     name = Column(String(100), nullable=False)
-    code = Column(String(50), nullable=False, unique=True)
+    code = Column(String(50), nullable=False)
     major = Column(String(100))
     grade = Column(String(50))
     teacher_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)  # 班主任
@@ -47,6 +52,11 @@ class ClassTeacher(Base):
 
 class Student(Base):
     __tablename__ = "students"
+    # 学号校内唯一。原为全局唯一（unique=True），不同学校出现相同学号时会被误判为重复，
+    # 而这在实际招生场景中完全正常（如各校都从 20240001 开始编号）。
+    __table_args__ = (
+        UniqueConstraint("school_id", "student_no", name="uq_student_school_no"),
+    )
 
     id = Column(Integer, primary_key=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
@@ -54,7 +64,7 @@ class Student(Base):
     name = Column(String(50), nullable=False)
     gender = Column(String(10), default="男")
     birth_date = Column(Date)
-    student_no = Column(String(50), unique=True, nullable=False, index=True)
+    student_no = Column(String(50), nullable=False, index=True)
     major = Column(String(100))
     parent_name = Column(String(50))
     parent_phone = Column(String(20))

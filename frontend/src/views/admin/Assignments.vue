@@ -28,7 +28,7 @@
           <el-table-column prop="class_name" label="下发班级" width="150" />
           <el-table-column prop="deadline" label="截止时间" width="170" />
           <el-table-column prop="submission_count" label="提交数" width="90" />
-          <el-table-column label="操作" width="220" fixed="right">
+          <el-table-column label="操作" width="320" fixed="right">
             <template #default="{ row }">
               <el-button
                 link
@@ -36,6 +36,7 @@
                 @click="$router.push(`/admin/homework/${row.id}/submissions`)"
                 >审阅</el-button
               >
+              <el-button link type="warning" @click="openUnsubmitted(row)">未交名单</el-button>
               <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
               <el-button link type="danger" @click="remove(row)">删除</el-button>
             </template>
@@ -86,6 +87,44 @@
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 未交名单：展示该作业下发班级中尚未提交的学生 -->
+    <el-dialog
+      v-model="unsubmittedDialog"
+      :title="
+        unsubmitted && unsubmitted.assignment_title
+          ? '未交名单 - ' + unsubmitted.assignment_title
+          : '未交名单'
+      "
+      width="560px"
+    >
+      <div v-loading="unsubmittedLoading" style="min-height: 80px">
+        <template v-if="unsubmitted">
+          <el-descriptions :column="3" border size="small">
+            <el-descriptions-item label="应交人数">{{ unsubmitted.total }}</el-descriptions-item>
+            <el-descriptions-item label="已交人数">{{
+              unsubmitted.submitted_count
+            }}</el-descriptions-item>
+            <el-descriptions-item label="未交人数">
+              <span :class="unsubmitted.unsubmitted_count ? 'danger-text' : 'ok-text'">
+                {{ unsubmitted.unsubmitted_count }}
+              </span>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div v-if="unsubmitted.items.length" class="unsubmitted-list">
+            <el-tag v-for="s in unsubmitted.items" :key="s.id" type="danger" effect="plain">
+              {{ s.name }}
+              <span v-if="s.student_no" class="tag-no">{{ s.student_no }}</span>
+            </el-tag>
+          </div>
+          <el-empty v-else description="全员已交，无人缺交" :image-size="60" />
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="unsubmittedDialog = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -195,6 +234,25 @@ async function save() {
   }
 }
 
+// 未交名单弹框
+const unsubmittedDialog = ref(false)
+const unsubmittedLoading = ref(false)
+const unsubmitted = ref(null)
+
+async function openUnsubmitted(row) {
+  unsubmittedDialog.value = true
+  unsubmitted.value = null
+  unsubmittedLoading.value = true
+  try {
+    unsubmitted.value = await homeworkApi.unsubmitted(row.id)
+  } catch (e) {
+    // 请求失败（无权限/任务不存在）由全局拦截器提示，此处直接关闭弹框
+    unsubmittedDialog.value = false
+  } finally {
+    unsubmittedLoading.value = false
+  }
+}
+
 async function remove(row) {
   await ElMessageBox.confirm(`确定删除任务「${row.title}」吗？`, '提示', { type: 'warning' })
   await homeworkApi.deleteAssignment(row.id)
@@ -209,5 +267,28 @@ async function remove(row) {
   align-items: center;
   gap: 12px;
   margin-top: 8px;
+}
+
+.unsubmitted-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.unsubmitted-list .tag-no {
+  margin-left: 6px;
+  opacity: 0.65;
+  font-size: 12px;
+}
+
+.danger-text {
+  color: #f56c6c;
+  font-weight: 600;
+}
+
+.ok-text {
+  color: #67c23a;
+  font-weight: 600;
 }
 </style>

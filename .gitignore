@@ -44,6 +44,7 @@ backend/uploads/*
 
 # AI 生成的优化报告（临时交付物，不纳入版本库）
 docs/OPTIMIZATION_PLAN.md
+docs/REVIEW-*.md
 
 # IDE
 .vscode/

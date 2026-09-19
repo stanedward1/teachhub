@@ -541,10 +541,19 @@ def dashboard(db: Session, user: User) -> dict:
 
     student_count = len(student_ids)
     class_count = len(class_ids)
-    assignment_count = db.query(Assignment).count()
-    submission_count = db.query(Submission).count()
-    resource_count = db.query(Resource).count()
-    exam_count = db.query(Exam).count()
+    # 租户隔离（原实现为全表 count，学校管理员会看到全平台数量，属跨校串数）：
+    # - 作业 / 资源 / 试卷按 school_id 过滤；平台超管 school_id 为空 → 统计全平台。
+    # - 提交按校内学生过滤，与请假 / 沟通口径一致，同时排除毕业班级与退学学生。
+    def _tenant_count(model):
+        q = db.query(model)
+        if user.school_id is not None:
+            q = q.filter(model.school_id == user.school_id)
+        return q.count()
+
+    assignment_count = _tenant_count(Assignment)
+    resource_count = _tenant_count(Resource)
+    exam_count = _tenant_count(Exam)
+    submission_count = _count(Submission, Submission.student_id, student_ids)
     leave_count = _count(Leave, Leave.student_id, student_ids)
     comm_count = _count(Communication, Communication.student_id, student_ids)
 
@@ -630,10 +639,17 @@ def dashboard(db: Session, user: User) -> dict:
                 "time": l.created_at.strftime("%Y-%m-%d %H:%M") if l.created_at else "",
             }
         )
-    # 最近动态的工作日志：教师只看自己的，管理员看全部
+    # 最近动态的工作日志：教师只看自己的；学校管理员只看本校教师的
+    # （原实现为「管理员看全部」，会让学校管理员看到其它学校的工作日志）
     wq = db.query(WorkLog)
     if user.role == "teacher":
         wq = wq.filter(WorkLog.teacher_id == user.id)
+    elif user.school_id is not None:
+        wq = wq.filter(
+            WorkLog.teacher_id.in_(
+                db.query(User.id).filter(User.school_id == user.school_id)
+            )
+        )
     for w in wq.order_by(WorkLog.id.desc()).limit(5).all():
         recent.append(
             {

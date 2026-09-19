@@ -6,10 +6,10 @@
         placeholder="搜索资源名称"
         clearable
         style="width: 220px"
-        @keyup.enter="load"
-        @clear="load"
+        @keyup.enter="reload"
+        @clear="reload"
       />
-      <el-button @click="load">查询</el-button>
+      <el-button @click="reload">查询</el-button>
       <SortBar v-model="order" />
       <div class="spacer"></div>
       <el-button type="primary" @click="openCreate">上传资源</el-button>
@@ -78,37 +78,34 @@
 <script setup>
 import { ref, reactive, onMounted, watch } from 'vue'
 import { useDebouncedRef } from '../../composables/useDebouncedRef'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import SortBar from '../../components/SortBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { resourceApi, uploadFile } from '../../api'
 
-const rawItems = ref([])
 const { order, useSorted } = useSort('resources')
-const items = useSorted(rawItems)
 const keyword = useDebouncedRef('', 300)
-watch(keyword, () => load())
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
 const form = reactive({ name: '', category: '课件', filename: '', filepath: '' })
+const {
+  items: rawItems,
+  loading,
+  error,
+  load,
+  reload,
+  remove,
+} = useCrudList(resourceApi.list, {
+  removeApi: resourceApi.remove,
+  buildParams: () => ({ keyword: keyword.value }),
+  removeTip: (row) => `确定删除资源「${row.name}」吗？`,
+})
+const items = useSorted(rawItems)
+watch(keyword, reload)
 
 onMounted(load)
-
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await resourceApi.list({ keyword: keyword.value })
-    rawItems.value = res.items
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
 
 function openCreate() {
   Object.assign(form, { name: '', category: '课件', filename: '', filepath: '' })
@@ -138,12 +135,5 @@ async function save() {
 
 function download(row) {
   window.open('/uploads/' + row.filepath, '_blank')
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm(`确定删除资源「${row.name}」吗？`, '提示', { type: 'warning' })
-  await resourceApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 </script>

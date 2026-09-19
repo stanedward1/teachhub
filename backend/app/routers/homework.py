@@ -61,6 +61,16 @@ def list_submissions(
     return homework_service.list_submissions(db, assignment_id, user)
 
 
+@router.get("/assignments/{assignment_id}/unsubmitted")
+def unsubmitted_students(
+    assignment_id: int,
+    user=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """未交名单：该作业下发班级中尚未提交的学生（教师/管理员可用）。"""
+    return homework_service.unsubmitted_students(db, assignment_id, user)
+
+
 @router.get("/submissions/{submission_id}")
 def get_submission(
     submission_id: int,

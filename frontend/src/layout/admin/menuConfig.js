@@ -21,7 +21,7 @@ export const MENU = [
   { index: '/admin/dashboard', label: '数据看板', icon: 'Odometer' },
   {
     key: 'hw',
-    label: '在线作业管理',
+    label: '上机作业管理',
     icon: 'Document',
     children: [{ index: '/admin/homework', label: '任务列表' }],
   },
@@ -143,7 +143,7 @@ export function resolveActiveMenu(path) {
  * 由当前路由路径推导顶栏面包屑。
  *
  * 规则与原实现一致：
- * 1. 路径含 `/submissions` -> `['在线作业管理', '提交审阅']`；
+ * 1. 路径含 `/submissions` -> `['上机作业管理', '提交审阅']`；
  * 2. 命中 {@link PAGE_TITLES} -> `[标题]`；
  * 3. 否则 -> `['TeachHub']`。
  *
@@ -151,7 +151,7 @@ export function resolveActiveMenu(path) {
  * @returns {string[]} 面包屑文本数组。
  */
 export function resolveBreadcrumb(path) {
-  if (path.includes('/submissions')) return ['在线作业管理', '提交审阅']
+  if (path.includes('/submissions')) return ['上机作业管理', '提交审阅']
   const name = PAGE_TITLES[path]
   if (!name) return ['TeachHub']
   return [name]

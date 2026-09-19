@@ -6,10 +6,10 @@
         placeholder="搜索试卷标题"
         clearable
         style="width: 220px"
-        @keyup.enter="load"
-        @clear="load"
+        @keyup.enter="reload"
+        @clear="reload"
       />
-      <el-button @click="load">查询</el-button>
+      <el-button @click="reload">查询</el-button>
       <SortBar v-model="order" />
       <div class="spacer"></div>
       <el-button type="primary" @click="openUpload">上传试卷</el-button>
@@ -126,19 +126,29 @@
 <script setup>
 import { ref, reactive, onMounted, watch } from 'vue'
 import { useDebouncedRef } from '../../composables/useDebouncedRef'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import SortBar from '../../components/SortBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { examApi } from '../../api'
 
-const rawItems = ref([])
 const { order, useSorted } = useSort('exams')
-const items = useSorted(rawItems)
 const keyword = useDebouncedRef('', 300)
-watch(keyword, () => load())
-const loading = ref(false)
-const error = ref(false)
+const {
+  items: rawItems,
+  loading,
+  error,
+  load,
+  reload,
+  remove,
+} = useCrudList(examApi.list, {
+  removeApi: examApi.remove,
+  buildParams: () => ({ keyword: keyword.value }),
+  removeTip: (row) => `确定删除试卷「${row.title}」吗？`,
+})
+const items = useSorted(rawItems)
+watch(keyword, reload)
 
 // 上传
 const uploadDialog = ref(false)
@@ -154,19 +164,6 @@ const editForm = reactive({ title: '', exam_type: '' })
 const editingId = ref(null)
 
 onMounted(load)
-
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await examApi.list({ keyword: keyword.value })
-    rawItems.value = res.items
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
 
 function fileTagType(ext) {
   const map = { '.pdf': 'danger', '.doc': 'primary', '.docx': 'primary' }
@@ -261,13 +258,6 @@ async function saveEdit() {
   } finally {
     saving.value = false
   }
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm(`确定删除试卷「${row.title}」吗？`, '提示', { type: 'warning' })
-  await examApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 </script>
 

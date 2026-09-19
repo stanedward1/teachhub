@@ -9,7 +9,7 @@
             placeholder="按科目筛选"
             clearable
             style="width: 180px"
-            @clear="load"
+            @clear="reload"
           />
           <StudentSelect
             v-model="studentId"
@@ -17,10 +17,10 @@
             show-class-filter
             placeholder="按学生筛选"
             style="width: 320px"
-            @update:model-value="load"
-            @update:class-id="load"
+            @update:model-value="reload"
+            @update:class-id="reload"
           />
-          <el-button @click="load">查询</el-button>
+          <el-button @click="reload">查询</el-button>
           <div class="spacer"></div>
           <el-button @click="downloadTemplate">下载模板</el-button>
           <el-button type="success" @click="importDialog = true">批量导入</el-button>
@@ -107,7 +107,6 @@
  * 纯结构重构，对外行为（接口调用、文案、刷新时机、列顺序与宽度）完全等价。
  */
 import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
@@ -117,22 +116,36 @@ import StateView from '../../components/StateView.vue'
 import ScoreFormDialog from './scores/ScoreFormDialog.vue'
 import ScoreAnalysis from './scores/ScoreAnalysis.vue'
 import { useSort } from '../../composables/useSort.js'
+import { useCrudList } from '../../composables/useCrudList.js'
 import { downloadExcel } from '../../composables/useDownload.js'
 import { scoreApi } from '../../api'
 
 const activeTab = ref('list')
 
-const rawItems = ref([])
 const { order, useSorted } = useSort('scores')
-const items = useSorted(rawItems)
 const subject = ref('')
 const studentId = ref(null)
 const classId = ref(null)
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
+const {
+  items: rawItems,
+  page,
+  pageSize,
+  total,
+  loading,
+  error,
+  load,
+  reload,
+  remove,
+} = useCrudList(scoreApi.list, {
+  removeApi: scoreApi.remove,
+  buildParams: () => ({
+    subject: subject.value,
+    student_id: studentId.value,
+    class_id: classId.value,
+  }),
+  removeTip: () => '确定删除该成绩记录吗？',
+})
+const items = useSorted(rawItems)
 const dialog = ref(false)
 const editing = ref(null)
 
@@ -150,26 +163,6 @@ const importDialog = ref(false)
 
 onMounted(load)
 
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await scoreApi.list({
-      page: page.value,
-      page_size: pageSize.value,
-      subject: subject.value,
-      student_id: studentId.value,
-      class_id: classId.value,
-    })
-    rawItems.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
-
 function openCreate() {
   editing.value = null
   dialog.value = true
@@ -178,13 +171,6 @@ function openCreate() {
 function openEdit(row) {
   editing.value = row
   dialog.value = true
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm('确定删除该成绩记录吗？', '提示', { type: 'warning' })
-  await scoreApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 
 async function exportExcel() {

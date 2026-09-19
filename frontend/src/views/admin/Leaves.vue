@@ -6,7 +6,7 @@
         placeholder="全部状态"
         clearable
         style="width: 140px"
-        @change="load"
+        @change="reload"
       >
         <el-option label="登记" value="登记" />
         <el-option label="已销假" value="已销假" />
@@ -17,8 +17,8 @@
         show-class-filter
         placeholder="按学生筛选"
         style="width: 320px"
-        @update:model-value="load"
-        @update:class-id="load"
+        @update:model-value="reload"
+        @update:class-id="reload"
       />
       <div class="spacer"></div>
       <el-button type="primary" @click="openCreate">登记请假</el-button>
@@ -107,30 +107,44 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import StudentCard from '../../components/StudentCard.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort.js'
+import { useCrudList } from '../../composables/useCrudList'
 import { leaveApi } from '../../api'
 
-const rawItems = ref([])
 const { order, useSorted } = useSort('leaves')
-const items = useSorted(rawItems)
 const status = ref('')
 const studentId = ref(null)
 const classId = ref(null)
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
 const form = reactive({ student_id: null, reason: '', start_date: '', end_date: '' })
+const {
+  items: rawItems,
+  page,
+  pageSize,
+  total,
+  loading,
+  error,
+  load,
+  reload,
+  remove,
+} = useCrudList(leaveApi.list, {
+  removeApi: leaveApi.remove,
+  buildParams: () => ({
+    status: status.value,
+    student_id: studentId.value,
+    class_id: classId.value,
+  }),
+  removeTip: () => '确定删除该记录吗？',
+})
+const items = useSorted(rawItems)
 
 // 跨模块学生卡片
 const studentCardVisible = ref(false)
@@ -142,26 +156,6 @@ function openStudentCard(row) {
 }
 
 onMounted(load)
-
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await leaveApi.list({
-      page: page.value,
-      page_size: pageSize.value,
-      status: status.value,
-      student_id: studentId.value,
-      class_id: classId.value,
-    })
-    rawItems.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
 
 function openCreate() {
   editing.value = null
@@ -193,13 +187,6 @@ async function save() {
 async function finish(row) {
   await leaveApi.update(row.id, { status: '已销假' })
   ElMessage.success('已销假')
-  load()
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm('确定删除该记录吗？', '提示', { type: 'warning' })
-  await leaveApi.remove(row.id)
-  ElMessage.success('删除成功')
   load()
 }
 </script>

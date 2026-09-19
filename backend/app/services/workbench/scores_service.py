@@ -1,15 +1,13 @@
 """成绩业务逻辑：查询、分析、增删改、导入导出。"""
-import json
-import os
 from io import BytesIO
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Classroom, ImportHistory, Score, Student
+from app.models import Classroom, Score, Student
 from app.pagination import paginate
 from app.schemas import ScoreCreate, ScoreOut, ScoreUpdate
 from app.services.workbench._common import (
@@ -29,6 +27,7 @@ from app.services.workbench._common import (
     student_name,
     to_dict,
 )
+from app.services.workbench.importer import ROW_FAIL, ROW_OK, run_import
 
 
 def list_scores(
@@ -317,23 +316,11 @@ def download_score_template() -> StreamingResponse:
 
 
 def import_scores(db: Session, user, file) -> dict:
-    """批量导入成绩数据。"""
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in {".xlsx", ".xls"}:
-        raise HTTPException(status_code=400, detail="仅支持 .xlsx / .xls 格式")
+    """批量导入成绩数据。
 
-    contents = file.file.read()
-    wb = load_workbook(BytesIO(contents))
-    ws = wb.active
-
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
-    if not rows:
-        raise HTTPException(status_code=400, detail="文件中没有数据行")
-
-    all_errors = []
-    success = 0
-    total = 0
-
+    文件解析、行级事务、审计与导入历史由 :func:`run_import` 统一处理；
+    这里只提供「解析 + 业务校验 + 写入」的单行逻辑。
+    """
     if not is_any_admin(user):
         teacher_class_ids = get_teacher_class_ids(db, user.id)
         teacher_student_nos = set()
@@ -345,10 +332,7 @@ def import_scores(db: Session, user, file) -> dict:
 
     student_map = {s.student_no: s for s in db.query(Student).all()}
 
-    for row_num, row in enumerate(rows, start=2):
-        if not any(row):
-            continue
-        total += 1
+    def handle_row(session: Session, row: tuple, row_num: int) -> tuple[int, list[str]]:
         data = {
             "student_no": str(row[0] or "").strip(),
             "name": str(row[1] or "").strip(),
@@ -359,50 +343,36 @@ def import_scores(db: Session, user, file) -> dict:
 
         errors = _validate_score_row(data, row_num)
         if errors:
-            all_errors.extend(errors)
-            continue
+            return ROW_FAIL, errors
 
         student = student_map.get(data["student_no"])
         if not student:
-            all_errors.append(f"第{row_num}行：学号 {data['student_no']} 不存在")
-            continue
+            return ROW_FAIL, [f"第{row_num}行：学号 {data['student_no']} 不存在"]
 
         if student.is_dropped_out:
-            all_errors.append(f"第{row_num}行：学生「{data['name']}」已退学，无法导入成绩")
-            continue
+            return ROW_FAIL, [f"第{row_num}行：学生「{data['name']}」已退学，无法导入成绩"]
+
         if student.class_id:
-            cls = db.get(Classroom, student.class_id)
+            cls = session.get(Classroom, student.class_id)
             if cls and cls.is_graduated:
-                all_errors.append(f"第{row_num}行：学生「{data['name']}」所在班级已毕业，无法导入成绩")
-                continue
+                return ROW_FAIL, [f"第{row_num}行：学生「{data['name']}」所在班级已毕业，无法导入成绩"]
 
         if teacher_student_nos is not None and data["student_no"] not in teacher_student_nos:
-            all_errors.append(f"第{row_num}行：教师只能导入自己班级学生「{data['name']}」的成绩")
-            continue
+            return ROW_FAIL, [f"第{row_num}行：教师只能导入自己班级学生「{data['name']}」的成绩"]
 
-        try:
-            db.add(Score(
-                student_id=student.id,
-                subject=data["subject"],
-                score=float(data["score"]),
-                exam_name=data["exam_name"],
-            ))
-            success += 1
-        except Exception as e:
-            all_errors.append(f"第{row_num}行：导入失败 - {str(e)}")
+        session.add(Score(
+            student_id=student.id,
+            subject=data["subject"],
+            score=float(data["score"]),
+            exam_name=data["exam_name"],
+        ))
+        return ROW_OK, []
 
-    db.commit()
-    audit(db, user, "import_scores", target=f"{file.filename or ''} 成功{success}条")
-
-    db.add(ImportHistory(
+    return run_import(
+        db,
+        user,
+        file,
         import_type="score",
-        filename=file.filename or "",
-        total_rows=total,
-        success_rows=success,
-        error_rows=len(all_errors),
-        errors=json.dumps(all_errors[:100], ensure_ascii=False),
-        user_id=user.id,
-    ))
-    db.commit()
-
-    return {"success": success, "total": total, "errors": all_errors[:50]}
+        audit_action="import_scores",
+        handle_row=handle_row,
+    )

@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -6,6 +6,13 @@ from app.database import Base
 
 class User(Base):
     __tablename__ = "users"
+    # 学生账号 username = 姓名，允许跨班重名；此处只约束「同班不重复」，
+    # 避免同一班级出现两个同名账号导致登录歧义。
+    # class_id 为 NULL 的教师/管理员不受此约束（MySQL 中 NULL 不参与唯一性判定），
+    # 其账号唯一性仍由应用层保证。
+    __table_args__ = (
+        UniqueConstraint("class_id", "username", name="uq_user_class_username"),
+    )
 
     id = Column(Integer, primary_key=True)
     # 学生账号 username = 姓名（可重名），教师/管理员账号学校内唯一

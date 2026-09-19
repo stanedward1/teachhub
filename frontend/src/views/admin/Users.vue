@@ -6,7 +6,7 @@
         placeholder="全部角色"
         clearable
         style="width: 160px"
-        @change="load"
+        @change="reload"
       >
         <el-option label="平台超管" value="super_admin" />
         <el-option label="学校管理员" value="school_admin" />
@@ -18,10 +18,10 @@
         placeholder="搜索姓名/用户名"
         clearable
         style="width: 200px"
-        @keyup.enter="load"
-        @clear="load"
+        @keyup.enter="reload"
+        @clear="reload"
       />
-      <el-button @click="load">查询</el-button>
+      <el-button @click="reload">查询</el-button>
       <div class="spacer"></div>
       <el-button type="primary" @click="openCreate">新增账号</el-button>
     </div>
@@ -125,16 +125,13 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StateView from '../../components/StateView.vue'
+import { useCrudList } from '../../composables/useCrudList'
 import { adminApi, studentApi } from '../../api'
 import { getUser } from '../../utils/auth'
 
-const items = ref([])
 const classes = ref([])
 const role = ref('')
 const keyword = useDebouncedRef('', 300)
-watch(keyword, () => load())
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
@@ -146,6 +143,12 @@ const form = reactive({
   phone: '',
   class_id: null,
 })
+const { items, loading, error, load, reload, remove } = useCrudList(adminApi.users, {
+  removeApi: adminApi.removeUser,
+  buildParams: () => ({ role: role.value, keyword: keyword.value }),
+  removeTip: (row) => `确定删除账号「${row.name}」吗？`,
+})
+watch(keyword, reload)
 
 // 当前登录用户是否为教师（非管理员）
 const currentUser = getUser()
@@ -187,19 +190,6 @@ onMounted(async () => {
   classes.value = res.items
   load()
 })
-
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await adminApi.users({ role: role.value, keyword: keyword.value })
-    items.value = res.items
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
 
 function roleType(r) {
   return { super_admin: 'danger', school_admin: 'warning', teacher: 'primary', student: 'info' }[r]
@@ -256,12 +246,5 @@ async function resetPwd(row) {
   })
   await adminApi.resetPassword(row.id, { password: '123456' })
   ElMessage.success('密码已重置为 123456')
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm(`确定删除账号「${row.name}」吗？`, '提示', { type: 'warning' })
-  await adminApi.removeUser(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 </script>

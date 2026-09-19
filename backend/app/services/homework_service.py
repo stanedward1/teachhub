@@ -291,6 +291,60 @@ def list_submissions(db: Session, assignment_id: int, user: User) -> dict:
     return {"items": items, "total": len(items)}
 
 
+def unsubmitted_students(db: Session, assignment_id: int, user: User) -> dict:
+    """未交名单：作业下发班级中「在籍但尚未提交」的学生。
+
+    统计口径：
+    - **应提交** = 作业下发班级下的全部学生，**排除已退学**（`is_dropped_out`）；
+    - **已提交** = 该作业存在 Submission 记录的学生（跨班提交等异常数据只统计本班在籍部分）；
+    - **未交** = 应提交 − 已提交。
+
+    Args:
+        db: 数据库会话。
+        assignment_id: 作业任务 id。
+        user: 当前用户（教师仅能查看自己负责班级的作业）。
+
+    Returns:
+        ``{ assignment_id, assignment_title, total, submitted_count,
+             unsubmitted_count, items: [{id, name, student_no}] }``
+    """
+    a = db.get(Assignment, assignment_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    # 教师只能查看自己负责班级的作业，管理员/超管不受限
+    _check_teacher_assignment_access(db, user, a)
+
+    students = (
+        db.query(Student)
+        .filter(Student.class_id == a.class_id, Student.is_dropped_out.is_(False))
+        .order_by(Student.student_no)
+        .all()
+    )
+    student_ids = {s.id for s in students}
+
+    # 只取一列，避免加载完整 Submission 对象
+    submitted_ids = {
+        sid
+        for (sid,) in db.query(Submission.student_id)
+        .filter(Submission.assignment_id == assignment_id)
+        .all()
+    }
+
+    missing = [s for s in students if s.id not in submitted_ids]
+
+    return {
+        "assignment_id": a.id,
+        "assignment_title": a.title,
+        "total": len(students),
+        "submitted_count": len(student_ids & submitted_ids),
+        "unsubmitted_count": len(missing),
+        "items": [
+            {"id": s.id, "name": s.name, "student_no": s.student_no}
+            for s in missing
+        ],
+    }
+
+
 def get_submission(db: Session, submission_id: int, user: User) -> dict:
     """获取提交详情（含完整内容 + 教师点评列表）。"""
     s = db.get(Submission, submission_id)

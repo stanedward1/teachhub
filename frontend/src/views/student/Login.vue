@@ -5,7 +5,7 @@
         <div class="brand-mark">S</div>
         <div>
           <h1>StudyHub</h1>
-          <p>在线作业提交平台</p>
+          <p>上机作业提交平台</p>
         </div>
       </div>
 

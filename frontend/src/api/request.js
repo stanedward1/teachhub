@@ -62,10 +62,16 @@ function genKey(config) {
   return [method, url, JSON.stringify(params || {}), JSON.stringify(data || {})].join('&')
 }
 
+// 下载类请求（responseType: 'blob'）不随路由切换取消：
+// 导出/模板下载通常需要较长时间，用户在等待期间切换菜单不应中断文件生成。
+function isDownloadRequest(config) {
+  return config?.responseType === 'blob'
+}
+
 function removePending(config) {
   const key = genKey(config)
   if (pending.has(key)) {
-    pending.get(key).abort()
+    pending.get(key).controller.abort()
     pending.delete(key)
   }
 }
@@ -78,8 +84,38 @@ request.interceptors.request.use((config) => {
   removePending(config)
   const controller = new AbortController()
   config.signal = controller.signal
-  pending.set(genKey(config), controller)
+  pending.set(genKey(config), { controller, keep: isDownloadRequest(config) })
   return config
+})
+
+// ===== 路由级取消：切换路由时撤销上一路由遗留的在途请求 =====
+// 背景：翻页或切换菜单后，上一页面的慢请求仍会 resolve 并把数据写进已切换的视图，
+// 造成脏数据竞态与内存泄漏。此处在导航开始时（beforeEach）统一撤销——
+// 此时新页面尚未发起请求，不会误伤当前路由。
+//
+// 注意：在这里注册守卫而不是让 router/index.js 反向 import 本模块，
+// 是为了避免 request ↔ router 循环依赖（本模块已 import router 用于错误提示与登录跳转）。
+
+/**
+ * 撤销所有在途请求（下载类请求除外）。
+ * 被取消的请求不会弹出错误提示——响应拦截器已对 axios.isCancel 静默处理。
+ *
+ * @returns {number} 实际被取消的请求数
+ */
+export function abortAllPending() {
+  let count = 0
+  for (const [key, item] of pending) {
+    if (item.keep) continue
+    item.controller.abort()
+    pending.delete(key)
+    count += 1
+  }
+  return count
+}
+
+router.beforeEach(() => {
+  abortAllPending()
+  return true
 })
 
 // ===== 401 单飞（single-flight）静默刷新 =====

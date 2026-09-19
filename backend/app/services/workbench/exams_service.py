@@ -1,6 +1,5 @@
 """试卷（文件上传管理）业务逻辑：查询、上传、更新、下载、删除。"""
 import os
-import uuid
 
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
@@ -10,7 +9,10 @@ from app.config import settings
 from app.models import Exam
 from app.schemas import ExamUpdate
 from app.services.workbench._common import audit, to_dict
-from app.utils import safe_filename
+from app.uploads import save_upload
+
+# 试卷允许的文档格式
+_EXAM_EXTS = {".pdf", ".doc", ".docx"}
 
 
 def list_exams(db: Session, keyword: str = "") -> dict:
@@ -29,41 +31,21 @@ def upload_exam(db: Session, user, title: str = "未命名试卷", exam_type: st
 
     original = file.filename or "exam"
     ext = os.path.splitext(original)[1].lower()
-    allowed = {".pdf", ".doc", ".docx"}
-    if ext not in allowed:
-        raise HTTPException(status_code=400, detail=f"仅支持 PDF/Word 格式，当前文件类型：{ext}")
 
-    name = safe_filename(os.path.splitext(original)[0]) + "_" + uuid.uuid4().hex[:8] + ext
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    dest = os.path.join(settings.UPLOAD_DIR, name)
-
-    size = 0
-    chunk_size = 1024 * 1024
-    try:
-        with open(dest, "wb") as f:
-            while True:
-                chunk = file.file.read(chunk_size)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > settings.MAX_UPLOAD_SIZE:
-                    f.close()
-                    os.remove(dest)
-                    raise HTTPException(status_code=413, detail=f"文件过大，最大 {settings.MAX_UPLOAD_SIZE // (1024*1024)}MB")
-                f.write(chunk)
-    except HTTPException:
-        raise
-    except Exception:
-        if os.path.exists(dest):
-            os.remove(dest)
-        raise
+    # 落盘过程与通用上传共用 app.uploads.save_upload（扩展名白名单与错误文案在此表达差异）
+    saved = save_upload(
+        file,
+        allowed_exts=_EXAM_EXTS,
+        type_error_detail=lambda e: f"仅支持 PDF/Word 格式，当前文件类型：{e}",
+        default_name="exam",
+    )
 
     x = Exam(
         title=title.strip() or "未命名试卷",
         exam_type=exam_type,
-        filename=original,
-        filepath=name,
-        filesize=size,
+        filename=saved["filename"],
+        filepath=saved["filepath"],
+        filesize=saved["size"],
         filetype=ext,
     )
     db.add(x)
