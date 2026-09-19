@@ -1,8 +1,13 @@
 # TeachHub API 接口文档
 
-> 更新：2026-09-10 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
+> 更新：2026-09-19 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
 >
-> 认证方式：请求头 `Authorization: Bearer <JWT>`（登录/注册/学校下拉/班级下拉/编程练习无需认证）
+> 认证方式：请求头 `Authorization: Bearer <token>`（登录/注册/注册开关状态/学校下拉/班级下拉/刷新令牌/登出/编程练习无需认证）。
+> 令牌双轨：登录返回的访问令牌字段名为 `token`（短期有效，用于鉴权），另有 `refresh_token`（长期有效，用于换取新令牌对，详见「一、认证」末段）。
+>
+> 链路追踪：所有响应均带 `X-Request-ID` 响应头（请求头传入则透传，否则服务端生成 `uuid4`）；服务端日志每行带 `[rid=...]`，可用该 ID 串联同一请求的全部日志。
+>
+> 规模：**业务接口 136 条**（`/api/**`）+ 7 个非业务端点（`/`、`/health`、`/metrics`、`/docs`、`/redoc`、`/openapi.json`、`/docs/oauth2-redirect`），合计 143 条已注册路由
 
 ## 角色权限说明
 
@@ -17,12 +22,23 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| POST | `/api/auth/login` | 公开 | 登录（限流 5 次/分钟，锁定 5 次/15 分钟） |
-| POST | `/api/auth/register` | 公开 | 学生自助注册（限流 10 次/分钟） |
+| POST | `/api/auth/login` | 公开 | 登录（限流 5 次/分钟，锁定 5 次/15 分钟）；返回 `{token, refresh_token, user, must_change_password}` |
+| POST | `/api/auth/refresh` | 公开 | 用 `refresh_token` 换取新令牌对，返回 `{token, refresh_token, token_type}`（限流 30 次/分钟；失败返回 401） |
+| POST | `/api/auth/logout` | 公开 | 撤销刷新令牌，返回 `{ok: true}`（幂等：重复调用仍返回成功；凭令牌本身即可调用，无需鉴权） |
+| POST | `/api/auth/register` | 公开 | 学生自助注册（限流 10 次/分钟；平台关闭注册时返回 403） |
 | GET | `/api/auth/schools` | 公开 | 启用中学校下拉 |
+| GET | `/api/auth/registration-status` | 公开 | 学生自助注册开关（返回 `{allow_registration: bool}`） |
 | GET | `/api/auth/me` | 登录 | 当前用户信息 |
 | PUT | `/api/auth/password` | 登录 | 修改密码（需旧密码） |
 | POST | `/api/auth/avatar` | 登录 | 上传自己头像 |
+
+**刷新令牌（refresh token）机制**
+
+- **请求体**：`POST /api/auth/refresh` 与 `POST /api/auth/logout` 均接收 `{"refresh_token": "<opaque>"}`，返回 JSON。
+- **存储**：服务端仅存令牌的 `sha256` 摘要（表 `refresh_tokens`：`user_id` / `school_id` / `token_hash` / `expires_at` / `revoked_at` / `replaced_by`，默认有效期 30 天，可用环境变量 `REFRESH_TOKEN_EXPIRE_DAYS` 调整），明文不落库。访问令牌 `token` 有效期由 `ACCESS_TOKEN_EXPIRE_MINUTES` 控制（默认 1440 分钟）。
+- **轮换（rotation）**：每次 `/refresh` 都会签发**新的** `token` + `refresh_token` 令牌对，并立即撤销旧 refresh_token（`replaced_by` 指向新令牌）。旧令牌被重放时返回 401。
+- **前端行为**：`src/api/request.js` 在收到 401（非登录接口）时**静默刷新**并重放原请求一次；并发 401 走**单飞（single-flight）**，共享同一个刷新 Promise，仅发起一次 `/refresh`。刷新失败则清理登录态并跳转登录页。
+- **登出**：应同时调用 `/api/auth/logout` 撤销服务端令牌并清理本地存储；`logout` 为幂等操作。
 
 ## 二、公共 `/api/meta`
 
@@ -169,6 +185,8 @@
 | GET | `/audit-logs/actions` | 登录 | 审计操作类型 |
 | GET | `/audit-logs/stats` | 登录 | 审计行为统计（教师活跃度/操作分布/日趋势） |
 | GET | `/platform/overview` | 超管 | 平台概览 |
+| GET | `/platform/registration` | 超管 | 查询学生自助注册开关 |
+| PUT | `/platform/registration` | 超管 | 设置学生自助注册开关（`{allow_registration: bool}`） |
 
 ## 八、其他
 
@@ -185,6 +203,30 @@
 | POST | `/api/uploads` | 登录 | 通用文件上传 |
 | GET | `/api/mobile/students` | 登录 | 移动端学生速查 |
 | GET | `/api/mobile/students/{id}/overview` | 登录 | 移动端画像概览 |
+
+## 九、运维与可观测性（非 `/api` 前缀）
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/` | 公开 | 服务标识（版本/服务名） |
+| GET | `/health` | 公开 | 健康检查，返回 `{"status": "ok"}` |
+| GET | `/metrics` | 公开 | Prometheus 指标（请求数/状态码分布/耗时直方图/慢请求数/进行中请求数） |
+| GET | `/docs` | 公开 | Swagger UI |
+| GET | `/redoc` | 公开 | ReDoc |
+| GET | `/openapi.json` | 公开 | OpenAPI schema |
+
+> 访问日志：所有请求经 `app/observability.py` 的中间件记录 `方法 + 路径 + 状态码 + 耗时`，写入 `backend/logs/teachhub.log`（按天滚动、保留 30 天）；耗时 ≥ 1s 的请求标记 `[SLOW]` 并提升到 WARN 级别。
+
+## 十、平台级全局配置（`settings` 表）
+
+系统配置统一存于 `settings` 表，用 `school_id` 区分作用域：
+
+| 作用域 | 判定 | 示例键 | 读写接口 |
+| --- | --- | --- | --- |
+| 校内配置 | `school_id = 本校 id` | `school_name`、`semester`、`grade`、`max_upload_size` | `GET /api/settings`、`PUT /api/settings/{key}`（学校管理员及以上） |
+| 平台全局配置 | `school_id IS NULL` | `allow_registration` | `GET/PUT /api/admin/platform/registration`（仅平台超管） |
+
+> 读取统一走 `app/platform_settings.py`（`get_global_setting` / `set_global_setting` / `is_registration_allowed`）：**配置行不存在时按「开放注册」处理**，兼容引入开关之前的既有安装。
 
 ## 统一约定
 

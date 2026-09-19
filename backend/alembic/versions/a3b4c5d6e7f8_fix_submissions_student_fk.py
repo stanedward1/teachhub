@@ -30,6 +30,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # 仅在 MySQL/PostgreSQL 等强制外键的库上生效；SQLite 无此约束则跳过
+    if op.get_bind().dialect.name == "sqlite":
+        return
     # 删除旧外键 submissions_ibfk_2（student_id -> users.id）
     op.execute("ALTER TABLE submissions DROP FOREIGN KEY submissions_ibfk_2")
     # 重建正确外键（student_id -> students.id）
@@ -43,6 +45,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # SQLite 无对应外键操作，跳过
+    if op.get_bind().dialect.name == "sqlite":
+        return
     # 回滚：删新外键，重建旧外键（student_id -> users.id）
     op.execute("ALTER TABLE submissions DROP FOREIGN KEY submissions_student_id_fk")
     op.create_foreign_key(

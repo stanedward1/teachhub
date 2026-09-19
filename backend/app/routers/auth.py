@@ -1,27 +1,28 @@
+"""认证接口路由（B1 分层：仅做参数解析 / 依赖注入 / 调用 service / 返回）。
+
+业务逻辑已下沉到 `app.services.auth_service`；本模块保留 router、limiter
+（`main.py` 引用 `auth.limiter`，必须在此创建）与 `@limiter.limit` 装饰器
+（slowapi 要求限流装饰器挂在路由函数上）。
+
+对外 API 路径 / 字段名 / 状态码 / 中文文案保持不变，仅新增刷新令牌相关接口
+（`POST /api/auth/refresh`、`POST /api/auth/logout`）与登录响应的
+`refresh_token` 字段。
+"""
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.audit import audit
 from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Classroom, School, Student, User
-from app.permissions import get_student_account
-from app.schemas import LoginRequest, PasswordRequest, RegisterRequest
-from app.security import (
-    create_access_token,
-    hash_password,
-    validate_password_strength,
-    verify_password,
-)
-from app.utils import gen_student_no, to_dict
+from app.models import School, User
+from app.platform_settings import is_registration_allowed
+from app.schemas import LoginRequest, PasswordRequest, RefreshRequest, RegisterRequest
+from app.services import auth_service
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -31,208 +32,44 @@ router = APIRouter(prefix="/api/auth", tags=["认证"])
 # （slowapi 要求所有路由共享同一个 Limiter 实例才能正确累计计数）。
 limiter = Limiter(key_func=get_remote_address)
 
-# 登录失败锁定策略
-MAX_FAILED_ATTEMPTS = 5
-LOCK_DURATION_MINUTES = 15
+# 兼容旧引用：`public_user` 已下沉到 service，这里保留别名指向同一实现。
+public_user = auth_service.public_user
 
 
-def _check_locked(user: User):
-    """检查账号是否被锁定，若锁定则抛出 423 错误。"""
-    if user.locked_until:
-        now = datetime.now(timezone.utc)
-        lock_until = user.locked_until
-        if lock_until.tzinfo is None:
-            lock_until = lock_until.replace(tzinfo=timezone.utc)
-        if now < lock_until:
-            remain = int((lock_until - now).total_seconds() // 60) + 1
-            raise HTTPException(status_code=423, detail=f"账号已锁定，请 {remain} 分钟后再试")
-        # 锁定已过期，重置
-        user.locked_until = None
-        user.failed_attempts = 0
-
-
-def _record_failed_login(db: Session, user: User):
-    """记录一次失败登录，达到阈值则锁定。"""
-    user.failed_attempts = (user.failed_attempts or 0) + 1
-    if user.failed_attempts >= MAX_FAILED_ATTEMPTS:
-        user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=LOCK_DURATION_MINUTES)
-        user.failed_attempts = 0
-    db.commit()
-
-
-def _reset_login_state(user: User):
-    """登录成功后重置失败计数和锁定状态。"""
-    if user.failed_attempts or user.locked_until:
-        user.failed_attempts = 0
-        user.locked_until = None
-
-
-def _ensure_school_active(db: Session, user: User):
-    """租户校验：停用学校的账号禁止登录（平台超管不属于任何学校，不受限）。"""
-    if user.school_id is None:
-        return
-    school = db.get(School, user.school_id)
-    if school and school.status != "active":
-        raise HTTPException(status_code=403, detail="所属学校已停用，请联系平台管理员")
-
-
-def _school_active_or_403(db: Session, school_id):
-    """校验学校处于启用状态。"""
-    if not school_id:
-        return
-    school = db.get(School, school_id)
-    if school and school.status != "active":
-        raise HTTPException(status_code=403, detail="该学校已停用，无法进行此操作")
-
-
-def _resolve_login_user(db: Session, payload):
-    """按学校维度定位账号，返回 (user, 失败提示文案)。
-
-    - 学生：school_id + class_id + 姓名
-    - 教师 / 学校管理员：school_id + 用户名
-    - 平台超管：用户名（不属于任何学校）
-    未传 school_id 时回退为全局唯一匹配，命中多个则要求前端选择学校。
-    """
-    if payload.class_id is not None:
-        q = db.query(User).filter(
-            User.role == "student",
-            User.class_id == payload.class_id,
-            User.name == payload.username,
-        )
-        if payload.school_id:
-            q = q.filter(User.school_id == payload.school_id)
-        users = q.all()
-        err = "班级、姓名或密码错误"
-    else:
-        q = db.query(User).filter(User.username == payload.username, User.role != "student")
-        if payload.school_id:
-            q = q.filter(
-                or_(User.school_id == payload.school_id, User.role == "super_admin")
-            )
-        users = q.all()
-        err = "用户名或密码错误"
-    if not users:
-        return None, err
-    if len(users) > 1:
-        raise HTTPException(status_code=409, detail="该账号在多个学校中存在，请先选择学校")
-    return users[0], err
-
-
-def public_user(db: Session, user: User) -> dict:
-    data = to_dict(user)
-    # 剥离敏感字段：密码哈希 + 安全状态
-    data.pop("password_hash", None)
-    data.pop("failed_attempts", None)
-    data.pop("locked_until", None)
-    class_name = None
-    if user.class_id:
-        cls = db.get(Classroom, user.class_id)
-        class_name = cls.name if cls else None
-    data["class_name"] = class_name
-    return data
+def _client_meta(request: Request) -> tuple[str | None, str | None]:
+    """从请求中提取客户端 UA 与 IP，用于记录刷新令牌来源。"""
+    user_agent = request.headers.get("user-agent")
+    client = request.client
+    ip = client.host if client else None
+    return user_agent, ip
 
 
 @router.post("/login")
 @limiter.limit("5/minute")
 def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
-    user, err_msg = _resolve_login_user(db, payload)
-    if not user or not verify_password(payload.password, user.password_hash):
-        if user:
-            _record_failed_login(db, user)
-        raise HTTPException(status_code=401, detail=err_msg)
-
-    # 锁定检查（密码正确也要检查，防止锁定期间绕过）
-    _check_locked(user)
-
-    # 租户校验：停用学校拒绝登录
-    _ensure_school_active(db, user)
-
-    # 退学/毕业学生禁止登录
-    if user.role == "student" and user.class_id:
-        cls = db.get(Classroom, user.class_id)
-        if cls and cls.is_graduated:
-            raise HTTPException(status_code=403, detail="该班级已毕业，无法登录")
-        stu = (
-            db.query(Student)
-            .filter(Student.class_id == user.class_id, Student.name == user.name)
-            .first()
-        )
-        if stu and stu.is_dropped_out:
-            raise HTTPException(status_code=403, detail="该学生已退学，无法登录")
-
-    _reset_login_state(user)
-    db.commit()
-
-    token = create_access_token(subject=str(user.id), role=user.role, school_id=user.school_id)
-    return {
-        "token": token,
-        "user": public_user(db, user),
-        "must_change_password": bool(user.must_change_password),
-    }
-
-
-def _ensure_student_profile(db: Session, class_id: int, name: str) -> Student:
-    """确保「班级 + 姓名」对应的学生档案存在（教师后台花名册的数据源）。"""
-    stu = db.query(Student).filter(Student.class_id == class_id, Student.name == name).first()
-    if stu:
-        return stu
-    cls = db.get(Classroom, class_id)
-    stu = Student(
-        school_id=cls.school_id if cls else None,
-        class_id=class_id,
-        name=name,
-        student_no=gen_student_no(db, Student),
-        gender="男",
-        student_type="day",
-        status="active",
-    )
-    db.add(stu)
-    db.flush()
-    return stu
+    user_agent, ip = _client_meta(request)
+    return auth_service.login(db, payload, user_agent=user_agent, ip=ip)
 
 
 @router.post("/register")
 @limiter.limit("10/minute")
 def register(request: Request, payload: RegisterRequest, db: Session = Depends(get_db)):
     """学生自助注册（仅允许系统中尚不存在「班级+姓名」的学生）。"""
-    name = (payload.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="姓名不能为空")
-    # 未选班级的学生不属于任何班级，教师无法管理，注册时必须选班级
-    if not payload.class_id:
-        raise HTTPException(status_code=400, detail="请选择班级")
+    return auth_service.register(db, payload)
 
-    cls = db.get(Classroom, payload.class_id)
-    if not cls:
-        raise HTTPException(status_code=400, detail="所选班级不存在")
-    # 已毕业班级不可再注册新学生
-    if cls.is_graduated:
-        raise HTTPException(status_code=403, detail="该班级已毕业，无法注册")
-    _school_active_or_403(db, cls.school_id)
 
-    # 校验是否已存在「班级 + 姓名」的学生账号
-    exists = get_student_account(db, payload.class_id, name)
-    if exists:
-        raise HTTPException(status_code=409, detail="该学生已有账号，无需重复注册，请直接登录")
+@router.post("/refresh")
+@limiter.limit("30/minute")
+def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get_db)):
+    """用刷新令牌换取新的令牌对（一次性轮换），无需鉴权。"""
+    user_agent, ip = _client_meta(request)
+    return auth_service.refresh(db, payload.refresh_token, user_agent=user_agent, ip=ip)
 
-    # 同步创建学生档案，否则教师后台（花名册/考勤/作业/成绩）查不到该生
-    student = _ensure_student_profile(db, payload.class_id, name)
 
-    user = User(
-        username=name,  # 用户名 = 姓名
-        password_hash=hash_password(payload.password),
-        name=name,
-        role="student",
-        school_id=cls.school_id,  # 租户归属，缺失会被教师查询的 school_id 过滤掉
-        class_id=payload.class_id,
-    )
-    db.add(user)
-    db.flush()
-    data = public_user(db, user)
-    data["student_id"] = student.id
-    db.commit()
-    token = create_access_token(subject=str(user.id), role=user.role, school_id=user.school_id)
-    return {"token": token, "user": data}
+@router.post("/logout")
+def logout(payload: RefreshRequest, db: Session = Depends(get_db)):
+    """撤销刷新令牌（幂等），无需鉴权。"""
+    return auth_service.logout(db, payload.refresh_token)
 
 
 @router.get("/schools")
@@ -240,6 +77,15 @@ def public_schools(db: Session = Depends(get_db)):
     """登录页学校下拉（无需登录）：仅返回启用中的学校。"""
     rows = db.query(School).filter(School.status == "active").order_by(School.id).all()
     return {"items": [{"id": s.id, "name": s.name, "code": s.code} for s in rows]}
+
+
+@router.get("/registration-status")
+def registration_status(db: Session = Depends(get_db)):
+    """学生登录页拉取注册开关（无需登录）。
+
+    返回 `{"allow_registration": bool}`；缺省视为 True（向后兼容）。
+    """
+    return {"allow_registration": is_registration_allowed(db)}
 
 
 @router.get("/me")
@@ -253,17 +99,7 @@ def change_password(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not verify_password(payload.old_password, user.password_hash):
-        raise HTTPException(status_code=400, detail="原密码不正确")
-    # 密码强度校验
-    err = validate_password_strength(payload.new_password)
-    if err:
-        raise HTTPException(status_code=400, detail=err)
-    user.password_hash = hash_password(payload.new_password)
-    user.must_change_password = False  # 改密后清除强制改密标记
-    audit(db, user, "change_password", target=user.username)
-    db.commit()
-    return {"ok": True}
+    return auth_service.change_password(db, user, payload)
 
 
 _AVATAR_DIR = os.path.join(settings.UPLOAD_DIR, "avatars")

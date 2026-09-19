@@ -4,6 +4,7 @@ import { getToken, getUser, getLastSchoolId, setLastSchoolId } from '../utils/au
 
 const TOKEN_KEY = 'teachhub_token'
 const USER_KEY = 'teachhub_user'
+const REFRESH_TOKEN_KEY = 'refresh_token'
 
 /**
  * 认证状态 store：统一管理 token / 用户信息 / 角色判断 / 学校上下文，
@@ -20,8 +21,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   // 角色判断（响应式）
   const isStudent = computed(() => user.value?.role === 'student')
-  const isTeacher = computed(
-    () => ['teacher', 'school_admin', 'super_admin'].includes(user.value?.role)
+  const isTeacher = computed(() =>
+    ['teacher', 'school_admin', 'super_admin'].includes(user.value?.role)
   )
   const isPlatformAdmin = computed(() => user.value?.role === 'super_admin')
   const isSchoolAdmin = computed(() => user.value?.role === 'school_admin')
@@ -29,11 +30,15 @@ export const useAuthStore = defineStore('auth', () => {
   // 当前用户所属学校（平台超管为 null）
   const schoolId = computed(() => user.value?.school_id ?? null)
 
-  function setAuth(t, u) {
+  function setAuth(t, u, rt) {
     token.value = t
     user.value = u
     localStorage.setItem(TOKEN_KEY, t)
     localStorage.setItem(USER_KEY, JSON.stringify(u))
+    // 仅显式传入时才更新 refresh token，避免误清已有值
+    if (rt !== undefined && rt !== null) {
+      localStorage.setItem(REFRESH_TOKEN_KEY, rt)
+    }
   }
 
   function clearAuth() {
@@ -41,6 +46,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
   }
 
   return {

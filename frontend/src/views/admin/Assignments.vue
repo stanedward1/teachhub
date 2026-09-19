@@ -1,7 +1,13 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-select v-model="classId" placeholder="全部班级" clearable style="width: 200px" @change="load">
+      <el-select
+        v-model="classId"
+        placeholder="全部班级"
+        clearable
+        style="width: 200px"
+        @change="load"
+      >
         <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
       </el-select>
       <div class="spacer"></div>
@@ -9,19 +15,33 @@
     </div>
 
     <div class="page-card">
-      <el-table :data="items" v-loading="loading" style="width: 100%">
-        <el-table-column prop="title" label="任务标题" min-width="180" />
-        <el-table-column prop="class_name" label="下发班级" width="150" />
-        <el-table-column prop="deadline" label="截止时间" width="170" />
-        <el-table-column prop="submission_count" label="提交数" width="90" />
-        <el-table-column label="操作" width="220" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="$router.push(`/admin/homework/${row.id}/submissions`)">审阅</el-button>
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="remove(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <StateView
+        :loading="loading"
+        :error="error"
+        :empty="!items.length"
+        :columns="5"
+        empty-description="暂无作业"
+        @retry="load"
+      >
+        <el-table :data="items" v-loading="loading" style="width: 100%">
+          <el-table-column prop="title" label="任务标题" min-width="180" />
+          <el-table-column prop="class_name" label="下发班级" width="150" />
+          <el-table-column prop="deadline" label="截止时间" width="170" />
+          <el-table-column prop="submission_count" label="提交数" width="90" />
+          <el-table-column label="操作" width="220" fixed="right">
+            <template #default="{ row }">
+              <el-button
+                link
+                type="primary"
+                @click="$router.push(`/admin/homework/${row.id}/submissions`)"
+                >审阅</el-button
+              >
+              <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button link type="danger" @click="remove(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </StateView>
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑任务' : '新建任务'" width="760px">
@@ -35,7 +55,13 @@
           </el-select>
         </el-form-item>
         <el-form-item label="截止时间">
-          <el-date-picker v-model="form.deadline" type="datetime" placeholder="选择截止时间" style="width: 100%" value-format="YYYY-MM-DD HH:mm" />
+          <el-date-picker
+            v-model="form.deadline"
+            type="datetime"
+            placeholder="选择截止时间"
+            style="width: 100%"
+            value-format="YYYY-MM-DD HH:mm"
+          />
         </el-form-item>
         <el-form-item label="简介">
           <el-input v-model="form.description" type="textarea" :rows="2" />
@@ -49,7 +75,9 @@
               <el-button>上传附件</el-button>
             </el-upload>
             <div v-for="(att, i) in form.attachments" :key="i" class="attach-item">
-              <el-link type="primary" :href="'/uploads/' + att.filepath" target="_blank">{{ att.filename }}</el-link>
+              <el-link type="primary" :href="'/uploads/' + att.filepath" target="_blank">{{
+                att.filename
+              }}</el-link>
               <el-button link type="danger" @click="removeAttachment(i)">移除</el-button>
             </div>
           </div>
@@ -67,16 +95,26 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
+import StateView from '../../components/StateView.vue'
 import { homeworkApi, metaApi, uploadFile } from '../../api'
 
 const items = ref([])
 const classes = ref([])
 const classId = ref(null)
 const loading = ref(false)
+const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
-const form = reactive({ title: '', description: '', content: '', deadline: null, class_id: null, short_name: '', attachments: [] })
+const form = reactive({
+  title: '',
+  description: '',
+  content: '',
+  deadline: null,
+  class_id: null,
+  short_name: '',
+  attachments: [],
+})
 
 onMounted(async () => {
   const res = await metaApi.classes()
@@ -86,10 +124,12 @@ onMounted(async () => {
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const res = await homeworkApi.assignments(classId.value ? { class_id: classId.value } : {})
     items.value = res.items
   } catch (e) {
+    error.value = true
   } finally {
     loading.value = false
   }
@@ -97,7 +137,15 @@ async function load() {
 
 function openCreate() {
   editing.value = null
-  Object.assign(form, { title: '', description: '', content: '', deadline: null, class_id: classId.value, short_name: '', attachments: [] })
+  Object.assign(form, {
+    title: '',
+    description: '',
+    content: '',
+    deadline: null,
+    class_id: classId.value,
+    short_name: '',
+    attachments: [],
+  })
   dialog.value = true
 }
 
@@ -110,7 +158,10 @@ function openEdit(row) {
     deadline: row.deadline,
     class_id: row.class_id,
     short_name: row.short_name,
-    attachments: (row.attachments || []).map(a => ({ filename: a.filename, filepath: a.filepath }))
+    attachments: (row.attachments || []).map((a) => ({
+      filename: a.filename,
+      filepath: a.filepath,
+    })),
   })
   dialog.value = true
 }

@@ -3,9 +3,22 @@ import { getActivePinia } from 'pinia'
 const TOKEN_KEY = 'teachhub_token'
 const USER_KEY = 'teachhub_user'
 const SCHOOL_KEY = 'teachhub_school_id'
+// 刷新令牌：与 access token 分开持久化，供 401 静默刷新使用
+const REFRESH_TOKEN_KEY = 'refresh_token'
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY)
+}
+
+/** 读取持久化的刷新令牌（无则返回 null） */
+export function getRefreshToken() {
+  return localStorage.getItem(REFRESH_TOKEN_KEY)
+}
+
+/** 写入 / 清除刷新令牌（传入空值时清除） */
+export function setRefreshToken(token) {
+  if (token) localStorage.setItem(REFRESH_TOKEN_KEY, token)
+  else localStorage.removeItem(REFRESH_TOKEN_KEY)
 }
 
 export function getUser() {
@@ -16,15 +29,27 @@ export function getUser() {
   }
 }
 
-export function setAuth(token, user) {
+/**
+ * 写入登录态。
+ *
+ * @param {string} token        access token
+ * @param {object} user         用户信息
+ * @param {string} [refreshToken] 刷新令牌；仅当显式传入（非 null/undefined）时才更新，
+ *                                以免既有调用方（改密 / 头像等）误清除已有的 refresh token。
+ */
+export function setAuth(token, user, refreshToken) {
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(USER_KEY, JSON.stringify(user))
+  if (refreshToken !== undefined && refreshToken !== null) {
+    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+  }
   _syncStore()
 }
 
 export function clearAuth() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
+  localStorage.removeItem(REFRESH_TOKEN_KEY)
   _syncStore()
 }
 

@@ -27,6 +27,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # 仅在 MySQL/PostgreSQL 等支持 ALTER 约束的库上生效；SQLite 不支持，跳过
+    if op.get_bind().dialect.name == "sqlite":
+        return
     op.drop_constraint('assignment_attachments_ibfk_1', 'assignment_attachments', type_='foreignkey')
     op.create_foreign_key('assignment_attachments_ibfk_1', 'assignment_attachments', 'assignments', ['assignment_id'], ['id'], ondelete='CASCADE')
     op.drop_constraint('submissions_ibfk_1', 'submissions', type_='foreignkey')
@@ -62,6 +65,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 仅在 MySQL/PostgreSQL 等支持 ALTER 约束的库上生效；SQLite 不支持，跳过
+    if op.get_bind().dialect.name == "sqlite":
+        return
     op.drop_constraint('talks_ibfk_1', 'talks', type_='foreignkey')
     op.create_foreign_key('talks_ibfk_1', 'talks', 'students', ['student_id'], ['id'], ondelete='RESTRICT')
     op.drop_constraint('submissions_student_id_fk', 'submissions', type_='foreignkey')

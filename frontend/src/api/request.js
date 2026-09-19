@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { showToast } from 'vant'
-import { clearAuth, getToken } from '../utils/auth'
+import { clearAuth, getToken, getRefreshToken, getUser, setAuth } from '../utils/auth'
 import router from '../router'
 
 // 归一化后端返回的 detail：可能是 string / 数组（Pydantic 校验）/ 对象，统一转为可读文案
@@ -30,9 +30,27 @@ function notifyError(message) {
   }
 }
 
+// 会话过期后跳转对应端的登录页（保持既有路径规则不变）
+function redirectToLogin() {
+  const p = router.currentRoute.value.path
+  const loginPath = p.startsWith('/m')
+    ? '/m/login'
+    : p.startsWith('/admin')
+      ? '/admin/login'
+      : '/login'
+  router.push(loginPath)
+}
+
 const request = axios.create({
   baseURL: '',
-  timeout: 30000
+  timeout: 30000,
+})
+
+// 静默刷新专用的「裸」实例：不挂任何拦截器，
+// 避免刷新请求自身返回 401 时再次触发「401 → 刷新」的递归。
+const refreshClient = axios.create({
+  baseURL: '',
+  timeout: 30000,
 })
 
 // ===== 并发去重：相同「方法+URL+参数」的重复请求，取消前一个 =====
@@ -64,6 +82,40 @@ request.interceptors.request.use((config) => {
   return config
 })
 
+// ===== 401 单飞（single-flight）静默刷新 =====
+// 同一时刻只允许一个刷新在途；刷新期间并发到达的 401 请求共享同一个 Promise，
+// 避免并发多次刷新把服务端的 refresh token 轮换打乱。
+let refreshPromise = null
+
+/**
+ * 触发一次静默刷新。
+ *
+ * 刷新成功 → 更新本地 access/refresh token，resolve 新的 access token；
+ * 刷新失败（401 / 网络错误）或本地无 refresh token → reject。
+ *
+ * @returns {Promise<string>} 新的 access token
+ */
+function doSilentRefresh() {
+  if (refreshPromise) return refreshPromise
+
+  const rt = getRefreshToken()
+  if (!rt) return Promise.reject(new Error('NO_REFRESH_TOKEN'))
+
+  refreshPromise = refreshClient
+    .post('/api/auth/refresh', { refresh_token: rt })
+    .then((res) => res.data)
+    .then((data) => {
+      // 保留既有用户信息，仅替换两个 token；setAuth 内部会同步 Pinia store
+      setAuth(data.token, getUser(), data.refresh_token)
+      return data.token
+    })
+    .finally(() => {
+      refreshPromise = null
+    })
+
+  return refreshPromise
+}
+
 request.interceptors.response.use(
   (response) => {
     removePending(response.config)
@@ -89,13 +141,31 @@ request.interceptors.response.use(
       if (isLoginRequest) {
         // 登录接口返回 401 = 用户名或密码错误，展示真实原因，不做跳转/清空
         notifyError(normalizeDetail(detail, '用户名或密码错误'))
+      } else if (!error.config?._retried && getRefreshToken()) {
+        // 其他接口 401 = access token 过期：尝试一次静默刷新后重放原请求
+        const originalConfig = error.config
+        return doSilentRefresh().then(
+          (newToken) => {
+            // 重放原请求（仅一次）：打标防重入，并清掉旧的并发去重占位
+            originalConfig._retried = true
+            removePending(originalConfig)
+            originalConfig.headers = originalConfig.headers || {}
+            originalConfig.headers.Authorization = `Bearer ${newToken}`
+            return request(originalConfig)
+          },
+          () => {
+            // 仅「刷新失败」才清空并跳登录；重放请求自身的错误按原样向上抛，不在此处理
+            clearAuth()
+            notifyError('登录已过期，请重新登录')
+            redirectToLogin()
+            return Promise.reject(error)
+          }
+        )
       } else {
-        // 其他接口 401 = 会话过期
+        // 无 refresh token / 已重试过 = 会话过期，走原有兜底逻辑
         clearAuth()
         notifyError('登录已过期，请重新登录')
-        const p = router.currentRoute.value.path
-        const loginPath = p.startsWith('/m') ? '/m/login' : p.startsWith('/admin') ? '/admin/login' : '/login'
-        router.push(loginPath)
+        redirectToLogin()
       }
     } else if (status === 403) {
       notifyError(normalizeDetail(detail, '无权限执行此操作'))

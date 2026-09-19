@@ -38,17 +38,19 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { useLogout } from '../composables/useLogout'
 
 document.title = 'StudyHub'
 
 const router = useRouter()
 const auth = useAuthStore()
+const logout = useLogout()
 const user = computed(() => auth.user)
 
 function onCommand(cmd) {
   if (cmd === 'logout') {
-    auth.clearAuth()
-    router.push('/login')
+    // 撤销服务端刷新令牌后再清理本地登录态
+    logout('/login')
   } else if (cmd === 'profile') {
     router.push('/profile')
   }

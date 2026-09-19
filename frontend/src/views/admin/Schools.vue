@@ -26,34 +26,43 @@
     </div>
 
     <!-- 列表 -->
-    <el-table :data="items" v-loading="loading" border>
-      <el-table-column prop="name" label="学校名称" min-width="180" />
-      <el-table-column prop="code" label="代码" width="120" />
-      <el-table-column label="状态" width="100">
-        <template #default="{ row }">
-          <el-tag :type="row.status === 'active' ? 'success' : 'info'">
-            {{ row.status === 'active' ? '启用' : '停用' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="class_count" label="班级" width="80" align="center" />
-      <el-table-column prop="student_count" label="学生" width="80" align="center" />
-      <el-table-column prop="teacher_count" label="教师" width="80" align="center" />
-      <el-table-column prop="phone" label="电话" min-width="140" />
-      <el-table-column label="操作" width="180" fixed="right">
-        <template #default="{ row }">
-          <el-button
-            size="small"
-            :type="row.status === 'active' ? 'warning' : 'success'"
-            @click="toggleStatus(row)"
-          >
-            {{ row.status === 'active' ? '停用' : '启用' }}
-          </el-button>
-          <el-button size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="removeSchool(row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <StateView
+      :loading="loading"
+      :error="error"
+      :empty="!items.length"
+      :columns="8"
+      empty-description="暂无学校"
+      @retry="load"
+    >
+      <el-table :data="items" v-loading="loading" border>
+        <el-table-column prop="name" label="学校名称" min-width="180" />
+        <el-table-column prop="code" label="代码" width="120" />
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 'active' ? 'success' : 'info'">
+              {{ row.status === 'active' ? '启用' : '停用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="class_count" label="班级" width="80" align="center" />
+        <el-table-column prop="student_count" label="学生" width="80" align="center" />
+        <el-table-column prop="teacher_count" label="教师" width="80" align="center" />
+        <el-table-column prop="phone" label="电话" min-width="140" />
+        <el-table-column label="操作" width="180" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              :type="row.status === 'active' ? 'warning' : 'success'"
+              @click="toggleStatus(row)"
+            >
+              {{ row.status === 'active' ? '停用' : '启用' }}
+            </el-button>
+            <el-button size="small" @click="openEdit(row)">编辑</el-button>
+            <el-button size="small" type="danger" @click="removeSchool(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </StateView>
 
     <!-- 新增/编辑对话框 -->
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑学校' : '开通学校'" width="520px">
@@ -94,9 +103,11 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import StateView from '../../components/StateView.vue'
 import { schoolApi, adminApi } from '../../api'
 
 const loading = ref(false)
+const error = ref(false)
 const saving = ref(false)
 const items = ref([])
 const overview = ref({})
@@ -105,18 +116,25 @@ const isEdit = ref(false)
 const editId = ref(null)
 
 const emptyForm = () => ({
-  name: '', code: '', address: '', phone: '',
-  admin_username: '', admin_name: '', admin_password: ''
+  name: '',
+  code: '',
+  address: '',
+  phone: '',
+  admin_username: '',
+  admin_name: '',
+  admin_password: '',
 })
 const form = reactive(emptyForm())
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const [s, o] = await Promise.all([schoolApi.list(), adminApi.platformOverview()])
     items.value = s.items || []
     overview.value = o
   } catch (e) {
+    error.value = true
   } finally {
     loading.value = false
   }
@@ -133,8 +151,13 @@ function openEdit(row) {
   isEdit.value = true
   editId.value = row.id
   Object.assign(form, {
-    name: row.name, code: row.code, address: row.address, phone: row.phone,
-    admin_username: '', admin_name: '', admin_password: ''
+    name: row.name,
+    code: row.code,
+    address: row.address,
+    phone: row.phone,
+    admin_username: '',
+    admin_name: '',
+    admin_password: '',
   })
   dialogVisible.value = true
 }
@@ -145,7 +168,9 @@ async function saveSchool() {
   try {
     if (isEdit.value) {
       await schoolApi.update(editId.value, {
-        name: form.name, address: form.address, phone: form.phone
+        name: form.name,
+        address: form.address,
+        phone: form.phone,
       })
       ElMessage.success('已保存')
     } else {

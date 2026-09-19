@@ -23,15 +23,32 @@
         </el-form-item>
         <el-form-item>
           <el-input v-model="form.username" placeholder="用户名" size="large">
-            <template #prefix><el-icon><User /></el-icon></template>
+            <template #prefix
+              ><el-icon><User /></el-icon
+            ></template>
           </el-input>
         </el-form-item>
         <el-form-item>
-          <el-input v-model="form.password" type="password" placeholder="密码" size="large" show-password @keyup.enter="doLogin">
-            <template #prefix><el-icon><Lock /></el-icon></template>
+          <el-input
+            v-model="form.password"
+            type="password"
+            placeholder="密码"
+            size="large"
+            show-password
+            @keyup.enter="doLogin"
+          >
+            <template #prefix
+              ><el-icon><Lock /></el-icon
+            ></template>
           </el-input>
         </el-form-item>
-        <el-button type="primary" size="large" style="width: 100%" :loading="loading" @click="doLogin">
+        <el-button
+          type="primary"
+          size="large"
+          style="width: 100%"
+          :loading="loading"
+          @click="doLogin"
+        >
           进入后台
         </el-button>
       </el-form>
@@ -74,12 +91,12 @@ async function doLogin() {
   try {
     const res = await authApi.login({
       ...form,
-      school_id: schoolId.value || undefined
+      school_id: schoolId.value || undefined,
     })
     if (res.user.role === 'student') {
       return ElMessage.error('学生账号请从学生端登录')
     }
-    setAuth(res.token, res.user)
+    setAuth(res.token, res.user, res.refresh_token)
     if (res.must_change_password) {
       ElMessage.warning('首次登录或密码已重置，请修改密码后再使用')
       router.push('/admin/change-password?first=1')

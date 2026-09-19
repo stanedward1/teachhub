@@ -10,26 +10,37 @@
 
     <div class="page-card">
       <div v-if="!classId" class="empty">请先选择班级</div>
-      <table v-else class="schedule-table" v-loading="loading">
-        <thead>
-          <tr>
-            <th>节次</th>
-            <th v-for="d in days" :key="d">周{{ d }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="p in 6" :key="p">
-            <td class="period">第{{ p }}节</td>
-            <td v-for="d in 5" :key="d" class="cell" @click="openEdit(cell(p, d))">
-              <template v-if="cell(p, d)">
-                <div class="subject">{{ cell(p, d).subject }}</div>
-                <div class="teacher">{{ cell(p, d).teacher_name }}</div>
-              </template>
-              <span v-else class="plus">+</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- 说明：刻意不传 :empty —— 空课表本身就是「点 + 号添加课程」的交互区，不能换成空态占位 -->
+      <StateView
+        v-else
+        :loading="loading"
+        :error="error"
+        :rows="6"
+        :columns="6"
+        error-description="课程表加载失败"
+        @retry="load"
+      >
+        <table class="schedule-table" v-loading="loading">
+          <thead>
+            <tr>
+              <th>节次</th>
+              <th v-for="d in days" :key="d">周{{ d }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in 6" :key="p">
+              <td class="period">第{{ p }}节</td>
+              <td v-for="d in 5" :key="d" class="cell" @click="openEdit(cell(p, d))">
+                <template v-if="cell(p, d)">
+                  <div class="subject">{{ cell(p, d).subject }}</div>
+                  <div class="teacher">{{ cell(p, d).teacher_name }}</div>
+                </template>
+                <span v-else class="plus">+</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </StateView>
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑课程' : '添加课程'" width="420px">
@@ -60,12 +71,14 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { scheduleApi, studentApi } from '../../api'
+import StateView from '../../components/StateView.vue'
 
 const days = ['一', '二', '三', '四', '五']
 const classes = ref([])
 const classId = ref(null)
 const items = ref([])
 const loading = ref(false)
+const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
@@ -79,10 +92,12 @@ onMounted(async () => {
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const res = await scheduleApi.list({ class_id: classId.value })
     items.value = res.items
   } catch (e) {
+    error.value = true
   } finally {
     loading.value = false
   }
@@ -101,7 +116,12 @@ function openAdd() {
 function openEdit(c) {
   if (!c) return openAdd()
   editing.value = c
-  Object.assign(form, { day_of_week: c.day_of_week, period: c.period, subject: c.subject, teacher_name: c.teacher_name })
+  Object.assign(form, {
+    day_of_week: c.day_of_week,
+    period: c.period,
+    subject: c.subject,
+    teacher_name: c.teacher_name,
+  })
   dialog.value = true
 }
 

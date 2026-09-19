@@ -3,55 +3,77 @@
     <h2 class="page-title">优秀作品</h2>
     <p class="page-subtitle">老师评选的优秀作业，互相学习、评论互动</p>
 
-    <div v-if="loading" class="empty">加载中…</div>
-    <div v-else-if="items.length === 0" class="empty">暂无优秀作品</div>
-
-    <div v-else class="grid">
-      <el-card v-for="e in items" :key="e.id" class="card" shadow="hover" @click="$router.push(`/excellent/${e.id}`)">
-        <!-- 作品标题（任务维度） -->
-        <div class="work-title">
-          <el-icon class="title-icon"><Document /></el-icon>
-          <span>{{ e.assignment_title || '优秀作业' }}</span>
-        </div>
-
-        <!-- 作品内容预览（核心） -->
-        <div class="work-preview">{{ preview(e.submission?.content) }}</div>
-
-        <!-- 作者与互动（次要信息） -->
-        <div class="work-footer">
-          <div class="author">
-            <el-avatar :size="22" :src="e.student_avatar">{{ e.student_name?.[0] }}</el-avatar>
-            <span class="author-name">{{ e.student_name }}</span>
-            <span class="author-cls">{{ e.class_name }}</span>
+    <StateView
+      :loading="loading"
+      :error="error"
+      :empty="!items.length"
+      :rows="5"
+      :columns="3"
+      empty-description="暂无优秀作品"
+      @retry="load"
+    >
+      <div class="grid">
+        <el-card
+          v-for="e in items"
+          :key="e.id"
+          class="card"
+          shadow="hover"
+          @click="$router.push(`/excellent/${e.id}`)"
+        >
+          <!-- 作品标题（任务维度） -->
+          <div class="work-title">
+            <el-icon class="title-icon"><Document /></el-icon>
+            <span>{{ e.assignment_title || '优秀作业' }}</span>
           </div>
-          <div class="work-meta">
-            <span v-if="e.note" class="note" :title="e.note">
-              <el-icon><Star /></el-icon>{{ e.note }}
-            </span>
-            <span class="comments"><el-icon><ChatDotRound /></el-icon>{{ e.comment_count }}</span>
+
+          <!-- 作品内容预览（核心） -->
+          <div class="work-preview">{{ preview(e.submission?.content) }}</div>
+
+          <!-- 作者与互动（次要信息） -->
+          <div class="work-footer">
+            <div class="author">
+              <el-avatar :size="22" :src="e.student_avatar">{{ e.student_name?.[0] }}</el-avatar>
+              <span class="author-name">{{ e.student_name }}</span>
+              <span class="author-cls">{{ e.class_name }}</span>
+            </div>
+            <div class="work-meta">
+              <span v-if="e.note" class="note" :title="e.note">
+                <el-icon><Star /></el-icon>{{ e.note }}
+              </span>
+              <span class="comments"
+                ><el-icon><ChatDotRound /></el-icon>{{ e.comment_count }}</span
+              >
+            </div>
           </div>
-        </div>
-      </el-card>
-    </div>
+        </el-card>
+      </div>
+    </StateView>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import StateView from '../../components/StateView.vue'
 import { homeworkApi } from '../../api'
 
 const items = ref([])
 const loading = ref(true)
+const error = ref(false)
 
-onMounted(async () => {
+async function load() {
+  loading.value = true
+  error.value = false
   try {
     const res = await homeworkApi.excellent()
     items.value = res.items
   } catch (e) {
+    error.value = true
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(load)
 
 // 将 Markdown 正文转为纯文本预览（突出作品内容本身）
 function preview(md) {

@@ -27,6 +27,7 @@ from app.models.classlog import (
     StudentComment,
 )
 from app.models.operation_log import OperationLog
+from app.models.refresh_token import RefreshToken
 
 __all__ = [
     "User",
@@ -62,4 +63,5 @@ __all__ = [
     "Performance",
     "StudentComment",
     "OperationLog",
+    "RefreshToken",
 ]

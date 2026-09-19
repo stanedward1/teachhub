@@ -23,8 +23,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_index('ix_users_role', 'users', ['role'])
+    # 幂等：ix_users_role 可能已由更早的 f2c3d4e5a6b7（高频过滤字段索引）创建
+    inspector = sa.inspect(op.get_bind())
+    existing = {ix.get("name") for ix in inspector.get_indexes("users")}
+    if "ix_users_role" not in existing:
+        op.create_index('ix_users_role', 'users', ['role'])
 
 
 def downgrade() -> None:
-    op.drop_index('ix_users_role', table_name='users')
+    inspector = sa.inspect(op.get_bind())
+    existing = {ix.get("name") for ix in inspector.get_indexes("users")}
+    if "ix_users_role" in existing:
+        op.drop_index('ix_users_role', table_name='users')

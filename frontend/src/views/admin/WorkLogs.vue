@@ -7,26 +7,47 @@
     </div>
 
     <div class="page-card">
-      <el-table :data="items" v-loading="loading" style="width: 100%">
-        <el-table-column prop="date" label="日期" width="130" />
-        <el-table-column label="内容预览" min-width="300">
-          <template #default="{ row }">{{ (row.content || '').replace(/[#*`]/g, '').slice(0, 80) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="preview(row)">查看</el-button>
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="remove(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
+      <StateView
+        :loading="loading"
+        :error="error"
+        :empty="!items.length"
+        :columns="3"
+        empty-description="暂无工作日志"
+        @retry="load"
+      >
+        <el-table :data="items" v-loading="loading" style="width: 100%">
+          <el-table-column prop="date" label="日期" width="130" />
+          <el-table-column label="内容预览" min-width="300">
+            <template #default="{ row }">{{
+              (row.content || '').replace(/[#*`]/g, '').slice(0, 80)
+            }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="160" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="preview(row)">查看</el-button>
+              <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button link type="danger" @click="remove(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </StateView>
+      <PaginationBar
+        v-model:page="page"
+        v-model:page-size="pageSize"
+        :total="total"
+        @change="load"
+      />
     </div>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑日志' : '写日志'" width="820px">
       <el-form label-width="60px">
         <el-form-item label="日期">
-          <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" style="width: 200px" />
+          <el-date-picker
+            v-model="form.date"
+            type="date"
+            value-format="YYYY-MM-DD"
+            style="width: 200px"
+          />
         </el-form-item>
         <el-form-item label="内容">
           <MarkdownEditor v-model="form.content" />
@@ -51,6 +72,7 @@ import Markdown from '../../components/Markdown.vue'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
+import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
 import { workLogApi } from '../../api'
 
@@ -61,6 +83,7 @@ const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
 const loading = ref(false)
+const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
@@ -72,11 +95,13 @@ onMounted(load)
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const res = await workLogApi.list({ page: page.value, page_size: pageSize.value })
     rawItems.value = res.items
     total.value = res.total
   } catch (e) {
+    error.value = true
   } finally {
     loading.value = false
   }

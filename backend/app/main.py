@@ -12,16 +12,20 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
 from app.database import run_migrations
+from app.logging_config import (
+    RequestIdFilter,
+    StructuredFormatter,
+    setup_logging,
+)
 from app.observability import render_metrics, request_logging_middleware
 from app.routers import admin, attendance, auth, classlog, homework, meta, mobile, students, uploads, workbench
 from app.security import decode_token
 from app.tenant import reset_tenant, set_tenant  # 导入即注册 ORM 租户隔离事件
 
-# 基础日志配置
+# 基础日志配置（结构化单行日志 + request-id）
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
-_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
-logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
+setup_logging()
 
 
 def _setup_file_logging() -> None:
@@ -40,7 +44,8 @@ def _setup_file_logging() -> None:
         backupCount=30,
         encoding="utf-8",
     )
-    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    handler.setFormatter(StructuredFormatter())
+    handler.addFilter(RequestIdFilter())
     handler.setLevel(logging.INFO)
 
     root = logging.getLogger()
@@ -54,6 +59,10 @@ def _setup_file_logging() -> None:
     access.setLevel(logging.INFO)
     if not any(isinstance(h, TimedRotatingFileHandler) for h in access.handlers):
         access.addHandler(handler)
+
+    # 迁移（alembic fileConfig）会重置 root handler/level，这里重新统一安装，
+    # 确保控制台 handler 也带结构化 formatter + request-id filter。
+    setup_logging()
 
 
 logger = logging.getLogger("teachhub")

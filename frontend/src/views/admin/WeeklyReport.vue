@@ -1,7 +1,12 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-select v-model="classId" placeholder="选择班级" style="width: 200px" @change="onClassChange">
+      <el-select
+        v-model="classId"
+        placeholder="选择班级"
+        style="width: 200px"
+        @change="onClassChange"
+      >
         <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
       </el-select>
       <el-date-picker
@@ -21,63 +26,79 @@
     </div>
 
     <!-- 数据概览面板 -->
-    <div class="page-card" v-if="weeklyData">
-      <h3 class="card-title">班级数据概览</h3>
-      <el-row :gutter="16">
-        <el-col :xs="12" :sm="6" v-for="s in dataCards" :key="s.label">
-          <div class="data-card">
-            <div class="data-card-value">{{ s.value }}</div>
-            <div class="data-card-label">{{ s.label }}</div>
-          </div>
-        </el-col>
-      </el-row>
-      <!-- 积分排行 -->
-      <el-row :gutter="16" style="margin-top: 16px;">
-        <el-col :xs="24" :md="12">
-          <div class="card-title">积分 TOP 5</div>
-          <div v-for="(s, i) in weeklyData.top5" :key="i" class="rank-item">
-            <span class="rank-num" :class="'rank-' + (i + 1)">{{ i + 1 }}</span>
-            <span>{{ s.name }}</span>
-            <span class="rank-points">+{{ s.points }}</span>
-          </div>
-          <div v-if="!weeklyData.top5.length" class="empty-state">暂无数据</div>
-        </el-col>
-        <el-col :xs="24" :md="12">
-          <div class="card-title">待关注学生</div>
-          <div v-for="(s, i) in weeklyData.bottom5" :key="i" class="rank-item">
-            <span class="rank-num warn">{{ i + 1 }}</span>
-            <span>{{ s.name }}</span>
-            <span class="rank-points" style="color: #ef4444;">{{ s.points }}</span>
-          </div>
-          <div v-if="!weeklyData.bottom5.length" class="empty-state">暂无数据</div>
-        </el-col>
-      </el-row>
-      <!-- 近期表现 -->
-      <div style="margin-top: 16px;" v-if="weeklyData.recent_performances?.length">
-        <div class="card-title">近期表现记录</div>
-        <el-table :data="weeklyData.recent_performances" size="small" max-height="240">
-          <el-table-column prop="student_name" label="学生" width="100" />
-          <el-table-column label="类型" width="80">
-            <template #default="{ row }">
-              <el-tag :type="row.ptype === '积极' ? 'success' : 'danger'" size="small">{{ row.ptype }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="content" label="内容" min-width="200" />
-        </el-table>
+    <StateView
+      :loading="loading"
+      :error="error"
+      error-description="周报数据加载失败"
+      @retry="loadWeeklyData"
+    >
+      <template #skeleton>
+        <el-skeleton :rows="6" animated />
+      </template>
+      <div class="page-card" v-if="weeklyData">
+        <h3 class="card-title">班级数据概览</h3>
+        <el-row :gutter="16">
+          <el-col :xs="12" :sm="6" v-for="s in dataCards" :key="s.label">
+            <div class="data-card">
+              <div class="data-card-value">{{ s.value }}</div>
+              <div class="data-card-label">{{ s.label }}</div>
+            </div>
+          </el-col>
+        </el-row>
+        <!-- 积分排行 -->
+        <el-row :gutter="16" style="margin-top: 16px">
+          <el-col :xs="24" :md="12">
+            <div class="card-title">积分 TOP 5</div>
+            <div v-for="(s, i) in weeklyData.top5" :key="i" class="rank-item">
+              <span class="rank-num" :class="'rank-' + (i + 1)">{{ i + 1 }}</span>
+              <span>{{ s.name }}</span>
+              <span class="rank-points">+{{ s.points }}</span>
+            </div>
+            <div v-if="!weeklyData.top5.length" class="empty-state">暂无数据</div>
+          </el-col>
+          <el-col :xs="24" :md="12">
+            <div class="card-title">待关注学生</div>
+            <div v-for="(s, i) in weeklyData.bottom5" :key="i" class="rank-item">
+              <span class="rank-num warn">{{ i + 1 }}</span>
+              <span>{{ s.name }}</span>
+              <span class="rank-points" style="color: #ef4444">{{ s.points }}</span>
+            </div>
+            <div v-if="!weeklyData.bottom5.length" class="empty-state">暂无数据</div>
+          </el-col>
+        </el-row>
+        <!-- 近期表现 -->
+        <div style="margin-top: 16px" v-if="weeklyData.recent_performances?.length">
+          <div class="card-title">近期表现记录</div>
+          <el-table :data="weeklyData.recent_performances" size="small" max-height="240">
+            <el-table-column prop="student_name" label="学生" width="100" />
+            <el-table-column label="类型" width="80">
+              <template #default="{ row }">
+                <el-tag :type="row.ptype === '积极' ? 'success' : 'danger'" size="small">{{
+                  row.ptype
+                }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="content" label="内容" min-width="200" />
+          </el-table>
+        </div>
       </div>
-    </div>
+    </StateView>
 
     <!-- 报告编辑区 -->
     <div class="page-card" v-if="reportContent !== null">
       <h3 class="card-title">报告编辑</h3>
-      <el-input v-model="reportTitle" placeholder="报告标题" style="margin-bottom: 12px; font-size: 16px; font-weight: 600;" />
+      <el-input
+        v-model="reportTitle"
+        placeholder="报告标题"
+        style="margin-bottom: 12px; font-size: 16px; font-weight: 600"
+      />
       <el-input
         v-model="reportContent"
         type="textarea"
         :rows="16"
         placeholder="报告内容将根据数据自动生成，您也可以手动编辑..."
       />
-      <div style="margin-top: 12px; display: flex; gap: 8px;">
+      <div style="margin-top: 12px; display: flex; gap: 8px">
         <el-button type="primary" :loading="saving" @click="saveReport">保存报告</el-button>
         <el-button @click="previewReport">预览</el-button>
       </div>
@@ -85,19 +106,28 @@
 
     <!-- 历史报告弹窗 -->
     <el-dialog v-model="historyDialog" title="历史报告" width="700px">
-      <el-table :data="historyItems" max-height="400">
-        <el-table-column prop="title" label="标题" min-width="200" />
-        <el-table-column prop="class_name" label="班级" width="140" />
-        <el-table-column prop="week_start" label="周期" width="200">
-          <template #default="{ row }">{{ row.week_start }} ~ {{ row.week_end }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="140">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="viewReport(row)">查看</el-button>
-            <el-button link type="danger" @click="deleteReport(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <StateView
+        :loading="historyLoading"
+        :error="historyError"
+        :empty="!historyItems.length"
+        :columns="4"
+        empty-description="暂无历史报告"
+        @retry="loadHistory"
+      >
+        <el-table :data="historyItems" max-height="400">
+          <el-table-column prop="title" label="标题" min-width="200" />
+          <el-table-column prop="class_name" label="班级" width="140" />
+          <el-table-column prop="week_start" label="周期" width="200">
+            <template #default="{ row }">{{ row.week_start }} ~ {{ row.week_end }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="140">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="viewReport(row)">查看</el-button>
+              <el-button link type="danger" @click="deleteReport(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </StateView>
     </el-dialog>
 
     <!-- 预览弹窗 -->
@@ -113,11 +143,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { reportApi, studentApi } from '../../api'
+import StateView from '../../components/StateView.vue'
 
 const classes = ref([])
 const classId = ref(null)
 const dateRange = ref(null)
 const weeklyData = ref(null)
+const loading = ref(false)
+const error = ref(false)
+const historyLoading = ref(false)
+const historyError = ref(false)
 const reportContent = ref(null)
 const reportTitle = ref('')
 const saving = ref(false)
@@ -151,21 +186,31 @@ onMounted(async () => {
 function onClassChange() {
   weeklyData.value = null
   reportContent.value = null
+  error.value = false
 }
 
 async function loadWeeklyData() {
   if (!classId.value) return
+  loading.value = true
+  error.value = false
   try {
     const [start, end] = dateRange.value || ['', '']
-    weeklyData.value = await reportApi.weeklyData({ class_id: classId.value, week_start: start, week_end: end })
+    weeklyData.value = await reportApi.weeklyData({
+      class_id: classId.value,
+      week_start: start,
+      week_end: end,
+    })
   } catch (e) {
+    error.value = true
+  } finally {
+    loading.value = false
   }
 }
 
 function generateReport() {
   if (!weeklyData.value) return
   const d = weeklyData.value
-  const cls = classes.value.find(c => c.id === classId.value)
+  const cls = classes.value.find((c) => c.id === classId.value)
   const [start, end] = dateRange.value || ['', '']
 
   reportTitle.value = `${cls?.name || ''}班级周报（${start} ~ ${end}）`
@@ -191,11 +236,11 @@ ${d.bottom5?.length ? d.bottom5.map((s, i) => `${i + 1}. ${s.name}：${s.points}
 
 ## 四、学生表现记录
 
-${d.recent_performances?.length ? d.recent_performances.map(p => `- **${p.student_name}**：${p.ptype === '积极' ? '✅' : '⚠️'} ${p.content}`).join('\n') : '暂无记录'}
+${d.recent_performances?.length ? d.recent_performances.map((p) => `- **${p.student_name}**：${p.ptype === '积极' ? '✅' : '⚠️'} ${p.content}`).join('\n') : '暂无记录'}
 
 ## 五、学生画像概要
 
-${d.profile_summaries?.length ? d.profile_summaries.map(s => `- ${s.name}（${s.student_no}）：积分 ${s.points}，请假 ${s.leave_count} 次，积极 ${s.positive} 次，消极 ${s.negative} 次`).join('\n') : '暂无数据'}
+${d.profile_summaries?.length ? d.profile_summaries.map((s) => `- ${s.name}（${s.student_no}）：积分 ${s.points}，请假 ${s.leave_count} 次，积极 ${s.positive} 次，消极 ${s.negative} 次`).join('\n') : '暂无数据'}
 
 ## 六、本周总结与下周计划
 
@@ -231,11 +276,17 @@ function previewReport() {
 }
 
 async function loadHistory() {
+  historyLoading.value = true
+  historyError.value = false
   try {
     const res = await reportApi.list(classId.value ? { class_id: classId.value } : {})
     historyItems.value = res.items
     historyDialog.value = true
   } catch (e) {
+    historyError.value = true
+    historyDialog.value = true
+  } finally {
+    historyLoading.value = false
   }
 }
 
@@ -291,10 +342,18 @@ async function deleteReport(row) {
   font-weight: 600;
   margin-right: 10px;
 }
-.rank-num.rank-1 { background: #f59e0b; }
-.rank-num.rank-2 { background: #94a3b8; }
-.rank-num.rank-3 { background: #d97706; }
-.rank-num.warn { background: #ef4444; }
+.rank-num.rank-1 {
+  background: #f59e0b;
+}
+.rank-num.rank-2 {
+  background: #94a3b8;
+}
+.rank-num.rank-3 {
+  background: #d97706;
+}
+.rank-num.warn {
+  background: #ef4444;
+}
 .rank-points {
   margin-left: auto;
   font-weight: 600;

@@ -1,7 +1,14 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-input v-model="keyword" placeholder="搜索资源名称" clearable style="width: 220px" @keyup.enter="load" @clear="load" />
+      <el-input
+        v-model="keyword"
+        placeholder="搜索资源名称"
+        clearable
+        style="width: 220px"
+        @keyup.enter="load"
+        @clear="load"
+      />
       <el-button @click="load">查询</el-button>
       <SortBar v-model="order" />
       <div class="spacer"></div>
@@ -9,20 +16,33 @@
     </div>
 
     <div class="page-card">
-      <el-table :data="items" v-loading="loading" style="width: 100%">
-        <el-table-column prop="name" label="资源名称" min-width="220" />
-        <el-table-column prop="category" label="分类" width="120">
-          <template #default="{ row }"><el-tag size="small" type="info">{{ row.category }}</el-tag></template>
-        </el-table-column>
-        <el-table-column prop="filename" label="文件名" min-width="180" />
-        <el-table-column prop="created_at" label="上传时间" width="170" />
-        <el-table-column label="操作" width="160" fixed="right">
-          <template #default="{ row }">
-            <el-button v-if="row.filepath" link type="primary" @click="download(row)">下载</el-button>
-            <el-button link type="danger" @click="remove(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <StateView
+        :loading="loading"
+        :error="error"
+        :empty="!items.length"
+        :columns="5"
+        empty-description="暂无资源"
+        @retry="load"
+      >
+        <el-table :data="items" v-loading="loading" style="width: 100%">
+          <el-table-column prop="name" label="资源名称" min-width="220" />
+          <el-table-column prop="category" label="分类" width="120">
+            <template #default="{ row }"
+              ><el-tag size="small" type="info">{{ row.category }}</el-tag></template
+            >
+          </el-table-column>
+          <el-table-column prop="filename" label="文件名" min-width="180" />
+          <el-table-column prop="created_at" label="上传时间" width="170" />
+          <el-table-column label="操作" width="160" fixed="right">
+            <template #default="{ row }">
+              <el-button v-if="row.filepath" link type="primary" @click="download(row)"
+                >下载</el-button
+              >
+              <el-button link type="danger" @click="remove(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </StateView>
     </div>
 
     <el-dialog v-model="dialog" title="上传资源" width="460px">
@@ -30,14 +50,21 @@
         <el-form-item label="名称" required><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="分类">
           <el-select v-model="form.category" style="width: 100%">
-            <el-option v-for="c in ['课件', '教案', '习题', '素材', '其他']" :key="c" :label="c" :value="c" />
+            <el-option
+              v-for="c in ['课件', '教案', '习题', '素材', '其他']"
+              :key="c"
+              :label="c"
+              :value="c"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="文件">
           <el-upload :show-file-list="false" :http-request="doUpload" :limit="1">
             <el-button>选择文件</el-button>
           </el-upload>
-          <span v-if="form.filename" style="margin-left: 10px; font-size: 13px; color: #6b7280">{{ form.filename }}</span>
+          <span v-if="form.filename" style="margin-left: 10px; font-size: 13px; color: #6b7280">{{
+            form.filename
+          }}</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -53,6 +80,7 @@ import { ref, reactive, onMounted, watch } from 'vue'
 import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SortBar from '../../components/SortBar.vue'
+import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
 import { resourceApi, uploadFile } from '../../api'
 
@@ -62,6 +90,7 @@ const items = useSorted(rawItems)
 const keyword = useDebouncedRef('', 300)
 watch(keyword, () => load())
 const loading = ref(false)
+const error = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
 const form = reactive({ name: '', category: '课件', filename: '', filepath: '' })
@@ -70,10 +99,12 @@ onMounted(load)
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const res = await resourceApi.list({ keyword: keyword.value })
     rawItems.value = res.items
   } catch (e) {
+    error.value = true
   } finally {
     loading.value = false
   }

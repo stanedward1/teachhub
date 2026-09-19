@@ -60,6 +60,7 @@ python -m pytest tests/ -v
 | `DATABASE_URL` | 数据库连接串 | `mysql+pymysql://root:password@127.0.0.1:3306/teachhub`（开发可切 `sqlite:///./teachhub.db`） |
 | `SECRET_KEY` | JWT 签名密钥 | 开发默认值（**生产必改**） |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Token 有效期 | `1440`（24 小时） |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | 刷新令牌有效期（天） | `30` |
 | `MAX_UPLOAD_SIZE` | 上传文件大小上限 | `20971520`（20MB） |
 
 ## 3. 后端代码规范
@@ -67,14 +68,19 @@ python -m pytest tests/ -v
 ### 3.1 结构约定
 
 - 模型按**业务域**拆分到 `models/` 下独立文件，统一在 `models/__init__.py` 导出。
-- 路由按**业务域**拆分到 `routers/`，一个域一个文件。
-- 新增路由文件后需在 `main.py` 中 `include_router`。
+- 路由按**业务域**拆分到 `routers/`，一个域一个文件；单文件过大时**升级为同名子包**（按资源域拆子模块，`__init__.py` 聚合导出统一 `router`，对外路径与行为保持不变）——现有实例：`routers/workbench/`（`scores` / `leaves` / `communications` / `resources` / `exams` / `seats` / `imports` / `profile` / `reports` + `_common.py`）。
+- 新增路由文件（或子包）后需在 `main.py` 中 `include_router`。
+- 平台级全局配置读写统一走 `app/platform_settings.py`（`get_global_setting` / `set_global_setting` / `is_registration_allowed`），**不要**在 router 里直接查 `Setting` 表拼 `school_id IS NULL`。
+- **分层约定（Service Layer）**：业务逻辑与数据访问放 `app/services/`（子域多时按目录组织，实例 `services/workbench/`）；router 只保留装饰器 / 依赖注入 / 参数解析 / 调用 service / 返回。service 函数统一以 `db: Session` 作为第一参数，可抛 `HTTPException` 以逐字保持状态码与中文文案一致；service **不得 import router**（避免循环依赖）。新增 / 改造接口应**同时**改 service + 薄 router，**不要**把业务逻辑写回 router。
+- **分页**：列表接口统一用 `app/pagination.py` 的 `paginate(db, stmt, page, page_size)`（传入未加 `offset/limit` 的 `select()`）；不要再写 `q.count()` + 分页的两次查询。
 
 ### 3.2 请求/响应
 
 - 认证相关接口使用 `schemas.py` 中的 Pydantic 模型做校验。
-- 其余 CRUD 使用 `payload: dict` + `.get()`，逐步迁移到 Pydantic schema。
+- 新增/改造的写接口**必须**使用 `schemas.py` 中的 Pydantic 模型，不再新增裸 `payload: dict`。已完成迁移的典型：`CommunicationCreate` / `ResourceCreate` / `ExamUpdate` / `SeatSave` / `ReportSave` / `StudentTagCreate` / `RegistrationSetting`；存量 `payload: dict` 接口按需逐步迁移。
 - 错误统一抛 `HTTPException(status_code, detail)`，`detail` 使用中文、面向用户。
+- **功能开关类接口**：需要在服务端最早的位置拦截（早于参数校验），保证关闭态下任何入参都返回统一的 403 语义，例如 `POST /api/auth/register` 的注册开关守卫。
+- **`response_model` 与日期字段**：带 `response_model` 的写接口，若模型字段声明为 `str` 而值是 `datetime/date`，**需先转 ISO 字符串**再返回（Pydantic v2 不做隐式强转，否则抛 `ResponseValidationError`）；参考 `services/workbench/_common.py::stringify_dates`。
 
 ### 3.3 权限
 
@@ -100,24 +106,39 @@ python -m pytest tests/ -v
 - 权限/租户辅助统一放 `app/permissions.py`：`is_any_admin` / `is_platform_admin` / `get_teacher_class_ids` / `get_student_account`（按班级+姓名查学生账号）/ `ensure_student_access` 等，**不得**在各 router 重复实现。
 - 分页参数必须调用 `normalize_page(page, page_size)`（防负数/超大 page_size），删除类接口记录不存在时统一返回 `404`。
 
-### 3.5 文件上传
+### 3.6 文件上传
 
 - 通用上传使用 `POST /api/uploads`，自动校验扩展名白名单和大小上限。
 - 业务专用上传（如试卷）使用独立接口，格式校验更严格。
 - 上传文件存储在 `backend/uploads/`，通过 `/uploads/<filename>` 访问。
+- **图文混排模块的图片**：图片 url 直接内嵌在正文 Markdown（`![图片](url)`）中，不再单独维护图片字段；历史字段（`activities.filepath` / `talks.images`）保留以兼容旧数据，但新写入不再使用。
 
-### 3.6 审计日志
+### 3.7 审计日志
 
 - 关键写操作调用 `audit(db, user, action, target, detail, class_id=None, student_id=None)` 记录。
 - **学生相关操作必须传 `student_id`**（函数自动解析班级），**班级相关操作必须传 `class_id`**，用于班主任按班级查看审计日志；账号/系统级操作无需传。
 - 审计日志存储在 `operation_logs` 表。
 - 查看权限分级：管理员全部、班主任自己班级、科任老师不可见（由 `admin._visible_audit_class_ids` 控制）。
+- 新增的写操作要同步在 `admin.py` 的审计操作类型映射与前端 `AuditLogs.vue` 的中文标签映射中登记，避免日志页显示原始 action 串。
+
+### 3.8 可观测性
+
+- **访问日志**：`app/observability.py` 的中间件为每个请求记录 `方法 + 路径 + 状态码 + 耗时`，耗时 ≥ 1s 标 `[SLOW]`。
+- **请求链路 ID（`X-Request-ID`）**：中间件读入站 `X-Request-ID` 请求头（缺失则生成 `uuid4`）并写回响应头；日志行统一带 `[rid=...]`，用于跨日志串联同一请求。实现见 `app/logging_config.py`（`ctx_request_id` / `get_request_id` / `set_request_id` / `reset_request_id` / `new_request_id`）。
+- **结构化日志**：`app/logging_config.py` 的 `RequestIdFilter` 把当前 request-id 注入日志记录，`StructuredFormatter` 统一输出格式，`setup_logging()` 取代 `logging.basicConfig` 统一初始化 handler。
+- **日志落盘**：`main.py` 的 `_setup_file_logging()` 将访问日志与业务日志写入 `backend/logs/teachhub.log`（`TimedRotatingFileHandler` 按天滚动、保留 30 天）。
+  - ⚠️ 该函数**必须在 `run_migrations()` 之后调用**（Alembic 会重置 root logger 的 handler）。
+  - ⚠️ uvicorn 启动时 `dictConfig(disable_existing_loggers=True)` 会禁用已有 logger，需对 `teachhub.access` 显式 `disabled=False` + `propagate=False` + 直接 `addHandler(file_handler)`。
+- **指标**：`/metrics` 输出 Prometheus 文本格式（请求计数、状态码分布、耗时直方图、慢请求数、进行中请求数），零第三方依赖；多副本部署时需改为共享计数。
+- 新增中间件务必保持「最外层」位置，避免被异常处理或鉴权拦截影响日志完整性。
 
 ## 4. 前端代码规范
 
 ### 4.1 结构约定
 
 - 页面放 `views/`，按 `student/`、`admin/` 分组；跨页复用的组件放 `components/`。
+- **巨型页面组件拆分**：单文件过大时拆为「编排层 + 页内子组件」，编排层（同名 `.vue`）只保留列表/分页/取数与弹窗编排，子组件下沉**同名子目录**（`views/admin/students/`、`views/admin/scores/`）；仅在**本页复用**的子组件放该子目录，**不**提升到全局 `components/`。拆分须**行为等价**（接口调用、文案、字段、列宽、按钮顺序、刷新时机不变），并优先消除跨页重复实现（抽公共件）。
+- **布局外壳不得下沉**：`layout/AdminLayout.vue` / `StudentLayout.vue` 的 `el-container` / `el-aside` / `el-header` 等**直接子节点容器**必须留在布局文件内——Element Plus `el-container` 靠「直接子节点的组件名」推断 flex 方向，容器下沉会破坏布局。带 scoped 样式的子组件（如 `.brand-text` 的 `.fade-*` 过渡）须连同样式一起迁移，否则父级 scoped 规则命中不到。
 - **移动端页面放 `mobile/views/`**，布局放 `mobile/layout/`，使用 Vant 组件（`van-*`），与桌面端 Element Plus（`el-*`）互不干扰。
 - API 调用统一收敛到 `api/index.js`（移动端专用接口放 `mobile/api/mobile.js`），页面**不得**直接 import axios。
 - 路由统一在 `router/index.js` 注册，角色守卫统一走 `beforeEach`；移动端路由前缀 `/m`，同样纳入 `requiresTeacher` 校验。
@@ -130,6 +151,30 @@ python -m pytest tests/ -v
 - Element Plus 图标通过 `main.js` 全局注册，页面直接 `<el-icon><Xxx /></el-icon>`。
 - 表单校验：必填字段在提交前显式校验并 `ElMessage` 提示；复杂校验建议上 `el-form` rules。
 - **防重复提交**：写操作复用 `src/composables/useSubmit.js` 的 loading 包裹；网络层 `request.js` 已做并发去重（AbortController + pending Map）。
+- **文件下载**：Excel 等文件导出复用 `src/composables/useDownload.js` 的 `downloadExcel(data, filename)`（内部封装 `Blob → createObjectURL → click → revoke`），不要在页面里重复写这套样板。
+- **通用弹窗**：Excel 批量导入复用 `src/components/ImportDialog.vue`（`v-model` 控制显隐，`importFn` / `templateUrl` 注入业务差异，`@success` 回调刷新列表），不要在页面里重复实现导入弹窗。
+- **统一体验态（强制约定）**：列表页的「加载 / 空 / 错误」一律用 `src/components/StateView.vue` 接入，**不要再手写 `v-if` 判断或直接用 `el-empty`**。把 `<el-table>`（或自绘列表）包进去，传 `:loading` / `:error` / `:empty` 与 `@retry="load"`：
+  ```vue
+  <StateView
+    :loading="loading" :error="error" :empty="!items.length"
+    :columns="6" empty-description="暂无记录" @retry="load"
+  >
+    <template #empty><el-button type="primary" @click="openCreate">新建</el-button></template>
+    <el-table :data="items" v-loading="loading">...</el-table>
+  </StateView>
+  ```
+  配套的 `load()` 固定写法（顺序不可颠倒，否则错误态判定会失效）：
+  ```js
+  async function load() {
+    loading.value = true
+    error.value = false        // 必须在 try 之前
+    try { /* ... */ } catch (e) {
+      error.value = true       // 不要在这里再加 ElMessage.error，全局拦截器已弹
+    } finally { loading.value = false }
+  }
+  ```
+  **保留 `el-table` 上的 `v-loading`**：骨架屏只在首屏出现，后续刷新靠它反馈。非表格页面（图表 / 画像）可用 `#skeleton` 具名插槽自定义骨架。
+- **虚拟滚动**：固定行高的长列表用 `src/components/VirtualList.vue`（`:items` + `:item-height` + `:height`，默认插槽作用域为 `{ item, index }`），避免一次性渲染海量行。注意它自任滚动容器，**不要嵌在 `van-pull-refresh` 之类自身依赖滚动位置的容器内**。
 
 ### 4.3 样式系统
 
@@ -141,13 +186,16 @@ python -m pytest tests/ -v
 
 - Markdown 渲染**必须**经过 `DOMPurify.sanitize()` 进行 XSS 过滤。
 - 文件上传/下载使用 Blob 方式处理，注意 `responseType: 'blob'`。
-- Token 存储在 localStorage，请求时通过 Axios 拦截器自动注入。
+- Token 存储在 localStorage（`teachhub_token` + `refresh_token`），请求时通过 Axios 拦截器自动注入。
+- **令牌刷新（约定）**：`request.js` 对**非登录接口**返回的 `401` 做**单飞静默刷新**（并发请求共享同一次刷新，避免刷新风暴），成功后用新 token 重放原请求一次，仅当刷新失败才跳转登录页。新增接口**无需**自行处理令牌刷新，也不要自己再次跳登录。
+- **登出（约定）**：登出 / 切换身份一律用 `src/composables/useLogout.js` 的 `useLogout()`（`const logout = useLogout(); logout('/admin/login')`），它会先撤销服务端刷新令牌、再清理本地登录态并跳登录页。**不要**再直接调 `clearAuth()`——access token 是无状态 JWT 不可撤销，只清本地会让服务端刷新令牌（默认 30 天）继续可用。
 
 ### 4.5 代码规范工具
 
 - ESLint 10（flat config，`eslint.config.js`）+ Prettier 3（`.prettierrc.json`）。
 - 脚本：`npm run lint`（检查）、`npm run lint:fix`（修复）、`npm run format`（格式化）。
 - 提交前确保 `npm run lint` 0 error（warning 可接受）。
+- **工程规范（仓库根）**：已在仓库根接入 husky + lint-staged + commitlint（`package.json` / `.husky/pre-commit` / `.husky/commit-msg` / `commitlint.config.cjs` / `.lintstagedrc.json`），提交信息遵循 Conventional Commits，需在**仓库根**执行一次 `npm install` 生成 `.husky/_` 才生效；后端测试用 `pytest`（`backend/pytest.ini` 已限定 `testpaths = tests`，backend 根目录的历史 `qa_*.py` 不在收集范围）。
 
 ## 5. Git 规范
 
@@ -201,8 +249,20 @@ docs: 补充架构设计文档
 
 ## 8. 文档维护
 
-- 架构变更 → 更新 `docs/ARCHITECTURE.md`
-- 开发规范变更 → 更新 `docs/DEVELOPMENT.md`
-- 迭代需求 → 更新 `docs/REQUIREMENTS.md`
-- 功能与快速开始 → 更新 `README.md`
-- 产品规划 → 更新 `docs/PRODUCT.md`
+| 变更类型 | 需要更新的文档 |
+| ---- | ---- |
+| 架构/目录/依赖变更 | `docs/ARCHITECTURE.md` |
+| 新增/修改接口 | `docs/API.md` |
+| 模型/表结构变更 | `docs/ER-DIAGRAM.md`（并配套 Alembic 迁移） |
+| 开发规范变更 | `docs/DEVELOPMENT.md` |
+| 功能与快速开始 | `README.md` |
+| 每次功能/修复/重构 | `docs/CHANGELOG.md`（按时间倒序追加） |
+| 迭代需求 / 产品规划 | `docs/REQUIREMENTS.md`（移动端）、`docs/MULTI-TENANT-PRD.md`（多租户） |
+| 技术方案 | `docs/MOBILE-TECH.md`、`docs/MULTI-TENANT-TECH.md`、`docs/system_design.md` |
+
+> 约定：**接口与模型类文档（API / ER-DIAGRAM）必须与代码同步更新**，否则以代码为准并视为文档缺陷。可用以下命令从代码导出「地面事实」用于校对：
+>
+> ```bash
+> cd backend && python -c "from app.main import app; print(len(app.routes))"        # 路由数
+> cd backend && python -m pytest tests/ -v                                          # 测试
+> ```

@@ -1,6 +1,6 @@
 # TeachHub 架构设计文档
 
-> 版本：2.2 ｜ 更新：2026-09-09 ｜ 适用对象：后端 / 前端 / 测试 / 运维
+> 版本：2.5 ｜ 更新：2026-09-19 ｜ 适用对象：后端 / 前端 / 测试 / 运维
 
 ## 1. 项目定位
 
@@ -42,7 +42,7 @@ techhub/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py            # 应用入口：CORS、静态挂载、路由注册、迁移、租户中间件
-│   │   ├── config.py          # 配置（env 驱动）
+│   │   ├── config.py          # 配置（pydantic-settings + .env，绝对路径加载，env 驱动）
 │   │   ├── database.py        # engine / SessionLocal / Base / get_db / run_migrations
 │   │   ├── security.py        # 密码哈希 + JWT 签发/校验（payload 含 school_id）
 │   │   ├── deps.py            # 依赖：get_current_user / require_roles（含停用学校拦截）
@@ -50,7 +50,10 @@ techhub/
 │   │   ├── permissions.py     # 班级权限 + 租户辅助（is_any_admin / get_student_account 等）
 │   │   ├── utils.py           # to_dict / safe_filename / gen_student_no / normalize_page
 │   │   ├── audit.py           # 操作审计日志（含 school_id）+ 批量查询辅助
+│   │   ├── platform_settings.py # 平台级全局配置（school_id IS NULL 作用域）：get/set_global_setting、is_registration_allowed
 │   │   ├── observability.py   # 可观测性：访问日志中间件 + /metrics（Prometheus 指标，零依赖）
+│   │   ├── pagination.py      # 单查询分页：paginate(db, stmt, page, page_size)（COUNT(*) OVER () 一次往返取「数据 + 总数」）
+│   │   ├── logging_config.py  # 结构化日志：X-Request-ID 透传 + RequestIdFilter + StructuredFormatter + setup_logging()
 │   │   ├── schemas.py         # Pydantic 请求/响应模型
 │   │   ├── cleanup.py         # 级联清理（purge_student_data / purge_user_data，叶子→根拓扑倒序）
 │   │   ├── models/            # SQLAlchemy 模型（按域分组）
@@ -59,21 +62,39 @@ techhub/
 │   │   │   ├── homework.py    #   Assignment / AssignmentAttachment / Submission / ExcellentWork / WorkComment / SubmissionComment
 │   │   │   ├── workbench.py   #   Score / Leave / Communication / Resource / Exam / Seat / Setting / ImportHistory / StudentProfileTag / WeeklyReport / StudentBoardHistory
 │   │   │   ├── classlog.py    #   WorkLog / ClassPlan / TeacherPlan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
+│   │   │   ├── refresh_token.py #   RefreshToken（刷新令牌：轮换 + 撤销，仅存 sha256 摘要）
 │   │   │   └── operation_log.py
 │   │   ├── routers/           # 按业务域分组的 API 路由
-│   │   │   ├── auth.py        #   登录/注册/密码/学校下拉（含登录限流）
+│   │   │   ├── auth.py        #   登录/注册/注册开关状态/密码/学校下拉（含登录限流）
 │   │   │   ├── meta.py        #   班级选项、编程练习（公开）
 │   │   │   ├── homework.py    #   作业/提交/优秀作品/评论
 │   │   │   ├── students.py    #   学校/班级/学生 CRUD + 班级教师（班主任+科任）+ 密码管理 + 通宿生统计
-│   │   │   ├── workbench.py   #   教师工作台（成绩/请假/积分/沟通/资源/试卷/座位/画像/周报）+ 批量导入
+│   │   │   ├── workbench/     #   教师工作台子包（原单文件 1374 行按资源域拆分）
+│   │   │   │   ├── _common.py       #   共享依赖与辅助
+│   │   │   │   ├── scores.py        #   成绩 + 导入导出
+│   │   │   │   ├── leaves.py        #   请假
+│   │   │   │   ├── communications.py#   家校沟通
+│   │   │   │   ├── resources.py     #   教学资源
+│   │   │   │   ├── exams.py         #   试卷上传/下载
+│   │   │   │   ├── seats.py         #   座位表
+│   │   │   │   ├── imports.py       #   导入历史
+│   │   │   │   ├── profile.py       #   学生画像
+│   │   │   │   ├── reports.py       #   班级周报
+│   │   │   │   └── __init__.py      #   聚合导出统一 router
 │   │   │   ├── classlog.py    #   班级日志（日志/计划/课表/活动/谈心/返校/表现/评语）
 │   │   │   ├── attendance.py  #   考勤点名 + 出勤率统计
 │   │   │   ├── mobile.py      #   移动端专用接口（学生速查 + 画像概览）
-│   │   │   ├── admin.py       #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览
+│   │   │   ├── admin.py       #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览 / 平台注册开关
 │   │   │   └── uploads.py     #   通用文件上传
+│   │   ├── services/          # 业务服务层（B1 分层）：router 只做路由/依赖/参数解析/调用/返回
+│   │   │   ├── auth_service.py / students_service.py / classlog_service.py / homework_service.py / admin_service.py
+│   │   │   ├── mobile_service.py / meta_service.py / attendance_service.py / uploads_service.py
+│   │   │   └── workbench/     #   工作台子包：_common.py + scores/leaves/communications/resources/exams/seats/imports/profile/reports_service.py
 │   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
-│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源）
+│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 23 个 revision）
+│   ├── logs/                  # 运行日志（teachhub.log，按天滚动保留 30 天，不入库）
 │   ├── tests/                 # pytest 自动化测试（含 test_multi_tenant.py）
+│   ├── pytest.ini            # pytest 配置（testpaths = tests，仅收集 tests/）
 │   ├── clean_data.sql         # 数据清理 SQL（事务包裹，清空业务数据保留账号）
 │   ├── repair_student_profiles.py   # 存量学生档案修复脚本（可重复执行）
 │   ├── ensure_school_admin.py       # 幂等补建默认租户学校管理员
@@ -89,11 +110,15 @@ techhub/
 │   │   │   └── index.js       # 所有 API 接口定义
 │   │   ├── router/            # 路由 + 角色守卫（四角色 + 强制改密）
 │   │   ├── stores/            # Pinia store（auth）
-│   │   ├── layout/            # StudentLayout / AdminLayout（可折叠侧边栏）
-│   │   ├── components/        # Markdown / MarkdownEditor / StudentSelect
+│   │   ├── layout/            # StudentLayout / AdminLayout（可折叠外壳）
+│   │   │   └── admin/         #   AdminLayout 子件：AdminSidebar / AdminHeader / menuConfig.js
+│   │   ├── composables/       # 可组合函数（useSort / useDebouncedRef / useSubmit / useDownload / useLogout）
+│   │   ├── components/        # ImportDialog / Markdown / MarkdownEditor / StudentSelect / StudentCard / SortBar / PaginationBar / StateView（四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList
 │   │   ├── mobile/            # 移动端（Vant）：layout + views + api
-│   │   ├── views/student/     # 学生端页面
-│   │   └── views/admin/       # 管理端页面（含 Schools 学校管理）
+│   │   ├── views/student/     # 学生端页面（登录/作业/优秀作品/我的提交+详情/编程练习/资料）
+│   │   └── views/admin/       # 管理端页面（29 个，含 Schools 学校管理、PlatformSettings 平台设置）
+│   │       ├── students/      #   Students 子件：表单/密码/变更历史/饼图/头像单元格
+│   │       └── scores/        #   Scores 子件：成绩分析 / 录入弹窗
 │   ├── vite.config.js         # dev 代理 /api、/uploads → 8080
 │   ├── eslint.config.js       # ESLint 10（flat config）
 │   ├── Dockerfile             # 前端镜像（Node 构建 + Nginx 托管）
@@ -126,13 +151,20 @@ techhub/
 
 **学生登录**：学生通过「学校 + 班级 + 姓名 + 密码」登录，账号由教师创建学生档案时自动同步生成。
 
+**认证与令牌刷新（F3）**：
+- 登录返回短期 `access token`（JWT，payload 含 `school_id`）+ 长期 `refresh_token`（明文仅返回一次，库中存 sha256 摘要于 `refresh_tokens` 表，含 `school_id` 归属、`expires_at`；有效期 `REFRESH_TOKEN_EXPIRE_DAYS`，默认 30 天）。
+- `POST /api/auth/refresh`：用 `refresh_token` 做**一次性轮换**——签发新 access + 新 refresh，旧行置 `revoked_at` 并记 `replaced_by`；未命中 / 已撤销 / 已过期一律返回 `401 {"detail":"登录已过期，请重新登录"}`（无需鉴权）。
+- `POST /api/auth/logout`：幂等撤销（令牌不存在也返回成功）。
+- 登录响应在原有 `token` / `user` / `must_change_password` 基础上**新增** `refresh_token`，原字段不变。
+- 前端：`request.js` 对非登录接口的 `401` 做**单飞静默刷新**并重放原请求一次，刷新失败才跳登录。登出统一走 `composables/useLogout.js`（先撤销服务端刷新令牌，再清理本地登录态并跳登录页）。
+
 ## 5. 数据模型概览
 
-### 5.1 表清单（33 张表）
+### 5.1 表清单（34 张表）
 
 | 域 | 表 | 关键字段 |
 | --- | --- | -------- |
-| 认证 | `users` | username、password_hash、role、school_id、class_id、name |
+| 认证 | `users` / `refresh_tokens` | users：username、password_hash、role、school_id、class_id、name；refresh_tokens：user_id、school_id、token_hash、expires_at、revoked_at、replaced_by |
 | 基础 | `schools` / `classrooms` / `class_teachers` / `students` | 学校（status 启用/停用）/班级/班级教师（班主任+科任）/学生档案（student_type 通学/寄宿） |
 | 作业 | `assignments` / `assignment_attachments` / `submissions` / `submission_comments` / `excellent_works` / `work_comments` | 任务/任务附件（一对多）/提交/提交点评/优秀/评论 |
 | 工作台 | `scores` / `leaves` / `attendance` / `communications` / `resources` / `exams` / `seats` / `settings` / `student_profile_tags` / `weekly_reports` / `student_board_history` | 成绩/请假/考勤点名/沟通/资源/试卷/座位/设置/画像标签/周报/住宿历史 |
@@ -149,6 +181,7 @@ techhub/
 - `class_teachers.class_id + teacher_id` → 班级-教师多对多关联（科任老师，班主任由 `classrooms.teacher_id` 绑定）
 - `users.school_id + class_id + name` → 学生账号唯一标识（取代原 username 唯一约束；教师用户名按 `school_id + username` 校内唯一）
 - `settings.school_id + key` → 系统设置校内唯一（多租户下不同学校可设置同名配置项）
+- `settings` 的**平台级全局配置**：`school_id IS NULL` 的行表示跨校全局配置（如 `allow_registration` 注册总开关），读写统一走 `app/platform_settings.py`，与校内配置（`school_id = 本校`）互不干扰
 - `import_history.user_id` → `users.id`：导入操作人追溯
 
 ### 5.3 外键删除策略（分层）
@@ -172,13 +205,16 @@ techhub/
 - **文件**：`POST /api/uploads` 上传 → 返回 `{url, filepath, filename, size}`；`/uploads/**` 静态访问
 - **文件上传**：试卷上传 `POST /api/exams/upload`（FormData），下载 `GET /api/exams/{id}/download`
 - **批量导入**：`POST /api/students/import` / `POST /api/scores/import`（FormData），含模板下载
+- **公开接口**：`/api/auth/login`、`/api/auth/register`、`/api/auth/registration-status`（注册开关状态）、`/api/auth/schools`、`/api/meta/*`
+- **令牌刷新 / 登出（无需鉴权）**：`POST /api/auth/refresh`（refresh token 轮换）、`POST /api/auth/logout`（幂等撤销）
+- **运维端点**：`/health`（健康检查）、`/metrics`（Prometheus 指标）
 - **文档**：`/docs`（Swagger UI）、`/redoc`
 
 ## 7. 前端架构
 
 ### 7.1 布局系统
 
-- **AdminLayout**：深色可折叠侧边栏（220px ↔ 64px）+ 顶部面包屑 + 用户菜单
+- **AdminLayout**：深色可折叠侧边栏（220px ↔ 64px）+ 顶部面包屑 + 用户菜单；外壳（`el-aside` / `el-header` / 盒子样式）留在 `AdminLayout.vue`，菜单与页头下沉 `layout/admin/`（`AdminSidebar` / `AdminHeader` / `menuConfig.js` 数据驱动）。**注意**：`el-container` 靠直接子节点组件名推断 flex 方向，外壳容器不得再下沉。
 - **StudentLayout**：顶部导航栏 + 居中内容区 + 底部页脚
 - **MobileLayout**：移动端底部 TabBar（首页/考勤/学生/记录/请假），基于 Vant
 - 全局 CSS 变量系统：品牌色、中性色、阴影、圆角、间距统一管理
@@ -187,9 +223,26 @@ techhub/
 
 | 组件 | 用途 | 使用页面 |
 | ---- | ---- | ---- |
-| `Markdown.vue` | Markdown 渲染（marked + DOMPurify） | 作业审阅、优秀作品 |
-| `MarkdownEditor.vue` | Markdown 编辑器 | 作业创建/编辑 |
-| `StudentSelect.vue` | 学生下拉选择器 | 积分、表现、成绩、谈心等 |
+| `Markdown.vue` | Markdown 渲染（marked + DOMPurify 防 XSS） | 作业审阅、优秀作品、五大图文模块的详情弹窗 |
+| `MarkdownEditor.vue` | Markdown 图文混排编辑器（`rows` / `height` 可配） | 作业创建、家校沟通、工作日志、计划总结、班级活动、师生谈心 |
+| `StudentSelect.vue` | 学生下拉选择器 | 表现、成绩、谈心、请假等 |
+| `StudentCard.vue` | 学生信息卡片 | 学生列表/画像 |
+| `SortBar.vue` | 列表排序控件（最新/最早，偏好持久化） | 各业务列表页 |
+| `PaginationBar.vue` | 统一分页条（居中换行、窄屏自适应） | 各业务列表页 |
+| `ImportDialog.vue` | 通用 Excel 批量导入弹窗（模板下载 + 拖拽上传 + 错误明细；业务差异由 `importFn` / `templateUrl` 注入） | 学生管理、成绩管理 |
+| `StateView.vue` | **列表四态接入层**：组合「骨架屏 / 错误+重试 / 空态 / 正常内容」，页面只传 `loading` / `error` / `empty` 三个布尔量；支持 `#skeleton` 具名插槽自定义骨架、`#empty` 插槽放操作按钮 | 全部 27 处列表视图（管理端 23 页 + 成绩分析页签 + 学生端 3 页） |
+| `SkeletonTable.vue` | 表格加载骨架屏（表头 + 若干行占位，行高固定防 CLS）；多由 `StateView` 间接使用 | 各列表页 |
+| `ErrorState.vue` | 统一错误态（含「重试」按钮，向上抛 `retry`）；多由 `StateView` 间接使用 | 各列表页 |
+| `EmptyState.vue` | 统一空状态占位（默认插槽可放「新建」等按钮）；多由 `StateView` 间接使用 | 各列表页 |
+| `VirtualList.vue` | 长列表虚拟滚动（固定行高窗口化，`requestAnimationFrame` 节流，DOM 节点数恒定） | 移动端「快捷记录」选学生弹窗（全校长列表） |
+
+> **P1 已全量落地**：四态接入层 `StateView` 及其三个原语组件（空 / 错误 / 骨架屏）已接入全部 27 处列表视图，`VirtualList` 接入移动端全校长列表。约定页面把 `<el-table>`（或自绘列表）包进 `<StateView ... @retry="load">`，并在 `load()` 中按「先 `loading = true`，再 `error = false`；`catch` 置 `error = true`」改造；**骨架屏与错误态只在首屏出现**，后续翻页/搜索刷新保留已有内容（仍由 `v-loading` 反馈）。
+>
+> 例外：`Schedules.vue` 的课表网格不接空态（空网格是「点 + 号加课」的交互入口）；Dashboard / `StudentProfile` / `WeeklyReport` 用 `#skeleton` 自定义骨架（图表页不适用表格骨架）。
+
+> 巨型页面组件（`Students.vue` / `Scores.vue`）已按职责拆为「编排层 + 页内子组件」：编排层保留列表/分页/取数，子组件下沉同目录子文件夹（`views/admin/students/`、`views/admin/scores/`），子组件仅在本页复用、不提升为全局 `components/`。
+
+> 五大图文模块（家校沟通 / 工作日志 / 计划总结 / 班级活动 / 师生谈心）统一采用「`MarkdownEditor` 图文混排编辑 + `Markdown` 详情弹窗纵览」的交互形态，图片以 `![图片](url)` 内嵌于正文任意位置。
 
 ### 7.3 移动端（`/m`）
 
@@ -241,6 +294,9 @@ docker compose up -d --build
 ## 10. 可观测性
 
 - **访问日志中间件**（`app/observability.py`）：最外层 HTTP 中间件，结构化记录每个请求的 `方法 + 路径 + 状态码 + 耗时`；耗时 ≥ 1s 的慢请求提升到 WARN 级别并附加 `[SLOW]` 标记，便于日志采集系统（ELK / Loki）快速定位。
+- **请求链路 ID（`X-Request-ID`）**：中间件读入站 `X-Request-ID` 请求头（缺失则生成 `uuid4`）并写回响应头，每条日志行统一前缀 `[rid=...]`，便于把同一请求的多条日志在 ELK / Loki 中串联。
+- **结构化日志（`app/logging_config.py`）**：`RequestIdFilter` 把当前 request-id 注入日志记录，`StructuredFormatter` 统一输出格式；`setup_logging()` 取代 `logging.basicConfig` 统一初始化 handler。
+  - ⚠️ 文件 handler 仍**必须**在 `run_migrations()` 之后初始化——Alembic 会重置 root logger 的 handler，先挂会被清空（既有坑，务必保留）。
 - **`/metrics` 端点**：输出 Prometheus 文本格式，聚合以下指标（进程内内存计数，零第三方依赖）：
   - `teachhub_http_requests_total`：累计请求数（按路径）
   - `teachhub_http_status_total`：响应状态码分布
@@ -265,3 +321,7 @@ docker compose up -d --build
 | 积分联动 | 表现创建时自动生成积分 | 减少重复录入，积分可追溯 |
 | 文件管理 | 试卷上传独立接口 | 格式校验、分块写入、大小限制 |
 | 批量导入 | openpyxl + 逐行校验 | 精确错误定位，导入历史可追溯 |
+| 平台级配置存储 | 复用 `settings` 表，`school_id IS NULL` 为全局作用域 | 免建新表与迁移，与校内配置共用一套读写约定 |
+| 注册开关默认值 | 配置缺失时视为「开放注册」 | 引入开关不改变既有安装行为，避免升级即停摆 |
+| 工作台路由组织 | `routers/workbench/` 子包按资源域拆分 | 单文件 1374 行难维护；拆分后对外路径与行为完全不变 |
+| 可观测性 | 自研中间件 + `/metrics`，零第三方依赖 | 单实例部署零成本接入 Prometheus；多副本再换共享计数 |

@@ -1,7 +1,14 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-input v-model="keyword" placeholder="搜索试卷标题" clearable style="width: 220px" @keyup.enter="load" @clear="load" />
+      <el-input
+        v-model="keyword"
+        placeholder="搜索试卷标题"
+        clearable
+        style="width: 220px"
+        @keyup.enter="load"
+        @clear="load"
+      />
       <el-button @click="load">查询</el-button>
       <SortBar v-model="order" />
       <div class="spacer"></div>
@@ -9,35 +16,45 @@
     </div>
 
     <div class="page-card">
-      <el-table :data="items" v-loading="loading" style="width: 100%">
-        <el-table-column prop="title" label="试卷名称" min-width="180" />
-        <el-table-column label="文件类型" width="100">
-          <template #default="{ row }">
-            <el-tag size="small" :type="fileTagType(row.filetype)">
-              {{ row.filetype || '—' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="exam_type" label="试卷分类" width="120">
-          <template #default="{ row }">
-            <el-tag size="small" effect="plain">{{ row.exam_type || '单元测验' }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="文件大小" width="110">
-          <template #default="{ row }">
-            {{ formatSize(row.filesize) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="created_at" label="上传时间" width="170" />
-        <el-table-column label="操作" width="240" fixed="right">
-          <template #default="{ row }">
-            <el-button v-if="row.filepath" link type="primary" @click="downloadFile(row)">下载</el-button>
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="remove(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <div v-if="!loading && items.length === 0" class="empty-state">暂无试卷，点击"上传试卷"开始</div>
+      <StateView
+        :loading="loading"
+        :error="error"
+        :empty="!items.length"
+        :columns="6"
+        empty-description="暂无试卷"
+        @retry="load"
+      >
+        <el-table :data="items" v-loading="loading" style="width: 100%">
+          <el-table-column prop="title" label="试卷名称" min-width="180" />
+          <el-table-column label="文件类型" width="100">
+            <template #default="{ row }">
+              <el-tag size="small" :type="fileTagType(row.filetype)">
+                {{ row.filetype || '—' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="exam_type" label="试卷分类" width="120">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain">{{ row.exam_type || '单元测验' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="文件大小" width="110">
+            <template #default="{ row }">
+              {{ formatSize(row.filesize) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="created_at" label="上传时间" width="170" />
+          <el-table-column label="操作" width="240" fixed="right">
+            <template #default="{ row }">
+              <el-button v-if="row.filepath" link type="primary" @click="downloadFile(row)"
+                >下载</el-button
+              >
+              <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button link type="danger" @click="remove(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </StateView>
     </div>
 
     <!-- 上传试卷弹窗 -->
@@ -111,6 +128,7 @@ import { ref, reactive, onMounted, watch } from 'vue'
 import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SortBar from '../../components/SortBar.vue'
+import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
 import { examApi } from '../../api'
 
@@ -120,6 +138,7 @@ const items = useSorted(rawItems)
 const keyword = useDebouncedRef('', 300)
 watch(keyword, () => load())
 const loading = ref(false)
+const error = ref(false)
 
 // 上传
 const uploadDialog = ref(false)
@@ -138,10 +157,12 @@ onMounted(load)
 
 async function load() {
   loading.value = true
+  error.value = false
   try {
     const res = await examApi.list({ keyword: keyword.value })
     rawItems.value = res.items
   } catch (e) {
+    error.value = true
   } finally {
     loading.value = false
   }
@@ -229,7 +250,10 @@ async function saveEdit() {
   if (!editForm.title.trim()) return ElMessage.warning('请输入试卷名称')
   saving.value = true
   try {
-    await examApi.update(editingId.value, { title: editForm.title.trim(), exam_type: editForm.exam_type })
+    await examApi.update(editingId.value, {
+      title: editForm.title.trim(),
+      exam_type: editForm.exam_type,
+    })
     ElMessage.success('保存成功')
     editDialog.value = false
     load()

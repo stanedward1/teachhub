@@ -24,7 +24,12 @@
         <el-tab-pane label="学生登录" name="login">
           <el-form @submit.prevent="doLogin">
             <el-form-item>
-              <el-select v-model="form.class_id" placeholder="选择班级" size="large" style="width: 100%">
+              <el-select
+                v-model="form.class_id"
+                placeholder="选择班级"
+                size="large"
+                style="width: 100%"
+              >
                 <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
               </el-select>
             </el-form-item>
@@ -32,18 +37,36 @@
               <el-input v-model="form.username" placeholder="姓名" size="large" />
             </el-form-item>
             <el-form-item>
-              <el-input v-model="form.password" type="password" placeholder="密码" size="large" show-password @keyup.enter="doLogin" />
+              <el-input
+                v-model="form.password"
+                type="password"
+                placeholder="密码"
+                size="large"
+                show-password
+                @keyup.enter="doLogin"
+              />
             </el-form-item>
-            <el-button type="primary" size="large" style="width: 100%" :loading="loading" @click="doLogin">
+            <el-button
+              type="primary"
+              size="large"
+              style="width: 100%"
+              :loading="loading"
+              @click="doLogin"
+            >
               登 录
             </el-button>
           </el-form>
         </el-tab-pane>
 
-        <el-tab-pane label="学生注册" name="register">
+        <el-tab-pane v-if="registerEnabled" label="学生注册" name="register">
           <el-form @submit.prevent="doRegister">
             <el-form-item>
-              <el-select v-model="reg.class_id" placeholder="选择班级" size="large" style="width: 100%">
+              <el-select
+                v-model="reg.class_id"
+                placeholder="选择班级"
+                size="large"
+                style="width: 100%"
+              >
                 <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
               </el-select>
             </el-form-item>
@@ -51,18 +74,28 @@
               <el-input v-model="reg.name" placeholder="姓名" size="large" />
             </el-form-item>
             <el-form-item>
-              <el-input v-model="reg.password" type="password" placeholder="密码（默认 123456）" size="large" show-password />
+              <el-input
+                v-model="reg.password"
+                type="password"
+                placeholder="密码（默认 123456）"
+                size="large"
+                show-password
+              />
             </el-form-item>
-            <el-button type="primary" size="large" style="width: 100%" :loading="loading" @click="doRegister">
+            <el-button
+              type="primary"
+              size="large"
+              style="width: 100%"
+              :loading="loading"
+              @click="doRegister"
+            >
               注 册
             </el-button>
           </el-form>
         </el-tab-pane>
       </el-tabs>
 
-      <div class="hint">
-        教师请前往 <router-link to="/admin/login">管理后台登录</router-link>
-      </div>
+      <div class="hint">教师请前往 <router-link to="/admin/login">管理后台登录</router-link></div>
     </div>
   </div>
 </template>
@@ -77,6 +110,8 @@ import { getLastSchoolId, setAuth, setLastSchoolId } from '../../utils/auth'
 const router = useRouter()
 const tab = ref('login')
 const loading = ref(false)
+// 平台超管可关闭学生自助注册；接口失败时按关闭处理（安全降级）
+const registerEnabled = ref(false)
 const classes = ref([])
 const schools = ref([])
 const schoolId = ref(getLastSchoolId())
@@ -102,6 +137,13 @@ function onSchoolChange() {
 
 onMounted(async () => {
   try {
+    const res = await authApi.registrationStatus()
+    registerEnabled.value = res.allow_registration === true
+  } catch (e) {
+    console.error('[StudentLogin] 获取注册开关状态失败:', e)
+    registerEnabled.value = false
+  }
+  try {
     const res = await authApi.publicSchools()
     schools.value = res.items || []
   } catch (e) {
@@ -111,6 +153,11 @@ onMounted(async () => {
 })
 
 watch(schoolId, () => setLastSchoolId(schoolId.value))
+
+// 注册入口被关闭时，若当前停留在注册页签则回落到登录页签
+watch(registerEnabled, (enabled) => {
+  if (!enabled && tab.value === 'register') tab.value = 'login'
+})
 
 async function doLogin() {
   if (!schoolId.value || !form.class_id || !form.username || !form.password) {
@@ -122,9 +169,9 @@ async function doLogin() {
       class_id: form.class_id,
       username: form.username,
       password: form.password,
-      school_id: schoolId.value
+      school_id: schoolId.value,
     })
-    setAuth(res.token, res.user)
+    setAuth(res.token, res.user, res.refresh_token)
     if (res.must_change_password) {
       ElMessage.warning('首次登录或密码已重置，请先修改密码')
       router.push('/profile')
@@ -139,6 +186,9 @@ async function doLogin() {
 }
 
 async function doRegister() {
+  if (!registerEnabled.value) {
+    return ElMessage.warning('当前未开放注册，请联系管理员')
+  }
   if (!schoolId.value || !reg.class_id || !reg.name) {
     return ElMessage.warning('请选择学校、班级并填写姓名')
   }
@@ -148,7 +198,7 @@ async function doRegister() {
       name: reg.name,
       class_id: reg.class_id,
       password: reg.password || '123456',
-      school_id: schoolId.value
+      school_id: schoolId.value,
     })
     setAuth(res.token, res.user)
     ElMessage.success('注册成功')

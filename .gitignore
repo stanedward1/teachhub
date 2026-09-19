@@ -8,7 +8,14 @@ venv/
 *.db-wal
 *.db.bak*
 .env
+.env.local
+.env.*.local
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
 
 # Node
 node_modules/
@@ -16,6 +23,17 @@ dist/
 dist-*/
 *.log
 vite.config.js.timestamp-*.mjs
+.eslintcache
+
+# 运行日志：按天滚动会生成 teachhub.log.YYYY-MM-DD 归档，
+# 只写 *.log 挡不住带日期后缀的归档，故整目录忽略
+backend/logs/
+
+# QA / 调试临时产物：一次性验证脚本、抓包与 DOM 快照、截图、命令输出
+backend/qa_*
+
+# 重构基线快照：改动前的源码对照副本，非项目源码
+frontend/.refactor-baseline/
 
 # 上传文件
 backend/uploads/*
@@ -31,3 +49,13 @@ docs/OPTIMIZATION_PLAN.md
 .vscode/
 .idea/
 .DS_Store
+Thumbs.db
+
+.qa_chrome/
+.qa_chrome_cdp/
+.qa_chrome_off2/
+.qa_chrome_on/
+.qa_chrome_off/
+.qa_chrome_s1/
+.qa_chrome_s2/
+.qa_tmp/

@@ -1,6 +1,6 @@
 <template>
   <div class="mobile-layout">
-    <van-nav-bar :title="title" fixed placeholder />
+    <van-nav-bar :title="title" fixed placeholder right-text="退出" @click-right="onLogout" />
     <div class="mobile-content">
       <router-view />
     </div>
@@ -17,8 +17,27 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { showConfirmDialog } from 'vant'
+import { useLogout } from '../../composables/useLogout'
 
 const route = useRoute()
+const logout = useLogout()
+
+/** 退出登录：二次确认后撤销服务端刷新令牌、清理本地登录态并跳回移动端登录页 */
+async function onLogout() {
+  try {
+    await showConfirmDialog({
+      title: '退出登录',
+      message: '确定要退出当前账号吗？',
+      confirmButtonText: '退出',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    // 用户点击取消，静默返回
+    return
+  }
+  logout('/m/login')
+}
 
 const title = computed(() => {
   const map = {
@@ -27,7 +46,7 @@ const title = computed(() => {
     '/m/attendance-stats': '出勤统计',
     '/m/students': '学生速查',
     '/m/record': '快捷记录',
-    '/m/leaves': '请假管理'
+    '/m/leaves': '请假管理',
   }
   if (route.path.startsWith('/m/students/')) return '学生画像'
   return map[route.path] || 'TeachHub'

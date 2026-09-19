@@ -102,15 +102,16 @@ async function doLogin() {
   try {
     const res = await authApi.login({
       ...form,
-      school_id: schoolId.value || undefined
+      school_id: schoolId.value || undefined,
     })
     if (res.user.role === 'student') {
       return showToast('学生账号请从学生端登录')
     }
-    setAuth(res.token, res.user)
+    setAuth(res.token, res.user, res.refresh_token)
     if (res.must_change_password) {
       showToast('请先修改初始密码')
-      router.replace('/admin/change-password?first=1')
+      // 强制改密必须落在移动端改密页：跳 /admin/change-password 会把手机用户送到桌面端页面
+      router.replace('/m/change-password?first=1')
       return
     }
     showToast({ type: 'success', message: '登录成功' })

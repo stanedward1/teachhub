@@ -16,6 +16,15 @@ from threading import Lock
 
 from fastapi import Request
 
+from app.logging_config import (
+    new_request_id,
+    reset_request_id,
+    set_request_id,
+)
+
+# 请求头/响应头中的 request-id 字段名
+_REQUEST_ID_HEADER = "X-Request-ID"
+
 _access_logger = logging.getLogger("teachhub.access")
 
 _mutex = Lock()
@@ -34,8 +43,16 @@ _inflight_requests: int = 0
 
 
 async def request_logging_middleware(request: Request, call_next):
-    """访问日志中间件：结构化记录请求耗时与状态，并累加指标。"""
+    """访问日志中间件：绑定 request-id、记录请求耗时与状态，并累加指标。
+
+    - 优先沿用上游传入的 ``X-Request-ID``（便于跨服务串联），否则生成新 id。
+    - request-id 写入日志上下文，并在 finally 中还原，避免上下文泄漏。
+    - 无论成功失败，都会把 request-id 回写到响应头 ``X-Request-ID``。
+    """
     global _slow_requests_total, _inflight_requests
+
+    request_id = request.headers.get(_REQUEST_ID_HEADER) or new_request_id()
+    token = set_request_id(request_id)
 
     start = time.perf_counter()
     with _mutex:
@@ -68,6 +85,10 @@ async def request_logging_middleware(request: Request, call_next):
                 "%s %s %s %.1fms",
                 request.method, request.url.path, status_code, elapsed * 1000,
             )
+        # 回写 request-id，便于前端/网关按同一 id 排查
+        if response is not None:
+            response.headers[_REQUEST_ID_HEADER] = request_id
+        reset_request_id(token)
 
 
 def _escape_label(s: str) -> str:

@@ -20,6 +20,15 @@ class PasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=1, max_length=50)
 
 
+class RegistrationSetting(BaseModel):
+    """平台级「学生自助注册」总开关请求体（平台超管）。
+
+    allow_registration=True 开放注册；False 关闭注册（登录页隐藏入口 + 后端拒绝注册）。
+    """
+
+    allow_registration: bool = Field(..., description="是否开放学生自助注册")
+
+
 # ============ 成绩 ============
 class ScoreCreate(BaseModel):
     student_id: int = Field(..., gt=0)
@@ -299,4 +308,15 @@ class UserOut(_ORMOut):
     school_id: int | None = None
     class_id: int | None = None
     must_change_password: bool | None = None
+
+
+# ============ 刷新令牌（F3） ============
+class RefreshRequest(BaseModel):
+    """刷新 / 登出请求体：携带登录或刷新接口返回的长期刷新令牌。
+
+    不加最小长度约束：空串 / 无效令牌统一走「按 hash 未命中 → 401」分支，
+    与刷新接口的错误语义保持一致。
+    """
+
+    refresh_token: str
 

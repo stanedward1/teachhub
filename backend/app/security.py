@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -49,3 +51,17 @@ def create_access_token(
 
 def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+
+
+# ---------------- 刷新令牌（F3） ----------------
+def create_refresh_token() -> str:
+    """生成一个高熵、URL 安全的刷新令牌明文（48 字节随机）。
+
+    仅返回明文，落库前必须经 `hash_refresh_token` 摘要；明文只在签发响应中返回一次。
+    """
+    return secrets.token_urlsafe(48)
+
+
+def hash_refresh_token(token: str) -> str:
+    """计算刷新令牌的 sha256 十六进制摘要（64 字符），用于落库与按值检索。"""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

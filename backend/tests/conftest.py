@@ -12,6 +12,11 @@ from app.database import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.seed import seed_all  # noqa: E402
 
+# 测试环境关闭限流：用例会反复调用 /api/auth/login，触发 @limiter.limit("5/minute")
+# 的 429（跨用例累计）。仅禁用测试进程内的 Limiter.enabled，生产限流不变
+# （main.py 仍挂载 app.state.limiter，登录 5/min、注册 10/min、刷新 30/min 照常生效）。
+app.state.limiter.enabled = False
+
 
 @pytest.fixture(scope="session", autouse=True)
 def init_db():

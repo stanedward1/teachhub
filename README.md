@@ -8,10 +8,10 @@ TeachHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 
 | 文档 | 说明 |
 | ---- | ---- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、设计决策 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、可观测性、设计决策 |
+| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（136 条业务接口 + 运维端点，方法 + 路径 + 权限 + 约定） |
+| [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 34 张表、外键删除策略分层、软关联说明 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、权限与多租户隔离规范、Git 规范、测试规范、发布流程 |
-| [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 33 张表、外键删除策略分层、软关联说明 |
-| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（方法 + 路径 + 权限 + 约定） |
 
 ## 核心特性
 
@@ -93,6 +93,17 @@ TeachHub 将**在线作业提交平台**、**班级日志管理系统**、**教�
 - 教师端提交列表**固定高度截断**展示作业内容，点击"查看详情"进入完整页面
 - 详情页展示完整作业 + **教师点评区**（评语 + 可选评分 0-100 + 删除点评）
 - 学生提交后教师可逐份点评，学生端可见
+- **学生端反馈闭环**：「我的提交」每行可进入**提交详情页**，查看完整内容、教师批改点评（含分数与点评人）与评优评选评语；作业详情页在提交后直接展示「教师反馈」卡片
+
+### 🖼️ 图文混排与详情纵览
+- **家校沟通 / 工作日志 / 计划总结 / 班级活动 / 师生谈心** 五大模块统一使用 Markdown 图文混排编辑，**图片可插入正文任意位置**
+- 五个模块列表均支持「查看」弹窗，用 Markdown 渲染全文与图片，纵览完整内容
+
+### 🧩 平台治理能力
+- **平台注册总开关**（平台超管）：管理端「系统 → 平台设置」一键开启/关闭全平台学生自助注册。关闭后 ① 后端注册接口返回 403；② 学生登录页**不再展示**「学生注册」入口。开关保存失败自动回滚界面状态
+- **数据看板异常预警**：自动聚合三类可行动洞察——连续缺勤（近 7 天缺勤 ≥ 3 次）、成绩骤降（较上次下降 ≥ 20 分）、待处理请假（未销假），按类别着色展示
+- **操作审计产品化**：审计日志页顶部提供「教师行为统计」（教师活跃度 Top、操作类型分布、近 30 天日趋势），从"后台排查"升级为"行为洞察"
+- **可观测性**：访问日志落盘 `backend/logs/teachhub.log`（按天滚动保留 30 天，慢请求 ≥1s 标注 `[SLOW]`），并提供 Prometheus 格式的 `/metrics` 端点
 
 ## 技术栈
 
@@ -120,7 +131,9 @@ techhub/
 ├── backend/                    # FastAPI 后端
 │   ├── app/
 │   │   ├── main.py             # 应用入口（路由挂载、CORS、迁移、租户中间件）
-│   │   ├── config.py           # 配置（env 驱动）
+│   │   ├── config.py           # 配置（pydantic-settings + .env 绝对路径加载，env 驱动）
+│   │   ├── pagination.py       # 单查询分页（COUNT(*) OVER () 一次往返取「数据 + 总数」）
+│   │   ├── logging_config.py   # 结构化日志（X-Request-ID 透传 + RequestIdFilter + StructuredFormatter）
 │   │   ├── database.py         # SQLAlchemy 连接 + Alembic 迁移
 │   │   ├── security.py         # JWT + bcrypt 密码哈希
 │   │   ├── deps.py             # 依赖注入（角色权限 + 停用学校拦截）
@@ -129,28 +142,38 @@ techhub/
 │   │   ├── schemas.py          # Pydantic 校验模型
 │   │   ├── utils.py            # 工具函数（to_dict / gen_student_no / normalize_page）
 │   │   ├── audit.py            # 操作审计日志 + 批量查询
+│   │   ├── platform_settings.py# 平台级全局配置（school_id IS NULL 作用域）
+│   │   ├── observability.py    # 可观测性：访问日志中间件 + /metrics（Prometheus）
 │   │   ├── seed.py             # 假数据种子（默认校 + 第二校，多租户）
 │   │   ├── cleanup.py          # 级联清理（purge_student_data / purge_user_data）
-│   │   ├── models/             # 数据模型（按域分组，33 张表）
+│   │   ├── models/             # 数据模型（按域分组，34 张表）
 │   │   │   ├── user.py         #   User
 │   │   │   ├── school.py       #   School / Classroom / ClassTeacher / Student
+│   │   │   ├── refresh_token.py #  RefreshToken（刷新令牌：轮换 + 撤销，仅存 sha256 摘要）
 │   │   │   ├── homework.py     #   Assignment / AssignmentAttachment / Submission / ExcellentWork / WorkComment / SubmissionComment
 │   │   │   ├── workbench.py    #   Score / Leave / Communication / Resource / Exam / Seat / Setting / ImportHistory / StudentProfileTag / WeeklyReport / StudentBoardHistory
 │   │   │   ├── classlog.py     #   WorkLog / ClassPlan / TeacherPlan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
 │   │   │   └── operation_log.py
-│   │   └── routers/            # API 路由（按业务域分组）
-│   │       ├── auth.py         #   登录/注册/密码/头像上传/学校下拉（含登录限流）
+│   │   ├── services/           # 业务逻辑层（router 只保留装饰器/依赖/参数解析/调 service/返回）
+│   │   │   ├── auth_service.py / students_service.py / classlog_service.py
+│   │   │   ├── homework_service.py / admin_service.py / mobile_service.py
+│   │   │   ├── meta_service.py / attendance_service.py / uploads_service.py
+│   │   │   └── workbench/      #   教师工作台子域（_common + scores/leaves/communications/resources/exams/seats/imports/profile/reports）
+│   │   └── routers/            # API 路由（按业务域分组，均为薄壳）
+│   │       ├── auth.py         #   登录/注册/注册开关状态/密码/头像上传/学校下拉/令牌刷新/登出（含登录限流）
 │   │       ├── meta.py         #   班级选项、编程练习
 │   │       ├── homework.py     #   作业/提交/优秀作品/评论
 │   │       ├── students.py     #   学校/班级/学生 CRUD + 导出 + 密码管理 + 通宿生统计 + 住宿历史
-│   │       ├── workbench.py    #   成绩/考勤/积分/沟通/资源/试卷/座位 + 批量导入 + 画像 + 周报
+│   │       ├── workbench/      #   教师工作台子包（scores/leaves/communications/resources/exams/seats/imports/profile/reports）
 │   │       ├── classlog.py     #   日志/计划/课表/活动/谈心/返校/表现/评语
 │   │       ├── attendance.py   #   考勤点名 + 出勤率统计
 │   │       ├── mobile.py       #   移动端轻量接口
-│   │       ├── admin.py        #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览
+│   │       ├── admin.py        #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览 / 平台注册开关
 │   │       └── uploads.py      #   通用文件上传
-│   ├── alembic/                # 数据库迁移（schema 唯一来源）
+│   ├── alembic/                # 数据库迁移（schema 唯一来源，23 个 revision）
+│   ├── logs/                   # 运行日志（teachhub.log，按天滚动保留 30 天）
 │   ├── tests/                  # pytest 自动化测试（含多租户隔离）
+│   ├── pytest.ini              # pytest 配置（testpaths = tests）
 │   ├── clean_data.sql          # 数据清理 SQL（清空业务数据，保留账号+学校）
 │   ├── repair_student_profiles.py  # 存量学生档案修复脚本
 │   ├── ensure_school_admin.py      # 幂等补建学校管理员
@@ -166,19 +189,24 @@ techhub/
 │   │   ├── router/             # 路由 + 角色守卫（四角色 + 强制改密）
 │   │   ├── stores/             # Pinia 状态（auth）
 │   │   ├── utils/              # 认证工具
-│   │   ├── composables/        # 可组合函数（useSort、useSubmit）
-│   │   ├── components/         # Markdown / MarkdownEditor / StudentSelect（班级联动）/ SortBar
-│   │   ├── layout/             # AdminLayout（可折叠侧边栏）/ StudentLayout
+│   │   ├── composables/        # 可组合函数（useSort、useDebouncedRef、useSubmit、useDownload、useLogout）
+│   │   ├── components/         # ImportDialog（通用导入弹窗）/ Markdown / MarkdownEditor / StudentSelect（班级联动）/ StudentCard / SortBar / PaginationBar / StateView（列表四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList（后四者为统一体验态组件）
+│   │   ├── layout/             # AdminLayout（可折叠侧边栏）/ StudentLayout；页头/菜单下沉 layout/admin/（AdminSidebar / AdminHeader / menuConfig.js）
 │   │   ├── mobile/             # 移动端（Vant）：layout + views（登录/首页/学生/考勤/记录/请假/改密）+ api
-│   │   └── views/              # 页面（student/ + admin/，含学校管理）
+│   │   └── views/              # 页面（student/ 9 个 + admin/ 29 个，含学校管理、平台设置；Students/Scores 页内子组件见 admin/students/、admin/scores/）
 │   ├── vite.config.js          # /api 与 /uploads 代理 + 构建优化
 │   ├── eslint.config.js        # ESLint 10（flat config）
 │   ├── Dockerfile              # 前端镜像（Node 构建 + Nginx 托管）
 │   ├── nginx.conf              # Nginx 配置（静态托管 + 反代后端）
 │   └── package.json
-├── docs/                       # 架构设计 / 开发规范
+├── docs/                       # 架构设计 / 接口 / ER 图 / 开发规范 / 变更日志
+├── .husky/                     # Git hooks（pre-commit 跑 lint-staged；commit-msg 跑 commitlint）
+├── commitlint.config.cjs       # 提交信息规范（Conventional Commits）
+├── .lintstagedrc.json          # 暂存文件 lint/格式化规则
+├── .gitattributes              # 换行符约定（.husky/* 强制 LF）
 ├── docker-compose.yml          # 一键编排后端 + 前端
-├── start.sh                    # 一键启动脚本（Linux 本机）
+├── start.sh                    # 一键启动脚本（Linux/macOS 本机）
+├── stop.sh                     # 一键停止脚本（跨平台：按 PID/端口清理前后端进程）
 └── README.md
 ```
 
@@ -245,7 +273,17 @@ cd techhub
 启动完成后：
 - 前端：http://localhost:5173 （局域网设备用 `http://<本机IP>:5173/`）
 - 后端 API 文档：http://localhost:8080/docs
+- 健康检查 / 指标：http://localhost:8080/health 、 http://localhost:8080/metrics
+- 运行日志：`backend/logs/teachhub.log`（按天滚动，保留 30 天；`tail -f backend/logs/teachhub.log` 实时查看）
 - 数据库：默认 **SQLite**（`backend/teachhub.db`，零配置）；如需 MySQL/MariaDB，运行 `DB_ENGINE=mysql bash start.sh` 并在 `start.sh` 顶部配置账号密码
+
+停止服务（跨平台，按进程/端口清理）：
+
+```bash
+./stop.sh              # 停止前后端
+./stop.sh backend      # 仅停止后端
+./stop.sh frontend     # 仅停止前端
+```
 
 > **说明**：`start.sh` 自动检测 CPU 架构（x86_64 / arm64）、安装系统依赖与 Node.js 20、
 > 创建 Python 虚拟环境、生成 `.env`、执行数据库迁移（Alembic）与首次 seed、最后启动前后端；
@@ -511,8 +549,10 @@ curl http://localhost/
 curl -X POST http://localhost/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin123"}'
-# 预期返回：{"token":"...","user":{...}}
+# 预期返回：{"token":"...","refresh_token":"...","user":{...},"must_change_password":false}
 ```
+
+> 访问令牌 `token` 用于后续请求的 `Authorization: Bearer <token>`；`refresh_token` 用于 `POST /api/auth/refresh` 换取新令牌对（一次性轮换），登出调 `POST /api/auth/logout`。详见 [docs/API.md](docs/API.md)。
 
 ---
 
@@ -532,7 +572,8 @@ python -m pytest tests/ -v
 | `ENV` | 运行环境 | `development` | `production` |
 | `SECRET_KEY` | JWT 签名密钥 | 开发默认值 | **必须修改**为随机 64 位 hex |
 | `DATABASE_URL` | 数据库连接串 | `sqlite:///./teachhub.db` | MySQL/PostgreSQL 连接串 |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Token 有效期 | `1440`（24h） | 按需调整 |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | 访问令牌有效期（分钟） | `1440`（24h） | 按需调整 |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | 刷新令牌有效期（天） | `30` | 按需调整 |
 | `MAX_UPLOAD_SIZE` | 上传文件大小上限 | `20971520`（20MB） | 按需调整 |
 | `CORS_ORIGINS` | 允许跨域的前端地址 | `http://localhost:5173` | 生产域名 |
 | `ALGORITHM` | JWT 签名算法 | `HS256` | 保持默认 |
@@ -546,8 +587,11 @@ python -m pytest tests/ -v
 | 文件上传失败 | 上传目录权限不足 | `chmod 755 backend/uploads` |
 | 登录后立即跳回登录页 | Token 过期或 SECRET_KEY 变更 | 清除浏览器 localStorage，重新登录 |
 | 图表不显示 | ECharts DOM 未就绪 | 刷新页面，等待数据加载完成 |
-| `address already in use` | 端口被占用 | 修改 `run.py` 中的 `port` 参数 |
+| `address already in use` | 端口被占用 | 先执行 `./stop.sh` 清理残留进程；或修改 `run.py` 中的 `port` 参数 |
 | 数据库文件损坏 | 异常断电 | 恢复 `teachhub.db` 备份文件 |
+| 想排查接口报错/慢请求 | 需要运行日志 | 查看 `backend/logs/teachhub.log`（慢请求 ≥1s 标注 `[SLOW]`）；或抓取 `/metrics` 看耗时直方图与状态码分布 |
+| 接入 Prometheus | 需要指标端点 | 将抓取目标指向 `http://<host>:8080/metrics` |
+| 学生登录页没有「学生注册」入口 | 平台注册开关处于关闭状态 | 平台超管登录管理端 → 「系统 → 平台设置」打开注册开关；接口 `GET /api/auth/registration-status` 可查看当前状态 |
 
 ## License
 

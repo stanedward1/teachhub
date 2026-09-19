@@ -1,34 +1,35 @@
-"""教师工作台子路由共享依赖。
+"""工作台 router 层共享辅助（薄壳）。
 
-拆分自原 workbench.py，供各资源域子模块复用公共 import 与权限辅助。
+router 仅负责依赖注入 + 路由构造；公共业务辅助统一从 service 层复用，避免逻辑散落在
+router。保留本模块以兼容既有子路由的 import 路径（`from app.routers.workbench._common
+import ...`）。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter
 
-from app.database import get_db
-from app.deps import require_teacher, get_current_user
-from app.audit import (
-    attach_student,
-    serialize_list_with_students,
-    audit,
-    student_name,
-    active_student_id_query,
+from app.services.workbench._common import (  # noqa: F401  (re-export)
     active_classroom_id_query,
-    batch_student_map,
-)
-from app.permissions import (
-    is_any_admin,
-    get_teacher_class_ids,
-    is_student_in_teacher_classes,
-    is_teacher_class_owner,
+    active_student_id_query,
     apply_student_class_filter,
     apply_teacher_student_filter,
-    ensure_student_operable,
+    attach_student,
+    audit,
+    batch_student_map,
+    dep,
     ensure_class_operable,
+    ensure_student_operable,
+    get_current_user,
+    get_db,
+    get_teacher_class_ids,
+    is_any_admin,
+    is_student_in_teacher_classes,
+    is_teacher_class_owner,
+    normalize_page,
+    parse_date,
+    require_teacher,
+    serialize_list_with_students,
+    student_name,
+    to_dict,
 )
-from app.utils import to_dict, normalize_page, parse_date
-
-# 每个子模块创建一个独立的 APIRouter，统一挂在 /api 前缀下
-dep = require_teacher
 
 
 def new_router(tag: str) -> APIRouter:
