@@ -256,9 +256,12 @@ def create_user(db: Session, payload: dict, user: User) -> dict:
         raise HTTPException(status_code=400, detail="角色不合法")
     if role == "school_admin" and not is_platform_admin(user):
         raise HTTPException(status_code=403, detail="只有平台超管可以创建学校管理员")
-    # 多租户：用户名唯一性按角色分叉，与设计意图（DB 唯一约束 class_id+username）一致。
+    # 多租户：用户名唯一性按角色分叉，与数据库约束 uq_user_scope_username
+    # （users.username_scope + username）保持同一口径。这里只是「先查后插」的友好提示，
+    # 真正的唯一性保证在**数据库层** —— 并发提交时本校验可能双双通过，届时由约束兜底
+    # （main.py 的 IntegrityError handler 会转成 409 中文提示）。
     # - 学生账号 username=姓名，允许跨班重名，仅约束「同校同班不重复」；
-    # - 教师/学校管理员 class_id 为 NULL（MySQL 下 NULL 不参与唯一判定），需 (school_id, username) 兜底。
+    # - 教师/学校管理员 username=登录名，约束「同校不重复」。
     target_school_id = payload.get("school_id") or user.school_id
     if role == "student":
         target_class_id = payload.get("class_id")

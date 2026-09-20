@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.database import run_migrations
@@ -115,6 +116,34 @@ async def validation_exception_handler(request, exc: RequestValidationError):
         field = ".".join(loc) or "参数"
         return JSONResponse(status_code=422, content={"detail": f"参数校验失败：{field}"})
     return JSONResponse(status_code=422, content={"detail": "参数校验失败"})
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(request, exc: IntegrityError):
+    """数据库完整性约束冲突 → 409，而不是笼统的 500。
+
+    唯一性约束现在是**最后一道防线**：应用层会先做「先查后插」的友好校验（返回 400），
+    但并发提交、批量导入、多条写入路径并存时仍可能撞上约束。这里统一收敛为 409 +
+    中文提示，既避免把驱动的原始报错（含表名、字段名）泄漏给前端，也保证并发场景下
+    用户看到的是可理解的提示而不是「服务器内部错误」。
+    """
+    raw = str(getattr(exc, "orig", exc))
+    # ⚠️ 不同方言的报错文本形态不同，两边的特征串都要认，否则会静默落到通用分支：
+    # - MySQL：`(1062, "Duplicate entry 'staff:1-x' for key 'users.uq_user_scope_username'")`
+    #   报的是**索引名**，注意它含 `scope_username` 但**不含** `username_scope`；
+    # - SQLite：`UNIQUE constraint failed: users.username_scope, users.username`
+    #   报的是**列名**。
+    if any(
+        token in raw
+        for token in ("uq_user_scope_username", "username_scope", "uq_user_class_username")
+    ):
+        detail = "该账号在本校（或本班）内已存在，请更换用户名"
+    elif "foreign key" in raw.lower():
+        detail = "数据冲突：关联的记录已不存在，请刷新后重试"
+    else:
+        detail = "数据冲突：已存在重复记录，请检查后重试"
+    logger.warning("数据库完整性约束冲突: %s %s -> %s", request.method, request.url.path, raw)
+    return JSONResponse(status_code=409, content={"detail": detail})
 
 
 @app.exception_handler(Exception)
