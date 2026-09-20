@@ -13,7 +13,7 @@
 import json
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.audit import (
@@ -50,7 +50,7 @@ from app.permissions import (
     ensure_student_operable,
     ensure_class_operable,
 )
-from app.utils import to_dict, normalize_page, parse_date
+from app.utils import stringify_dates, to_dict, normalize_page, parse_date
 
 
 # ---------------- 内部辅助 ----------------
@@ -389,7 +389,7 @@ def create_talk(db: Session, payload, user: User) -> dict:
     audit(db, user, "create_talk", target=f"新增谈心-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"内容：{(x.content or '')[:50]}")
     db.commit()
     db.refresh(x)
-    return _serialize_talk(attach_student(db, to_dict(x), x.student_id))
+    return stringify_dates(_serialize_talk(attach_student(db, to_dict(x), x.student_id)))
 
 
 def delete_talk(db: Session, talk_id: int, user: User) -> dict:
@@ -441,7 +441,8 @@ def create_return_record(db: Session, payload, user: User) -> dict:
     audit(db, user, "create_return_record", target=f"新增返校-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"返校日期：{x.return_date or ''}；事由：{(x.reason or '')[:50]}")
     db.commit()
     db.refresh(x)
-    return attach_student(db, to_dict(x), x.student_id)
+    # ReturnRecordOut.return_date / created_at 声明为 str，必须过 stringify_dates
+    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
 
 
 def delete_return_record(db: Session, record_id: int, user: User) -> dict:
@@ -483,6 +484,77 @@ def list_performances(
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
+# 空汇总（筛选越权 / 无可见班级时返回），键与 summarize_performances 保持一致
+_EMPTY_POINT_SUMMARY = {
+    "delta": 0,
+    "positive": 0,
+    "negative": 0,
+    "count": 0,
+    "student_count": 0,
+}
+
+
+def summarize_performances(
+    db: Session,
+    student_id: int | None,
+    class_id: int | None,
+    ptype: str,
+    user: User,
+) -> dict:
+    """按当前筛选条件汇总积分（净变动 / 累计加分 / 累计扣分 / 记录数 / 涉及学生数）。
+
+    这是「学生表现」页顶部积分汇总条的取数口，用于让教师一眼看到筛选范围内的积分状况，
+    补上「积分看不到合计」的缺口。
+
+    **权限与筛选口径完全复用 `list_performances` 的同一条链路**
+    （`_filter_student_query` + `apply_student_class_filter` + 教师班级校验），
+    保证「列表看到的记录」与「汇总统计的记录」永远是同一批 ——
+    否则会出现列表 12 条、汇总按 20 条算的口径错位。
+
+    ⚠️ **聚合查询必须显式叠加租户过滤**：ORM 的 `do_orm_execute` + `with_loader_criteria`
+    只对「加载实体」的 SELECT 生效，一旦查询被 `with_entities(func.sum(...))` 改写成
+    纯聚合，`with_loader_criteria` 不会注入任何条件（实测生成的 SQL 里没有 school_id），
+    学校管理员会跨校串数。`admin_service.dashboard()` 的 `_tenant_count` 出于同样原因手工过滤。
+    这里对非平台超管显式加 `school_id`，同时也顺带拦住了「越权传入他校 student_id / class_id」。
+
+    口径说明：返回的是**变动口径**（`delta = Σpoints`），与画像页
+    `point_summary.total = BASE_POINTS(100) + delta` 的**总分口径**不同 ——
+    本接口跨多个学生聚合，叠加每人 100 的基数会产生无意义数值，
+    因此字段刻意命名为 `delta` 而非 `total`，避免与画像口径混淆。
+    """
+    q = _filter_student_query(db, Performance, user)
+    # 显式租户过滤（见 docstring 的 ⚠️）
+    if user.school_id is not None:
+        q = q.filter(Performance.school_id == user.school_id)
+    if class_id:
+        q, denied = apply_student_class_filter(db, user, q, class_id, Performance)
+        if denied:
+            return dict(_EMPTY_POINT_SUMMARY)
+    if student_id:
+        # 教师只能查看自己班级学生的表现
+        if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
+            return dict(_EMPTY_POINT_SUMMARY)
+        q = q.filter(Performance.student_id == student_id)
+    if ptype:
+        q = q.filter(Performance.ptype == ptype)
+
+    row = q.with_entities(
+        func.coalesce(func.sum(Performance.points), 0),
+        func.coalesce(func.sum(case((Performance.points > 0, Performance.points), else_=0)), 0),
+        func.coalesce(func.sum(case((Performance.points < 0, Performance.points), else_=0)), 0),
+        func.count(Performance.id),
+        func.count(func.distinct(Performance.student_id)),
+    ).one()
+    delta, positive, negative, count, student_count = row
+    return {
+        "delta": int(delta or 0),
+        "positive": int(positive or 0),
+        "negative": int(negative or 0),
+        "count": int(count or 0),
+        "student_count": int(student_count or 0),
+    }
+
+
 def create_performance(db: Session, payload: dict, user: User) -> dict:
     if not payload.get("student_id"):
         raise HTTPException(status_code=400, detail="请选择学生")
@@ -503,10 +575,12 @@ def create_performance(db: Session, payload: dict, user: User) -> dict:
         image=payload.get("image"),
     )
     db.add(x)
-    audit(db, user, "create_performance", target=f"新增表现-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"类型：{x.ptype}；分值：{x.points}；内容：{(x.content or '')[:50]}")
+    audit(db, user, "create_performance", target=f"新增表现-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"类型：{x.ptype}；积分：{x.points}；内容：{(x.content or '')[:50]}")
     db.commit()
     db.refresh(x)
-    return attach_student(db, to_dict(x), x.student_id)
+    # PerformanceOut.created_at 声明为 str，必须过 stringify_dates ——
+    # 否则会「先 commit 成功、再在响应校验时抛错」，客户端收到 500 但数据已落库
+    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
 
 
 def delete_performance(db: Session, performance_id: int, user: User) -> dict:
@@ -635,7 +709,8 @@ def create_student_comment(db: Session, payload: dict, user: User) -> dict:
     audit(db, user, "create_student_comment", target=f"新增评语-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"内容：{(x.content or '')[:80]}")
     db.commit()
     db.refresh(x)
-    return attach_student(db, to_dict(x), x.student_id)
+    # StudentCommentOut.created_at 声明为 str，必须过 stringify_dates
+    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
 
 
 def update_student_comment(db: Session, comment_id: int, payload: dict, user: User) -> dict:
@@ -649,7 +724,8 @@ def update_student_comment(db: Session, comment_id: int, payload: dict, user: Us
     audit(db, user, "update_student_comment", target=f"评语#{comment_id}-{student_name(db, x.student_id)}", student_id=x.student_id)
     db.commit()
     db.refresh(x)
-    return attach_student(db, to_dict(x), x.student_id)
+    # StudentCommentOut.created_at 声明为 str，必须过 stringify_dates
+    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
 
 
 def delete_student_comment(db: Session, comment_id: int, user: User) -> dict:

@@ -25,6 +25,33 @@
       <el-button type="primary" @click="openCreate">新增表现记录</el-button>
     </div>
 
+    <!--
+      积分汇总：与下方列表同源同筛选（都走 buildParams 的同一批 ref）。
+      补上「积分看不到合计」的缺口 —— 表现是模块名，积分是它的数值维度，两者本就是一件事。
+    -->
+    <div class="page-card point-summary">
+      <div class="ps-item">
+        <span class="ps-value" :style="{ color: deltaColor }">{{ signed(summary.delta) }}</span>
+        <span class="ps-label">积分变动</span>
+      </div>
+      <div class="ps-item">
+        <span class="ps-value" style="color: #67c23a">{{ signed(summary.positive) }}</span>
+        <span class="ps-label">累计加分</span>
+      </div>
+      <div class="ps-item">
+        <span class="ps-value" style="color: #f56c6c">{{ summary.negative }}</span>
+        <span class="ps-label">累计扣分</span>
+      </div>
+      <div class="ps-item">
+        <span class="ps-value">{{ summary.count }}</span>
+        <span class="ps-label">记录条数</span>
+      </div>
+      <div class="ps-item">
+        <span class="ps-value">{{ summary.student_count }}</span>
+        <span class="ps-label">涉及学生</span>
+      </div>
+    </div>
+
     <div class="page-card">
       <StateView
         :loading="loading"
@@ -49,7 +76,7 @@
               }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="分值" width="70" align="center">
+          <el-table-column label="积分" width="70" align="center">
             <template #default="{ row }">
               <span
                 :style="{
@@ -113,7 +140,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
@@ -150,6 +177,38 @@ const {
     class_id: classId.value,
   }),
   removeTip: () => '确定删除该记录吗？',
+  // 列表每次加载成功后同步刷新积分汇总；删除记录走的也是 load()，因此汇总会自动跟着变
+  onLoaded: loadSummary,
+})
+
+// ---------------- 积分汇总 ----------------
+// 与列表共用同一批筛选 ref，保证「看到的记录」和「统计到的积分」永远是同一批数据
+const EMPTY_SUMMARY = { delta: 0, positive: 0, negative: 0, count: 0, student_count: 0 }
+const summary = ref({ ...EMPTY_SUMMARY })
+
+async function loadSummary() {
+  try {
+    summary.value = await performanceApi.summary({
+      student_id: studentId.value,
+      class_id: classId.value,
+      ptype: ptype.value,
+    })
+  } catch (e) {
+    summary.value = { ...EMPTY_SUMMARY }
+  }
+}
+
+/** 正数补 + 号，负号由数值自带 —— 让「加分/扣分」一眼可辨 */
+function signed(v) {
+  const n = v || 0
+  return n > 0 ? `+${n}` : `${n}`
+}
+
+const deltaColor = computed(() => {
+  const d = summary.value.delta || 0
+  if (d > 0) return '#67c23a'
+  if (d < 0) return '#f56c6c'
+  return '#909399'
 })
 
 // 跨模块学生卡片
@@ -190,3 +249,27 @@ async function save() {
   }
 }
 </script>
+
+<style scoped>
+/* 积分汇总条：横向排布 + 等宽数字，避免数值跳动时布局抖动 */
+.point-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 32px;
+}
+.ps-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.ps-value {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ps-label {
+  font-size: 12px;
+  color: #909399;
+}
+</style>

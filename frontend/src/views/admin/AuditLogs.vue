@@ -169,7 +169,7 @@ const ACTION_CN = {
   upload_student_avatar: '上传学生头像',
   add_student_tag: '添加学生标签',
   remove_student_tag: '删除学生标签',
-  // 成绩/考勤/积分/沟通
+  // 成绩/考勤/沟通
   create_score: '录入成绩',
   update_score: '编辑成绩',
   delete_score: '删除成绩',
@@ -177,8 +177,6 @@ const ACTION_CN = {
   create_leave: '登记请假',
   update_leave: '编辑请假',
   delete_leave: '删除请假',
-  create_point: '登记积分',
-  delete_point: '删除积分',
   create_communication: '新增沟通',
   delete_communication: '删除沟通',
   // 资源/试卷/座位/周报

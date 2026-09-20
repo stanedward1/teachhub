@@ -8,6 +8,8 @@
 （`POST /api/auth/refresh`、`POST /api/auth/logout`）与登录响应的
 `refresh_token` 字段。
 """
+import ipaddress
+import logging
 import os
 import uuid
 
@@ -26,6 +28,8 @@ from app.services import auth_service
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
+logger = logging.getLogger(__name__)
+
 # 登录接口限流：按客户端 IP 维度限制登录尝试频率，配合应用层的账号锁定策略，
 # 防止攻击者绕过账号锁定、用分布式 IP 对同一账号进行暴力破解。
 # 注意：limiter 实例在 main.py 中创建并挂到 app.state，这里复用同一个实例
@@ -36,29 +40,89 @@ limiter = Limiter(key_func=get_remote_address)
 public_user = auth_service.public_user
 
 
-def _client_ip(request: Request) -> str | None:
-    """还原真实客户端 IP。
+def _normalize_hop(value: str) -> str:
+    """去掉 IPv4:端口 / [IPv6]:端口 里的端口部分，只留地址。"""
+    value = value.strip()
+    if value.startswith("["):  # [2001:db8::1]:1234
+        return value[1:].split("]", 1)[0]
+    if value.count(":") == 1:  # 114.114.114.114:1234
+        return value.split(":", 1)[0]
+    return value
 
-    部署在 nginx 之后时 `request.client.host` 只会拿到 nginx 自身地址（127.0.0.1），
-    因此优先读反向代理头：
 
-    - `X-Real-IP`：nginx `proxy_set_header X-Real-IP $remote_addr`，最可靠；
-    - `X-Forwarded-For`：形如 `client, proxy1, proxy2`，取**最右侧**一跳 ——
-      nginx 用 `$proxy_add_x_forwarded_for` 时会把真实对端追加在末尾，
-      而左侧内容可被客户端伪造，取最右可避免完全采信伪造值。
+def _parse_ip(value: str) -> ipaddress._BaseAddress | None:
+    """把一跳解析成 IP 对象；不是合法 IP（如 XFF 里的 `unknown` 占位符）则返回 None。
 
-    **前提**：服务确实位于可信反向代理之后。若直连暴露且未过滤该头，
-    客户端可伪造 IP —— 此时该值仅作参考，不作为安全依据。
+    返回对象而非字符串，顺带完成规范化（`::1`、`114.114.114.114` 都是标准写法）。
     """
-    real_ip = (request.headers.get("x-real-ip") or "").strip()
-    if real_ip:
-        return real_ip
+    try:
+        return ipaddress.ip_address(_normalize_hop(value))
+    except ValueError:
+        return None
+
+
+def _is_own_hop(ip: ipaddress._BaseAddress) -> bool:
+    """该跳是否属于「我们自己的基础设施」（回环 / 内网地址）。
+
+    多层反向代理时每一层都会把自己的**对端地址**追加到 `X-Forwarded-For` 末尾，
+    所以链的右端常常是我们自己的 nginx / 负载均衡（`127.0.0.1`、`172.x`、`10.x`…），
+    并非真实客户端 —— 这些地址必须跳过，否则会把真实 IP 覆盖成 `127.0.0.1`。
+    """
+    return ip.is_loopback or ip.is_private
+
+
+def _client_ip(request: Request) -> str | None:
+    """还原真实客户端 IP，支持**多层**反向代理。
+
+    部署在反向代理之后时 `request.client.host` 只会拿到直连对端（代理自身），
+    因此需要从代理头里还原：
+
+    - `X-Real-IP`：由**最近一跳**代理写入（nginx `proxy_set_header X-Real-IP $remote_addr`）。
+      因为它来自我们自己的直连代理，客户端无法伪造，**可信度最高**。
+    - `X-Forwarded-For`：形如 `client, proxy1, proxy2`，**越靠左越接近原始客户端**；
+      每经过一层代理，该层会把自己的对端地址追加到**末尾**。
+
+    还原策略（按优先级）：
+
+    1. `X-Real-IP` 存在且**不属于我们自己的基础设施**（非回环 / 非内网）→ 直接采用。
+    2. 否则（缺失，或已被自有基础设施覆盖）→ 退回 `X-Forwarded-For`，取**最左的非自有跳**。
+    3. 都没有 → 回退到 TCP 对端。
+
+    为什么不能简单地"取最右一跳"：**多层代理**时内层 nginx 的 `$remote_addr` 是上一跳
+    （常见 `127.0.0.1` 或 docker 网关），它会被追加到 XFF 末尾，于是"最右"永远是我们的
+    基础设施地址 —— 这正是「所有用户都记成 127.0.0.1」的成因。所以必须跳过这些自有跳。
+
+    **前提与边界**：服务应位于可信反向代理之后。单层代理时 `X-Real-IP` 不可伪造，
+    该值可信；**多层代理**且内层未用 realip 模块还原时，只能依据 XFF 判断，
+    此时若服务直连暴露、客户端可自带 XFF 伪造 —— 故该值仅供**展示与留痕**，
+    **不得作为安全依据**。
+    """
+    real_ip = _parse_ip(request.headers.get("x-real-ip") or "")
+
+    # 1) 直连代理写下的 X-Real-IP：客户端无法伪造，最可信。
+    #    仅当它不属于我们自己的基础设施时才采用 —— 多层代理时内层 nginx 会把
+    #    $remote_addr（127.0.0.1 / docker 网关）写进来，那种值必须丢弃。
+    if real_ip is not None and not _is_own_hop(real_ip):
+        return str(real_ip)
+
+    # 2) X-Real-IP 缺失或已被自有基础设施覆盖：退回 X-Forwarded-For 链。
+    #    取最左的非自有跳（最接近原始客户端），跳过自有跳以免取到 127.0.0.1。
     xff = request.headers.get("x-forwarded-for")
-    if xff:
-        # 最右侧一跳：代理链中由最近的代理写入，比最左侧更可信
-        hops = [h.strip() for h in xff.split(",") if h.strip()]
-        if hops:
-            return hops[-1]
+    hops = []
+    for raw in xff.split(",") if xff else []:
+        ip = _parse_ip(raw)
+        if ip is not None:  # 跳过 "unknown" 之类的非 IP 占位符
+            hops.append(ip)
+    for ip in hops:
+        if not _is_own_hop(ip):
+            return str(ip)
+    # 整条链都是内网地址（纯内网部署）：最左一跳最接近真实客户端
+    if hops:
+        return str(hops[0])
+
+    # 3) 完全没有任何来源：如实返回 X-Real-IP，或回退到 TCP 对端（直连时即真实 IP）
+    if real_ip is not None:
+        return str(real_ip)
     client = request.client
     return client.host if client else None
 
@@ -72,6 +136,15 @@ def _client_meta(request: Request) -> tuple[str | None, str | None]:
 @limiter.limit("5/minute")
 def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     user_agent, ip = _client_meta(request)
+    # 排查「所有用户都记成同一个 IP」时，这一行可直接看出是链路根本没传代理头，
+    # 还是被某一层代理覆盖成了 127.0.0.1（还原算法见 _client_ip）。
+    logger.info(
+        "客户端 IP 还原: ip=%s | 直连对端=%s | X-Real-IP=%r | X-Forwarded-For=%r",
+        ip,
+        request.client.host if request.client else None,
+        request.headers.get("x-real-ip"),
+        request.headers.get("x-forwarded-for"),
+    )
     return auth_service.login(db, payload, user_agent=user_agent, ip=ip)
 
 

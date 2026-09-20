@@ -139,6 +139,13 @@ def list_performances(page: int = 1, page_size: int = 20, student_id: int | None
     return classlog_service.list_performances(db, page, page_size, student_id, class_id, ptype, user)
 
 
+# 必须声明在 `/performances/{performance_id}` 之前：否则 "summary" 会被当成路径参数匹配掉
+@router.get("/performances/summary")
+def summarize_performances(student_id: int | None = None, class_id: int | None = None, ptype: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """筛选范围内的积分汇总（净变动 / 加分 / 扣分 / 记录数 / 涉及学生数）。"""
+    return classlog_service.summarize_performances(db, student_id, class_id, ptype, user)
+
+
 @router.post("/performances", response_model=PerformanceOut, status_code=201)
 def create_performance(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.create_performance(db, payload, user)

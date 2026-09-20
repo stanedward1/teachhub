@@ -495,6 +495,44 @@ sudo nginx -t           # 测试配置
 sudo systemctl reload nginx
 ```
 
+#### 6.1 多层反向代理下的真实 IP 还原（重要）
+
+上面的 Nginx 配置本身是**正确**的（设了 `X-Real-IP` / `X-Forwarded-For`），单层代理时无需额外处理。
+但若链路是**多层**——例如
+
+```
+浏览器 → 云负载均衡 / CDN → 宿主机 Nginx（或宝塔面板）→ 容器内 Nginx → 后端
+```
+
+则**内层 Nginx** 的 `$remote_addr` 是上一跳（`127.0.0.1` 或 docker 网关），
+它用 `proxy_set_header X-Real-IP $remote_addr` 会**覆盖**掉外层已还原好的真实 IP，
+并把同一个地址**追加**到 `X-Forwarded-For` 末尾。结果是学生管理处的「最后登录 IP」
+**对所有用户都显示 127.0.0.1**。
+
+两侧都已做防护，正常部署无需手工干预：
+
+- `frontend/nginx.conf`：用 `realip` 模块（`set_real_ip_from` + `real_ip_recursive on`）
+  信任上游网段，先把 `$remote_addr` 还原成真实客户端，再写 `X-Real-IP`。
+  默认**只信任回环与 docker 网段**（`127.0.0.1` / `172.16.0.0/12`）——
+  这是有意的：信任面越小，内网客户端能伪造 IP 的机会就越小。
+  **若你的上游代理不在其中（例如宿主机以 `10.x` / `192.168.x` 连入），把该网段补进
+  `set_real_ip_from` 即可；即使忘了补，后端也会从 `X-Forwarded-For` 兜底还原，
+  不会退化成 127.0.0.1。**
+- 后端 `routers/auth.py::_client_ip`：不再"取 XFF 最右一跳"，而是
+  「优先取可信的 `X-Real-IP`；被自有基础设施覆盖时，退回 XFF 并跳过自有跳、取最左一跳」，
+  因此多层代理也能还原出真实客户端。
+
+**怎么确认线上是哪种情况**：后端在每次登录时会打一行诊断日志，登录后执行
+
+```bash
+docker compose logs --tail=5 backend | grep "客户端 IP 还原"
+# 或（裸机部署）：tail -5 backend/logs/teachhub.log | grep "客户端 IP 还原"
+```
+
+- 若 `X-Real-IP='127.0.0.1'` 而 `X-Forwarded-For` 里最左是真实公网 IP → 就是上面的多层代理问题，本仓库已有修复；
+- 若两个头**都没有**（显示 `None`）、且 `直连对端=127.0.0.1` → 说明请求没经过带代理头的反代
+  （例如用 SSH 端口转发 / 直接在服务器上访问），此时**物理上拿不到真实客户端 IP**，属正常现象。
+
 ### 7. 配置 HTTPS（推荐）
 
 ```bash

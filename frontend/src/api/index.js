@@ -196,6 +196,8 @@ export const returnRecordApi = {
 
 export const performanceApi = {
   list: (params) => request.get('/api/performances', { params }),
+  // 筛选范围内的积分汇总（净变动 / 累计加分 / 累计扣分 / 记录数 / 涉及学生数）
+  summary: (params) => request.get('/api/performances/summary', { params }),
   create: (data) => request.post('/api/performances', data),
   remove: (id) => request.delete(`/api/performances/${id}`),
 }
