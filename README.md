@@ -497,18 +497,49 @@ sudo systemctl reload nginx
 
 #### 6.1 客户端真实 IP 还原（重要）
 
-本项目按**裸机部署（无 Docker）**编写：前端静态文件由**宿主机 Nginx** 托管，`/api` 反代到本机后端。
+> **核心原则**：客户端 IP 只有**最外层那个代理**知道。它没往下传，后端就**永远拿不到** ——
+> 这不是后端能修的 bug，必须去补**那一层**的转发配置。
 
-##### 最常见的故障：`/api` 反代块漏了转发客户端 IP 的头
+##### 第一步：确认你的前端是谁在提供服务
+
+两种情况，改的地方完全不同：
+
+**情形 A —— 前端由 Vite 开发服务器提供（本项目当前线上就是这样）**
+
+启动方式见根目录 `start.sh`：`npm run dev -- --host 0.0.0.0`（监听 `:5173`）。
+此时**没有 nginx**，转发客户端 IP 是 **Vite 代理**的责任。若 `frontend/vite.config.js` 的
+`server.proxy` 只写了 `changeOrigin: true`，代理就会从 `localhost` 连后端且**不带任何转发头** ——
+后端只能看到 `127.0.0.1`。
+
+修法（加 `xfwd: true`）：
+
+```js
+server: {
+  port: 5173,
+  proxy: {
+    '/api': {
+      target: 'http://localhost:8080',
+      changeOrigin: true,
+      xfwd: true,          // ← 关键：让代理附加 X-Forwarded-For / -Proto / -Host / -Port
+    },
+    '/uploads': {
+      target: 'http://localhost:8080',
+      changeOrigin: true,
+      xfwd: true,
+    },
+  },
+},
+```
+
+改完**重启前端进程**（`npm run dev` 起的那个）即生效，无需改后端。
+
+> 实测对照（经 vite 代理打后端）：改前后端收到 `X-Forwarded-For=None`；
+> 改后收到 `X-Forwarded-For='<客户端地址>'`。
+
+**情形 B —— 前端静态文件由 Nginx 托管**
 
 若 `location /api` 只写了 `proxy_pass` / `Host`，**没写** `X-Real-IP` 与 `X-Forwarded-For`，
-那么 Nginx 从 `127.0.0.1` 连后端、又不传任何代理头 —— 后端只能看到 `127.0.0.1`。
-表现就是「**学生管理处所有用户的最后登录 IP 都是 `127.0.0.1`**」。
-
-> ⚠️ 这种情况下**任何后端代码都救不了**：真实客户端 IP 从未被传到后端，
-> 客观上没有任何信息可用于还原。只能改 Nginx。
-
-正确写法（见上文 §6 的完整配置）：
+Nginx 同样会从 `127.0.0.1` 连后端且不传任何代理头。正确写法：
 
 ```nginx
 location /api {
@@ -521,6 +552,9 @@ location /api {
 ```
 
 改完执行 `sudo nginx -t && sudo systemctl reload nginx`，**无需重新部署后端**。
+
+> 两种情形的共同表现都是「**学生管理处所有用户的最后登录 IP 都是 `127.0.0.1`**」。
+> ⚠️ 此时**任何后端代码都救不了**：真实客户端 IP 从未被传到后端，客观上没有信息可用于还原。
 
 ##### 怎么确认
 
