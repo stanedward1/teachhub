@@ -114,8 +114,32 @@
             </el-descriptions-item>
           </el-descriptions>
 
+          <!-- 随机点人：在未交学生中等概率抽取，点完一轮自动重置，避免重复点同一个人 -->
+          <div v-if="unsubmitted.items.length" class="pick-area">
+            <el-button type="primary" plain size="small" :disabled="picking" @click="randomPick">
+              {{ picking ? '点名中…' : '随机点人' }}
+            </el-button>
+            <span class="pick-progress">
+              已点 {{ pickedIds.length }} / {{ unsubmitted.items.length }}
+            </span>
+            <div v-if="picking || picked" class="pick-card" :class="{ rolling: picking }">
+              <template v-if="picking">
+                <div class="pick-name">{{ rollingName }}</div>
+              </template>
+              <template v-else>
+                <div class="pick-name">{{ picked.name }}</div>
+                <div v-if="picked.student_no" class="pick-no">{{ picked.student_no }}</div>
+              </template>
+            </div>
+          </div>
+
           <div v-if="unsubmitted.items.length" class="unsubmitted-list">
-            <el-tag v-for="s in unsubmitted.items" :key="s.id" type="danger" effect="plain">
+            <el-tag
+              v-for="s in unsubmitted.items"
+              :key="s.id"
+              type="danger"
+              :effect="picked && s.id === picked.id ? 'dark' : 'plain'"
+            >
               {{ s.name }}
               <span v-if="s.student_no" class="tag-no">{{ s.student_no }}</span>
             </el-tag>
@@ -131,7 +155,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import StateView from '../../components/StateView.vue'
@@ -239,7 +263,54 @@ const unsubmittedDialog = ref(false)
 const unsubmittedLoading = ref(false)
 const unsubmitted = ref(null)
 
+// 随机点人：picking=滚动中，picked=已定格的学生，pickedIds=本轮已点过的人
+const picking = ref(false)
+const picked = ref(null)
+const rollingName = ref('')
+const pickedIds = ref([])
+let rollTimer = null
+
+function stopRolling() {
+  if (rollTimer) {
+    clearInterval(rollTimer)
+    rollTimer = null
+  }
+}
+
+function randomPick() {
+  const all = (unsubmitted.value && unsubmitted.value.items) || []
+  if (!all.length || picking.value) return
+  // 从未点过的人里抽；一轮点完自动重置，避免连续点到同一个人
+  let pool = all.filter((s) => !pickedIds.value.includes(s.id))
+  if (!pool.length) {
+    pickedIds.value = []
+    pool = all
+    ElMessage.info('本轮已全部点过，重新开始一轮')
+  }
+  const target = pool[Math.floor(Math.random() * pool.length)]
+  pickedIds.value = [...pickedIds.value, target.id]
+
+  stopRolling()
+  picked.value = null
+  picking.value = true
+  let i = 0
+  rollTimer = setInterval(() => {
+    rollingName.value = all[i % all.length].name
+    i += 1
+  }, 60)
+  // 1.2 秒后定格，营造抽签感
+  setTimeout(() => {
+    stopRolling()
+    picking.value = false
+    picked.value = target
+  }, 1200)
+}
+
 async function openUnsubmitted(row) {
+  stopRolling()
+  picking.value = false
+  picked.value = null
+  pickedIds.value = []
   unsubmittedDialog.value = true
   unsubmitted.value = null
   unsubmittedLoading.value = true
@@ -259,6 +330,10 @@ async function remove(row) {
   ElMessage.success('删除成功')
   load()
 }
+
+onBeforeUnmount(() => {
+  stopRolling()
+})
 </script>
 
 <style scoped>
@@ -285,6 +360,46 @@ async function remove(row) {
 .danger-text {
   color: #f56c6c;
   font-weight: 600;
+}
+
+.pick-area {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.pick-progress {
+  font-size: 12px;
+  color: #909399;
+}
+
+.pick-card {
+  min-width: 150px;
+  padding: 8px 18px;
+  border-radius: 8px;
+  text-align: center;
+  background: #fef0f0;
+  border: 1px solid #fbc4c4;
+  color: #f56c6c;
+}
+
+.pick-card.rolling {
+  background: #f4f4f5;
+  border-color: #d3d4d6;
+  color: #909399;
+}
+
+.pick-card .pick-name {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.pick-card .pick-no {
+  font-size: 12px;
+  opacity: 0.7;
 }
 
 .ok-text {

@@ -30,7 +30,12 @@
                 size="large"
                 style="width: 100%"
               >
-                <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
+                <el-option
+                  v-for="c in classes"
+                  :key="c.id"
+                  :label="classLabel(c)"
+                  :value="c.id"
+                />
               </el-select>
             </el-form-item>
             <el-form-item>
@@ -67,7 +72,12 @@
                 size="large"
                 style="width: 100%"
               >
-                <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
+                <el-option
+                  v-for="c in classes"
+                  :key="c.id"
+                  :label="classLabel(c)"
+                  :value="c.id"
+                />
               </el-select>
             </el-form-item>
             <el-form-item>
@@ -118,6 +128,10 @@ const schoolId = ref(getLastSchoolId())
 
 const form = reactive({ class_id: null, username: '', password: '' })
 const reg = reactive({ class_id: null, name: '', password: '123456' })
+
+// 班级代码与名称不一致时一并展示（如名称「2026级计算机2班」/ 代码「2622」），
+// 避免只看到名称而误判「下拉框里没有这个班」
+const classLabel = (c) => (c.code && c.code !== c.name ? `${c.name}（${c.code}）` : c.name)
 
 async function loadClasses() {
   try {
