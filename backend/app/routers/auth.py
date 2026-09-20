@@ -12,6 +12,7 @@ import ipaddress
 import logging
 import os
 import uuid
+from functools import lru_cache
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from slowapi import Limiter
@@ -62,13 +63,39 @@ def _parse_ip(value: str) -> ipaddress._BaseAddress | None:
 
 
 def _is_own_hop(ip: ipaddress._BaseAddress) -> bool:
-    """该跳是否属于「我们自己的基础设施」（回环 / 内网地址）。
+    """该跳是否**确定属于我们自己的基础设施**（因而不可能是客户端）。
 
-    多层反向代理时每一层都会把自己的**对端地址**追加到 `X-Forwarded-For` 末尾，
-    所以链的右端常常是我们自己的 nginx / 负载均衡（`127.0.0.1`、`172.x`、`10.x`…），
-    并非真实客户端 —— 这些地址必须跳过，否则会把真实 IP 覆盖成 `127.0.0.1`。
+    默认只判定三类地址：**回环 / 链路本地 / 未指定** —— 它们在任何拓扑下都
+    "不可能是真实客户端"，是唯一可以无条件丢弃的判据。额外网段由
+    `settings.TRUSTED_PROXY_CIDRS` 提供（默认空）。
+
+    **为什么不能把所有内网段（RFC1918）都当成自有**：真实客户端本身常常就在内网
+    （校园网 `192.168.x`、`10.x`）。若把内网一并丢弃，就会丢掉**不可伪造**的
+    `X-Real-IP` 转而信任**可被客户端伪造**的 `X-Forwarded-For` —— 这是实测踩过的坑
+    （`X-Real-IP=192.168.1.100` + `XFF=1.2.3.4,192.168.1.100` 会返回伪造的 `1.2.3.4`）。
+
+    多层反代时内层 nginx 的 `$remote_addr` 通常是 `127.0.0.1` 或 docker 网关地址，
+    因此「回环」这一条就足以识别绝大多数自有跳；docker 网关那种情况由 nginx 的
+    realip 模块先还原（见 `frontend/nginx.conf`），或由 `TRUSTED_PROXY_CIDRS` 兜底。
     """
-    return ip.is_loopback or ip.is_private
+    if ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+        return True
+    for net in _own_proxy_networks():
+        if net.version == ip.version and ip in net:
+            return True
+    return False
+
+
+@lru_cache(maxsize=1)
+def _own_proxy_networks() -> tuple[ipaddress._BaseNetwork, ...]:
+    """解析 `settings.TRUSTED_PROXY_CIDRS` 为网段元组（解析失败的条目跳过并告警）。"""
+    nets: list[ipaddress._BaseNetwork] = []
+    for raw in settings.TRUSTED_PROXY_CIDRS:
+        try:
+            nets.append(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            logger.warning("TRUSTED_PROXY_CIDRS 含非法网段，已忽略: %r", raw)
+    return tuple(nets)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -84,28 +111,34 @@ def _client_ip(request: Request) -> str | None:
 
     还原策略（按优先级）：
 
-    1. `X-Real-IP` 存在且**不属于我们自己的基础设施**（非回环 / 非内网）→ 直接采用。
-    2. 否则（缺失，或已被自有基础设施覆盖）→ 退回 `X-Forwarded-For`，取**最左的非自有跳**。
+    1. `X-Real-IP` 存在且**不是我们自己的代理**（回环 / 链路本地 / 未指定，或命中
+       `TRUSTED_PROXY_CIDRS`）→ 直接采用。它由直连代理写入、**客户端无法伪造**，
+       因此即使值是内网地址（校园网客户端）也应当采用。
+    2. 否则（缺失，或已被自有代理地址覆盖）→ 退回 `X-Forwarded-For`，取**最左的非自有跳**。
     3. 都没有 → 回退到 TCP 对端。
 
     为什么不能简单地"取最右一跳"：**多层代理**时内层 nginx 的 `$remote_addr` 是上一跳
-    （常见 `127.0.0.1` 或 docker 网关），它会被追加到 XFF 末尾，于是"最右"永远是我们的
-    基础设施地址 —— 这正是「所有用户都记成 127.0.0.1」的成因。所以必须跳过这些自有跳。
+    （通常是 `127.0.0.1`），它会被追加到 XFF 末尾，于是"最右"永远是我们的基础设施地址 ——
+    这正是「所有用户都记成 127.0.0.1」的成因。
 
-    **前提与边界**：服务应位于可信反向代理之后。单层代理时 `X-Real-IP` 不可伪造，
-    该值可信；**多层代理**且内层未用 realip 模块还原时，只能依据 XFF 判断，
-    此时若服务直连暴露、客户端可自带 XFF 伪造 —— 故该值仅供**展示与留痕**，
-    **不得作为安全依据**。
+    为什么"自有代理"只按回环 / 链路本地判定、**不按 RFC1918 内网段**：真实客户端本身
+    常常就在内网（校园网 `192.168.x`）。把内网一律当自有，会丢掉**不可伪造**的
+    `X-Real-IP`，转而信任**可被客户端伪造**的 XFF —— 实测踩过这个坑。
+    若内层代理以别的地址连入（如 docker 网关 `172.17.0.1`），用 `TRUSTED_PROXY_CIDRS` 声明。
+
+    **前提与边界**：服务应位于可信反向代理之后。走路径 1 时该值不可伪造；只有在
+    `X-Real-IP` 被自有代理地址覆盖、不得不依据 XFF 判断时，才可能被客户端自带的 XFF 伪造
+    —— 故该值仅供**展示与留痕**，**不得作为安全依据**（登录限流走 TCP 对端，不受影响）。
     """
     real_ip = _parse_ip(request.headers.get("x-real-ip") or "")
 
     # 1) 直连代理写下的 X-Real-IP：客户端无法伪造，最可信。
-    #    仅当它不属于我们自己的基础设施时才采用 —— 多层代理时内层 nginx 会把
-    #    $remote_addr（127.0.0.1 / docker 网关）写进来，那种值必须丢弃。
+    #    仅当它是我们自己的代理地址时才丢弃 —— 多层代理时内层 nginx 会把
+    #    $remote_addr（通常 127.0.0.1）写进来，那种值必须丢弃。
     if real_ip is not None and not _is_own_hop(real_ip):
         return str(real_ip)
 
-    # 2) X-Real-IP 缺失或已被自有基础设施覆盖：退回 X-Forwarded-For 链。
+    # 2) X-Real-IP 缺失或已被自有代理地址覆盖：退回 X-Forwarded-For 链。
     #    取最左的非自有跳（最接近原始客户端），跳过自有跳以免取到 127.0.0.1。
     xff = request.headers.get("x-forwarded-for")
     hops = []
@@ -116,7 +149,7 @@ def _client_ip(request: Request) -> str | None:
     for ip in hops:
         if not _is_own_hop(ip):
             return str(ip)
-    # 整条链都是内网地址（纯内网部署）：最左一跳最接近真实客户端
+    # 整条链都是自有/保留地址（本机访问、链路本地等）：取最左一跳已是最接近客户端的答案
     if hops:
         return str(hops[0])
 
