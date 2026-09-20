@@ -40,6 +40,27 @@ def batch_student_avatar_map(db: Session, student_ids) -> dict:
     return {sid: avatar for sid, avatar in rows}
 
 
+def batch_student_login_map(db: Session, student_ids) -> dict:
+    """{student_id: {"last_login_at": ..., "last_login_ip": ...}}，一次 join 避免 N+1。
+
+    最后登录信息存于 users（学生登录账号），同样通过 class_id + name 关联到学生档案。
+    未登录过或未匹配到账号的学生返回空字典项，由调用方序列化为 None。
+    """
+    ids = [i for i in (student_ids or []) if i is not None]
+    if not ids:
+        return {}
+    rows = (
+        db.query(Student.id, User.last_login_at, User.last_login_ip)
+        .join(
+            User,
+            and_(User.class_id == Student.class_id, User.name == Student.name, User.role == "student"),
+        )
+        .filter(Student.id.in_(ids))
+        .all()
+    )
+    return {sid: {"last_login_at": at, "last_login_ip": ip} for sid, at, ip in rows}
+
+
 def batch_student_map(db: Session, student_ids) -> dict:
     """返回 {student_id: {"name": ..., "no": ...}}，一次查询。"""
     ids = [i for i in (student_ids or []) if i is not None]

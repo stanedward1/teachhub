@@ -80,33 +80,28 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import StateView from '../../components/StateView.vue'
+import { useCrudList } from '../../composables/useCrudList'
 import { homeworkApi } from '../../api'
 
 const route = useRoute()
 const router = useRouter()
-const items = ref([])
 const assignment = ref(null)
-const loading = ref(true)
-const error = ref(false)
 const dialog = ref(false)
 const note = ref('')
 const target = ref(null)
 
-onMounted(load)
+// 作业提交审阅：单个作业的「作业详情 + 全部提交」一次取回。非标准分页 CRUD，用 wrapper
+// 把两路请求收敛进 useCrudList，去掉手写 loading/error/items 样板（不改后端）。
+const { items, loading, error, load } = useCrudList(async (_params) => {
+  const [a, s] = await Promise.all([
+    homeworkApi.assignment(route.params.id),
+    homeworkApi.submissions(route.params.id),
+  ])
+  assignment.value = a
+  return { items: s.items, total: s.items.length }
+})
 
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    assignment.value = await homeworkApi.assignment(route.params.id)
-    const res = await homeworkApi.submissions(route.params.id)
-    items.value = res.items
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
+onMounted(load)
 
 function mark(row) {
   target.value = row

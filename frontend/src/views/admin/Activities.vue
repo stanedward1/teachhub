@@ -63,29 +63,40 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { activityApi, studentApi } from '../../api'
 
-const rawItems = ref([])
 const classes = ref([])
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
 const previewDialog = ref(false)
 const previewContent = ref('')
+const form = reactive({ title: '', class_id: null, content: '' })
+
+// 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（删除文案）
+const {
+  items: rawItems,
+  page,
+  pageSize,
+  total,
+  loading,
+  error,
+  load,
+  remove,
+} = useCrudList(activityApi.list, {
+  removeApi: activityApi.remove,
+  removeTip: () => '确定删除该活动吗？',
+})
+
 const { order, useSorted } = useSort('activities')
 const items = useSorted(rawItems)
-const form = reactive({ title: '', class_id: null, content: '' })
 
 onMounted(async () => {
   const res = await studentApi.classrooms()
@@ -98,20 +109,6 @@ function plainText(md) {
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
     .replace(/[-#*`>]/g, '')
     .trim()
-}
-
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await activityApi.list({ page: page.value, page_size: pageSize.value })
-    rawItems.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
 }
 
 function openCreate() {
@@ -136,12 +133,5 @@ async function save() {
   } finally {
     saving.value = false
   }
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm('确定删除该活动吗？', '提示', { type: 'warning' })
-  await activityApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 </script>

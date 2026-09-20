@@ -256,12 +256,23 @@ def create_user(db: Session, payload: dict, user: User) -> dict:
         raise HTTPException(status_code=400, detail="角色不合法")
     if role == "school_admin" and not is_platform_admin(user):
         raise HTTPException(status_code=403, detail="只有平台超管可以创建学校管理员")
-    # 多租户：用户名在学校内唯一（不同学校可存在同名教师）
+    # 多租户：用户名唯一性按角色分叉，与设计意图（DB 唯一约束 class_id+username）一致。
+    # - 学生账号 username=姓名，允许跨班重名，仅约束「同校同班不重复」；
+    # - 教师/学校管理员 class_id 为 NULL（MySQL 下 NULL 不参与唯一判定），需 (school_id, username) 兜底。
     target_school_id = payload.get("school_id") or user.school_id
-    if db.query(User).filter(
-        User.school_id == target_school_id, User.username == username
-    ).first():
-        raise HTTPException(status_code=400, detail="该校已存在同名用户名")
+    if role == "student":
+        target_class_id = payload.get("class_id")
+        if db.query(User).filter(
+            User.school_id == target_school_id,
+            User.class_id == target_class_id,
+            User.username == username,
+        ).first():
+            raise HTTPException(status_code=400, detail="该班级内已存在同名用户名")
+    else:
+        if db.query(User).filter(
+            User.school_id == target_school_id, User.username == username
+        ).first():
+            raise HTTPException(status_code=400, detail="该校已存在同名用户名")
     # 新用户默认密码 123456 不满足强度要求时，标记首次登录强制改密
     must_change = validate_password_strength(password) is not None
     u = User(
@@ -311,6 +322,29 @@ def update_user(db: Session, user_id: int, payload: dict, user: User) -> dict:
             raise HTTPException(status_code=403, detail="教师无权修改其他教师或管理员的角色")
         if "class_id" in payload and payload["class_id"] is not None:
             raise HTTPException(status_code=403, detail="教师无权修改其他教师或管理员的班级信息")
+    # 角色 / 班级归属变更后，按 create_user 的同口径重新校验用户名唯一性，
+    # 避免把学生改成教师后冒出两个「同校同名教师」账号。
+    if ("role" in payload and payload["role"] is not None) or (
+        "class_id" in payload and payload["class_id"] is not None
+    ):
+        eff_role = payload["role"] if payload.get("role") is not None else u.role
+        eff_class_id = payload["class_id"] if payload.get("class_id") is not None else u.class_id
+        if eff_role == "student":
+            if db.query(User).filter(
+                User.school_id == u.school_id,
+                User.class_id == eff_class_id,
+                User.username == u.username,
+                User.id != u.id,
+            ).first():
+                raise HTTPException(status_code=400, detail="该班级内已存在同名用户名")
+        else:
+            if db.query(User).filter(
+                User.school_id == u.school_id,
+                User.username == u.username,
+                User.id != u.id,
+            ).first():
+                raise HTTPException(status_code=400, detail="该校已存在同名用户名")
+
     for f in ("name", "phone", "role", "class_id"):
         if f in payload and payload[f] is not None:
             setattr(u, f, payload[f])

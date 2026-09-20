@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     #   PostgreSQL: postgresql://user:pass@localhost:5432/teachhub
     DATABASE_URL: str = "mysql+pymysql://root:root@127.0.0.1:3306/teachhub?charset=utf8mb4"
     UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
+    # 头像存储目录：统一派生自 UPLOAD_DIR，避免「avatars」在三处硬编码。
+    # 注意：这是磁盘路径，与前端访问的 URL 前缀「/uploads/avatars/」无关。
+    AVATAR_DIR: str = os.path.join(UPLOAD_DIR, "avatars")
 
     # 上传约束
     MAX_UPLOAD_SIZE: int = 20 * 1024 * 1024  # 默认 20MB

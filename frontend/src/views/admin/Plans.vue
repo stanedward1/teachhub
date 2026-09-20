@@ -1,6 +1,6 @@
 <template>
   <div>
-    <el-tabs v-model="tab" @tab-change="load">
+    <el-tabs v-model="tab" @tab-change="reload">
       <el-tab-pane label="班级计划总结" name="class" />
       <el-tab-pane label="教师计划总结" name="teacher" />
     </el-tabs>
@@ -83,38 +83,41 @@ import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import SortBar from '../../components/SortBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { planApi } from '../../api'
 
 const tab = ref('class')
 const planType = ref('')
-const rawItems = ref([])
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
 const previewDialog = ref(false)
 const previewContent = ref('')
-const { order, useSorted } = useSort('plans')
-const items = useSorted(rawItems)
 const form = reactive({ title: '', plan_type: '计划', content: '' })
 
-onMounted(load)
+// 班级/教师计划总结共用一套列表：按 tab 切换两个接口；无分页，wrapper 合成 total。
+// 客户端排序仍由 useSort 处理（items 取 useCrudList 返回的原始列表）。
+const {
+  items: rawItems,
+  loading,
+  error,
+  load,
+  reload,
+} = useCrudList(async (params) => {
+  const rest = { ...params }
+  delete rest.page
+  delete rest.page_size
+  const res =
+    tab.value === 'class' ? await planApi.classPlans(rest) : await planApi.teacherPlans(rest)
+  return { items: res.items, total: res.items.length }
+}, {
+  buildParams: () => ({ plan_type: planType.value }),
+})
 
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const params = { plan_type: planType.value }
-    const res =
-      tab.value === 'class' ? await planApi.classPlans(params) : await planApi.teacherPlans(params)
-    rawItems.value = res.items
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
+const { order, useSorted } = useSort('plans')
+const items = useSorted(rawItems)
+
+onMounted(load)
 
 function openCreate() {
   editing.value = null

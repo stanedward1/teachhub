@@ -236,14 +236,13 @@ def purge_user_data(db: Session, user_id: int) -> None:
 def delete_avatar_file(avatar_url: str | None) -> None:
     """删除头像文件（avatar 形如 /uploads/avatars/xxx.png）。
 
-    基于 settings.UPLOAD_DIR（绝对路径 backend/uploads）解析存储位置，
-    与 auth.py / students.py 中 `_AVATAR_DIR = "uploads/avatars"`（cwd=backend）
-    实际写入的 backend/uploads/avatars 保持一致；文件不存在则静默跳过。
+    基于 settings.AVATAR_DIR（由 UPLOAD_DIR 派生，默认 backend/uploads/avatars）解析存储位置，
+    与 auth.py / students_service.py 实际写入的目录同源；文件不存在则静默跳过。
     """
     if not avatar_url or not avatar_url.startswith("/uploads/avatars/"):
         return
-    # avatar 形如 /uploads/avatars/xxx.png，实际存储在 <UPLOAD_DIR>/avatars/xxx.png
-    full = os.path.join(settings.UPLOAD_DIR, "avatars", os.path.basename(avatar_url))
+    # avatar 形如 /uploads/avatars/xxx.png，实际存储在 <AVATAR_DIR>/xxx.png
+    full = os.path.join(settings.AVATAR_DIR, os.path.basename(avatar_url))
     try:
         if os.path.exists(full):
             os.remove(full)

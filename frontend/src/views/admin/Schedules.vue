@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-select v-model="classId" placeholder="选择班级" style="width: 200px" @change="load">
+      <el-select v-model="classId" placeholder="选择班级" style="width: 200px" @change="reload">
         <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
       </el-select>
       <div class="spacer"></div>
@@ -72,36 +72,33 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { scheduleApi, studentApi } from '../../api'
 import StateView from '../../components/StateView.vue'
+import { useCrudList } from '../../composables/useCrudList'
 
 const days = ['一', '二', '三', '四', '五']
 const classes = ref([])
 const classId = ref(null)
-const items = ref([])
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
 const form = reactive({ day_of_week: 1, period: 1, subject: '', teacher_name: '' })
+
+// 单个班级课表：全量返回（网格渲染，非分页列表）。class_id 经 buildParams 注入，
+// wrapper 去掉 useCrudList 注入的分页参数并合成 total，保持原行为不变。
+const { items, loading, error, load, reload } = useCrudList(
+  (params) => {
+    const rest = { ...params }
+    delete rest.page
+    delete rest.page_size
+    return scheduleApi.list(rest).then((r) => ({ items: r.items, total: r.items.length }))
+  },
+  { buildParams: () => ({ class_id: classId.value }) },
+)
 
 onMounted(async () => {
   // 管理员看全部，教师只看自己负责的班级
   const res = await studentApi.classrooms()
   classes.value = res.items
 })
-
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await scheduleApi.list({ class_id: classId.value })
-    items.value = res.items
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
 
 function cell(period, day) {
   return items.value.find((s) => s.period === period && s.day_of_week === day)

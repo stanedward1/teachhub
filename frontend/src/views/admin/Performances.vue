@@ -6,7 +6,7 @@
         placeholder="全部类型"
         clearable
         style="width: 140px"
-        @change="load"
+        @change="reload"
       >
         <el-option label="积极" value="积极" />
         <el-option label="消极" value="消极" />
@@ -17,8 +17,8 @@
         show-class-filter
         placeholder="按学生筛选"
         style="width: 320px"
-        @update:model-value="load"
-        @update:class-id="load"
+        @update:model-value="reload"
+        @update:class-id="reload"
       />
       <SortBar v-model="order" />
       <div class="spacer"></div>
@@ -114,29 +114,43 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import StudentCard from '../../components/StudentCard.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { performanceApi } from '../../api'
 
-const rawItems = ref([])
-const { order, useSorted } = useSort('performances')
-const items = useSorted(rawItems)
 const ptype = ref('')
 const studentId = ref(null)
 const classId = ref(null)
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
 const form = reactive({ student_id: null, ptype: '积极', content: '', points: 1 })
+
+// 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（查询参数与删除文案）
+const {
+  items: rawItems,
+  page,
+  pageSize,
+  total,
+  loading,
+  error,
+  load,
+  reload,
+  remove,
+} = useCrudList(performanceApi.list, {
+  removeApi: performanceApi.remove,
+  buildParams: () => ({
+    ptype: ptype.value,
+    student_id: studentId.value,
+    class_id: classId.value,
+  }),
+  removeTip: () => '确定删除该记录吗？',
+})
 
 // 跨模块学生卡片
 const studentCardVisible = ref(false)
@@ -152,27 +166,10 @@ function onPtypeChange(val) {
   form.points = val === '积极' ? Math.abs(form.points) : -Math.abs(form.points)
 }
 
-onMounted(load)
+const { order, useSorted } = useSort('performances')
+const items = useSorted(rawItems)
 
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await performanceApi.list({
-      page: page.value,
-      page_size: pageSize.value,
-      ptype: ptype.value,
-      student_id: studentId.value,
-      class_id: classId.value,
-    })
-    rawItems.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
+onMounted(load)
 
 function openCreate() {
   Object.assign(form, { student_id: null, ptype: '积极', content: '', points: 1 })
@@ -191,12 +188,5 @@ async function save() {
   } finally {
     saving.value = false
   }
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm('确定删除该记录吗？', '提示', { type: 'warning' })
-  await performanceApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 </script>

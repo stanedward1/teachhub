@@ -67,23 +67,16 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { workLogApi } from '../../api'
 
-const rawItems = ref([])
-const { order, useSorted } = useSort('worklogs')
-const items = useSorted(rawItems)
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
@@ -91,21 +84,25 @@ const previewDialog = ref(false)
 const previewContent = ref('')
 const form = reactive({ date: '', content: '' })
 
-onMounted(load)
+// 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（删除文案）
+const {
+  items: rawItems,
+  page,
+  pageSize,
+  total,
+  loading,
+  error,
+  load,
+  remove,
+} = useCrudList(workLogApi.list, {
+  removeApi: workLogApi.remove,
+  removeTip: () => '确定删除该日志吗？',
+})
 
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await workLogApi.list({ page: page.value, page_size: pageSize.value })
-    rawItems.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
+const { order, useSorted } = useSort('worklogs')
+const items = useSorted(rawItems)
+
+onMounted(load)
 
 function today() {
   return new Date().toISOString().slice(0, 10)
@@ -140,12 +137,5 @@ async function save() {
   } finally {
     saving.value = false
   }
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm('确定删除该日志吗？', '提示', { type: 'warning' })
-  await workLogApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 </script>

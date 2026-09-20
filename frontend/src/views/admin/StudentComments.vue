@@ -7,8 +7,8 @@
         show-class-filter
         placeholder="按学生筛选"
         style="width: 320px"
-        @update:model-value="load"
-        @update:class-id="load"
+        @update:model-value="reload"
+        @update:class-id="reload"
       />
       <SortBar v-model="order" />
       <div class="spacer"></div>
@@ -83,50 +83,47 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { studentCommentApi } from '../../api'
 
-const rawItems = ref([])
-const { order, useSorted } = useSort('studentcomments')
-const items = useSorted(rawItems)
 const studentId = ref(null)
 const classId = ref(null)
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
 const suggesting = ref(false)
 const form = reactive({ student_id: null, content: '' })
 
-onMounted(load)
+// 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（查询参数与删除文案）
+const {
+  items: rawItems,
+  page,
+  pageSize,
+  total,
+  loading,
+  error,
+  load,
+  reload,
+  remove,
+} = useCrudList(studentCommentApi.list, {
+  removeApi: studentCommentApi.remove,
+  buildParams: () => ({
+    student_id: studentId.value,
+    class_id: classId.value,
+  }),
+  removeTip: () => '确定删除该评语吗？',
+})
 
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await studentCommentApi.list({
-      page: page.value,
-      page_size: pageSize.value,
-      student_id: studentId.value,
-      class_id: classId.value,
-    })
-    rawItems.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
+const { order, useSorted } = useSort('studentcomments')
+const items = useSorted(rawItems)
+
+onMounted(load)
 
 function openCreate() {
   editing.value = null
@@ -155,10 +152,24 @@ async function save() {
   }
 }
 
-async function remove(row) {
-  await ElMessageBox.confirm('确定删除该评语吗？', '提示', { type: 'warning' })
-  await studentCommentApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
+/**
+ * 依据该生已有数据（成绩 / 表现 / 考勤 / 积分）生成评语草稿，供教师参考后编辑。
+ * 对应后端 `GET /api/student-comments/suggest`。
+ * 若编辑框已有内容则**追加**而非覆盖，避免冲掉教师已手写的部分。
+ */
+async function suggestComment() {
+  if (!form.student_id) return ElMessage.warning('请先选择学生')
+  suggesting.value = true
+  try {
+    const res = await studentCommentApi.suggest(form.student_id)
+    const draft = (res && res.content) || ''
+    if (!draft) return ElMessage.warning('该生暂无足够数据可生成草稿，请手动填写')
+    form.content = form.content ? `${form.content}\n${draft}` : draft
+    ElMessage.success('草稿已生成，可继续编辑')
+  } catch (e) {
+    // 失败提示由全局响应拦截器统一处理
+  } finally {
+    suggesting.value = false
+  }
 }
 </script>

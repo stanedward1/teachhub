@@ -36,12 +36,36 @@ limiter = Limiter(key_func=get_remote_address)
 public_user = auth_service.public_user
 
 
-def _client_meta(request: Request) -> tuple[str | None, str | None]:
-    """从请求中提取客户端 UA 与 IP，用于记录刷新令牌来源。"""
-    user_agent = request.headers.get("user-agent")
+def _client_ip(request: Request) -> str | None:
+    """还原真实客户端 IP。
+
+    部署在 nginx 之后时 `request.client.host` 只会拿到 nginx 自身地址（127.0.0.1），
+    因此优先读反向代理头：
+
+    - `X-Real-IP`：nginx `proxy_set_header X-Real-IP $remote_addr`，最可靠；
+    - `X-Forwarded-For`：形如 `client, proxy1, proxy2`，取**最右侧**一跳 ——
+      nginx 用 `$proxy_add_x_forwarded_for` 时会把真实对端追加在末尾，
+      而左侧内容可被客户端伪造，取最右可避免完全采信伪造值。
+
+    **前提**：服务确实位于可信反向代理之后。若直连暴露且未过滤该头，
+    客户端可伪造 IP —— 此时该值仅作参考，不作为安全依据。
+    """
+    real_ip = (request.headers.get("x-real-ip") or "").strip()
+    if real_ip:
+        return real_ip
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        # 最右侧一跳：代理链中由最近的代理写入，比最左侧更可信
+        hops = [h.strip() for h in xff.split(",") if h.strip()]
+        if hops:
+            return hops[-1]
     client = request.client
-    ip = client.host if client else None
-    return user_agent, ip
+    return client.host if client else None
+
+
+def _client_meta(request: Request) -> tuple[str | None, str | None]:
+    """从请求中提取客户端 UA 与 IP，用于记录刷新令牌来源与最后登录留痕。"""
+    return request.headers.get("user-agent"), _client_ip(request)
 
 
 @router.post("/login")
@@ -102,7 +126,7 @@ def change_password(
     return auth_service.change_password(db, user, payload)
 
 
-_AVATAR_DIR = os.path.join(settings.UPLOAD_DIR, "avatars")
+_AVATAR_DIR = settings.AVATAR_DIR
 _AVATAR_MAX_SIZE = 2 * 1024 * 1024  # 2MB
 _AVATAR_ALLOWED = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 

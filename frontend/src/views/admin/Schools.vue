@@ -104,12 +104,10 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StateView from '../../components/StateView.vue'
+import { useCrudList } from '../../composables/useCrudList'
 import { schoolApi, adminApi } from '../../api'
 
-const loading = ref(false)
-const error = ref(false)
 const saving = ref(false)
-const items = ref([])
 const overview = ref({})
 const dialogVisible = ref(false)
 const isEdit = ref(false)
@@ -126,19 +124,15 @@ const emptyForm = () => ({
 })
 const form = reactive(emptyForm())
 
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const [s, o] = await Promise.all([schoolApi.list(), adminApi.platformOverview()])
-    items.value = s.items || []
-    overview.value = o
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
+// 学校全量列表 + 平台概览两路请求合并取回；wrapper 合成 total，保持原行为等价。
+const { items, loading, error, load } = useCrudList(async (params) => {
+  const rest = { ...params }
+  delete rest.page
+  delete rest.page_size
+  const [s, o] = await Promise.all([schoolApi.list(rest), adminApi.platformOverview()])
+  overview.value = o
+  return { items: s.items || [], total: (s.items || []).length }
+})
 
 function openCreate() {
   isEdit.value = false

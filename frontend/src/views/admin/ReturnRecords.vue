@@ -7,8 +7,8 @@
         show-class-filter
         placeholder="按学生筛选"
         style="width: 320px"
-        @update:model-value="load"
-        @update:class-id="load"
+        @update:model-value="reload"
+        @update:class-id="reload"
       />
       <SortBar v-model="order" />
       <div class="spacer"></div>
@@ -71,48 +71,45 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { returnRecordApi } from '../../api'
 
-const rawItems = ref([])
-const { order, useSorted } = useSort('returnrecords')
-const items = useSorted(rawItems)
 const studentId = ref(null)
 const classId = ref(null)
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
 const form = reactive({ student_id: null, return_date: '', reason: '', note: '' })
 
-onMounted(load)
+// 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（查询参数与删除文案）
+const {
+  items: rawItems,
+  page,
+  pageSize,
+  total,
+  loading,
+  error,
+  load,
+  reload,
+  remove,
+} = useCrudList(returnRecordApi.list, {
+  removeApi: returnRecordApi.remove,
+  buildParams: () => ({
+    student_id: studentId.value,
+    class_id: classId.value,
+  }),
+  removeTip: () => '确定删除该记录吗？',
+})
 
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await returnRecordApi.list({
-      page: page.value,
-      page_size: pageSize.value,
-      student_id: studentId.value,
-      class_id: classId.value,
-    })
-    rawItems.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
-}
+const { order, useSorted } = useSort('returnrecords')
+const items = useSorted(rawItems)
+
+onMounted(load)
 
 function openCreate() {
   Object.assign(form, { student_id: null, return_date: '', reason: '', note: '' })
@@ -131,12 +128,5 @@ async function save() {
   } finally {
     saving.value = false
   }
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm('确定删除该记录吗？', '提示', { type: 'warning' })
-  await returnRecordApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 </script>

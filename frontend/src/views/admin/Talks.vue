@@ -7,8 +7,8 @@
         show-class-filter
         placeholder="按学生筛选"
         style="width: 320px"
-        @update:model-value="load"
-        @update:class-id="load"
+        @update:model-value="reload"
+        @update:class-id="reload"
       />
       <SortBar v-model="order" />
       <div class="spacer"></div>
@@ -75,7 +75,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import StudentSelect from '../../components/StudentSelect.vue'
@@ -84,23 +84,36 @@ import PaginationBar from '../../components/PaginationBar.vue'
 import StudentCard from '../../components/StudentCard.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
+import { useCrudList } from '../../composables/useCrudList'
 import { talkApi } from '../../api'
 
-const rawItems = ref([])
-const { order, useSorted } = useSort('talks')
-const items = useSorted(rawItems)
 const studentId = ref(null)
 const classId = ref(null)
-const page = ref(1)
-const pageSize = ref(20)
-const total = ref(0)
-const loading = ref(false)
-const error = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
 const previewDialog = ref(false)
 const previewContent = ref('')
 const form = reactive({ student_id: null, content: '' })
+
+// 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（查询参数与删除文案）
+const {
+  items: rawItems,
+  page,
+  pageSize,
+  total,
+  loading,
+  error,
+  load,
+  reload,
+  remove,
+} = useCrudList(talkApi.list, {
+  removeApi: talkApi.remove,
+  buildParams: () => ({
+    student_id: studentId.value,
+    class_id: classId.value,
+  }),
+  removeTip: () => '确定删除该记录吗？',
+})
 
 // 跨模块学生卡片
 const studentCardVisible = ref(false)
@@ -111,6 +124,9 @@ function openStudentCard(row) {
   studentCardVisible.value = true
 }
 
+const { order, useSorted } = useSort('talks')
+const items = useSorted(rawItems)
+
 onMounted(load)
 
 function plainText(md) {
@@ -118,25 +134,6 @@ function plainText(md) {
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '[图片]')
     .replace(/[-#*`>]/g, '')
     .trim()
-}
-
-async function load() {
-  loading.value = true
-  error.value = false
-  try {
-    const res = await talkApi.list({
-      page: page.value,
-      page_size: pageSize.value,
-      student_id: studentId.value,
-      class_id: classId.value,
-    })
-    rawItems.value = res.items
-    total.value = res.total
-  } catch (e) {
-    error.value = true
-  } finally {
-    loading.value = false
-  }
 }
 
 function openCreate() {
@@ -161,12 +158,5 @@ async function save() {
   } finally {
     saving.value = false
   }
-}
-
-async function remove(row) {
-  await ElMessageBox.confirm('确定删除该记录吗？', '提示', { type: 'warning' })
-  await talkApi.remove(row.id)
-  ElMessage.success('删除成功')
-  load()
 }
 </script>
