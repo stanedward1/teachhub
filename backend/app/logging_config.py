@@ -62,6 +62,31 @@ class StructuredFormatter(logging.Formatter):
         super().__init__(fmt=fmt, datefmt=datefmt)
 
 
+# 应用自身的 logger 命名空间（见 enable_app_loggers）
+_APP_LOGGER_NAMES = ("app", "teachhub")
+
+
+def enable_app_loggers() -> None:
+    """恢复应用自身 logger 的启用状态。
+
+    uvicorn 的默认 ``dictConfig`` 使用 ``disable_existing_loggers=True``：它会把它启动
+    **之前**已创建的 logger 全部置为 ``disabled``。本项目在 import 阶段就创建了
+    ``app.*`` / ``teachhub`` 等 logger，于是跑在 uvicorn 下时这些日志被**静默丢弃** ——
+    典型表现是「业务诊断日志、未处理异常的堆栈完全不落盘，日志文件里只剩
+    ``teachhub.access``」（后者是因为历史上有显式 workaround 才幸存）。
+
+    这里把所有自有命名空间的 logger 重新启用（只动自己的，不碰第三方，避免引入噪音）。
+
+    必须在 **uvicorn 应用 dictConfig 之后**调用 —— 即 ``main.py`` 里
+    ``run_migrations()`` 之后那次 ``setup_logging()``。
+    """
+    for name, obj in logging.Logger.manager.loggerDict.items():
+        if not isinstance(obj, logging.Logger):
+            continue
+        if name in _APP_LOGGER_NAMES or name.startswith(tuple(n + "." for n in _APP_LOGGER_NAMES)):
+            obj.disabled = False
+
+
 def setup_logging(level: int = logging.INFO) -> None:
     """为 root 与控制台 handler 安装结构化 formatter 与 request-id filter。
 
@@ -89,3 +114,6 @@ def setup_logging(level: int = logging.INFO) -> None:
         handler.setFormatter(formatter)
         if not any(isinstance(f, RequestIdFilter) for f in handler.filters):
             handler.addFilter(request_id_filter)
+
+    # uvicorn 的 dictConfig 会把已存在的 logger 置为 disabled，这里恢复自有 logger
+    enable_app_loggers()
