@@ -228,6 +228,35 @@ def list_classrooms(db: Session, user: User, graduated: str = "") -> dict:
     return {"items": items, "total": len(items)}
 
 
+def _sync_head_teacher_class(db: Session, classroom, new_teacher_id):
+    """班主任身份同步：以 classrooms.teacher_id 为唯一权威源，回写 users.class_id。
+
+    班级管理设置班主任时只写 classrooms.teacher_id，而账号管理的「班级」列读的是
+    users.class_id，两处不联动就会出现「班级为空、但班级身份是某班班主任」的矛盾。
+    这里在班主任变更（设置 / 更换 / 取消）时同步维护 users.class_id：
+
+    - 新班主任：class_id 指向本班（若其仍担任其它班班主任则保留原值，避免覆盖）
+    - 原班主任：卸任后若 class_id 仍指向本班则清空，避免残留
+    - new_teacher_id 为 None 表示取消班主任
+    """
+    old_teacher_id = classroom.teacher_id
+    if old_teacher_id and old_teacher_id != new_teacher_id:
+        old = db.get(User, old_teacher_id)
+        if old is not None and old.class_id == classroom.id:
+            old.class_id = None
+    if new_teacher_id:
+        t = db.get(User, new_teacher_id)
+        if t is not None:
+            other_head = (
+                db.query(Classroom)
+                .filter(Classroom.teacher_id == new_teacher_id, Classroom.id != classroom.id)
+                .first()
+            )
+            if other_head is None:
+                t.class_id = classroom.id
+    classroom.teacher_id = new_teacher_id
+
+
 def create_classroom(db: Session, user: User, payload: dict) -> dict:
     """创建班级（仅管理员）。"""
     if not is_any_admin(user):
@@ -252,6 +281,8 @@ def create_classroom(db: Session, user: User, payload: dict) -> dict:
         is_graduated=bool(payload.get("is_graduated", False)),
     )
     db.add(c)
+    db.flush()  # 先取到 c.id，才能把班主任身份同步到 users.class_id
+    _sync_head_teacher_class(db, c, c.teacher_id)
     audit(db, user, "create_classroom", target="新增班级")
     db.commit()
     db.refresh(c)
@@ -274,9 +305,13 @@ def update_classroom(db: Session, user: User, class_id: int, payload: dict) -> d
         t = db.get(User, payload["teacher_id"])
         if not t or t.role != "teacher":
             raise HTTPException(status_code=400, detail="所选教师不存在或不是教师角色")
-    for f in ("name", "code", "major", "grade", "teacher_id", "is_graduated"):
+    for f in ("name", "code", "major", "grade", "is_graduated"):
         if f in payload and payload[f] is not None:
             setattr(c, f, payload[f])
+    # teacher_id 单独处理：原来的 `payload[f] is not None` 判断会静默忽略“清空班主任”，
+    # 导致管理员在编辑框里删掉班主任后保存无效。这里显式允许 None 并在变更时同步 users.class_id。
+    if "teacher_id" in payload:
+        _sync_head_teacher_class(db, c, payload.get("teacher_id"))
     audit(db, user, "update_classroom", target=f"班级#{class_id}")
     db.commit()
     return to_dict(c)

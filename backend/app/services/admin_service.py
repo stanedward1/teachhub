@@ -114,6 +114,10 @@ def _users_out(db: Session, rows) -> list:
         if u.role == "teacher":
             d["head_classes"] = head_map.get(u.id, [])
             d["subject_classes"] = subject_map.get(u.id, [])
+            # 教师账号的 users.class_id 只是冗余展示字段，班主任身份以 classrooms.teacher_id 为准。
+            # 历史数据未联动时会出现「班级为空、班级身份却是某班班主任」的矛盾，此处回退到班主任班级。
+            if not d["class_name"] and d["head_classes"]:
+                d["class_name"] = d["head_classes"][0]
         items.append(d)
     return items
 

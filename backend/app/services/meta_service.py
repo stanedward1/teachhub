@@ -29,7 +29,11 @@ def class_options(db: Session, school_id: int | None = None) -> dict:
     if school_id:
         q = q.filter(Classroom.school_id == school_id)
     rows = q.order_by(Classroom.id).all()
-    return {"items": [{"id": c.id, "name": c.name, "major": c.major} for c in rows]}
+    # 同时返回 code：班级代码常与名称不同（如名称"2026级计算机2班"、代码"2622"），
+    # 只显示名称时容易被误认为"班级不在下拉框里"。
+    return {
+        "items": [{"id": c.id, "name": c.name, "code": c.code, "major": c.major} for c in rows]
+    }
 
 
 def practice_data() -> dict:
