@@ -165,19 +165,43 @@ def _client_meta(request: Request) -> tuple[str | None, str | None]:
     return request.headers.get("user-agent"), _client_ip(request)
 
 
+def _log_client_ip(ip: str | None, request: Request) -> None:
+    """打印一行 IP 还原诊断；结果不可信（仍为回环）时**再给一条可操作告警**。
+
+    排查「所有用户都记成同一个 IP」时，INFO 那行可直接看出是链路根本没传代理头，
+    还是被某一层代理覆盖成了 `127.0.0.1`（还原算法见 `_client_ip`）。
+
+    额外的 WARNING 是有意为之：线上「**所有**用户都还原成 `127.0.0.1`」几乎总不是本机访问，
+    而是**反向代理没转发 `X-Real-IP` / `X-Forwarded-For`**。这类问题在日志里极易被忽略，
+    所以这里直接把「该去改哪一行配置」喊出来，省掉一轮排查。（本地开发 / SSH 隧道访问时
+    也会命中此告警，属预期噪音。）
+    """
+    peer = request.client.host if request.client else None
+    real_ip = request.headers.get("x-real-ip")
+    xff = request.headers.get("x-forwarded-for")
+    logger.info(
+        "客户端 IP 还原: ip=%s | 直连对端=%s | X-Real-IP=%r | X-Forwarded-For=%r",
+        ip, peer, real_ip, xff,
+    )
+
+    parsed = _parse_ip(ip) if ip else None
+    if parsed is not None and parsed.is_loopback:
+        logger.warning(
+            "客户端 IP 还原结果仍为回环地址 %s —— 线上若**所有**用户都是它，几乎总是因为"
+            "反向代理未转发客户端 IP：请检查 nginx `location /api` 里的 "
+            "`proxy_set_header X-Real-IP $remote_addr;` 与 "
+            "`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`（见 README §6）。"
+            "若确实是从本机 / SSH 隧道访问，则可忽略本条。"
+            "本次原始头：X-Real-IP=%r | X-Forwarded-For=%r | 直连对端=%s",
+            ip, real_ip, xff, peer,
+        )
+
+
 @router.post("/login")
 @limiter.limit("5/minute")
 def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     user_agent, ip = _client_meta(request)
-    # 排查「所有用户都记成同一个 IP」时，这一行可直接看出是链路根本没传代理头，
-    # 还是被某一层代理覆盖成了 127.0.0.1（还原算法见 _client_ip）。
-    logger.info(
-        "客户端 IP 还原: ip=%s | 直连对端=%s | X-Real-IP=%r | X-Forwarded-For=%r",
-        ip,
-        request.client.host if request.client else None,
-        request.headers.get("x-real-ip"),
-        request.headers.get("x-forwarded-for"),
-    )
+    _log_client_ip(ip, request)
     return auth_service.login(db, payload, user_agent=user_agent, ip=ip)
 
 
