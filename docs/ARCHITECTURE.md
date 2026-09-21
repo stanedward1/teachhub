@@ -1,6 +1,6 @@
 # TeachHub 架构设计文档
 
-> 版本：2.5 ｜ 更新：2026-09-19 ｜ 适用对象：后端 / 前端 / 测试 / 运维
+> 版本：2.6 ｜ 更新：2026-09-21 ｜ 适用对象：后端 / 前端 / 测试 / 运维
 
 ## 1. 项目定位
 
@@ -38,7 +38,7 @@ TeachHub 是一套面向中职学校的「教学 + 班主任一体化工作平�
 ## 3. 目录结构
 
 ```
-techhub/
+teachhub/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py            # 应用入口：CORS、静态挂载、路由注册、迁移、租户中间件
@@ -91,7 +91,7 @@ techhub/
 │   │   │   ├── mobile_service.py / meta_service.py / attendance_service.py / uploads_service.py
 │   │   │   └── workbench/     #   工作台子包：_common.py + scores/leaves/communications/resources/exams/seats/imports/profile/reports_service.py
 │   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
-│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 23 个 revision）
+│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 28 个 revision，head e2f3a4b5c6d7）
 │   ├── logs/                  # 运行日志（teachhub.log，按天滚动保留 30 天，不入库）
 │   ├── tests/                 # pytest 自动化测试（含 test_multi_tenant.py）
 │   ├── pytest.ini            # pytest 配置（testpaths = tests，仅收集 tests/）
@@ -112,7 +112,7 @@ techhub/
 │   │   ├── stores/            # Pinia store（auth）
 │   │   ├── layout/            # StudentLayout / AdminLayout（可折叠外壳）
 │   │   │   └── admin/         #   AdminLayout 子件：AdminSidebar / AdminHeader / menuConfig.js
-│   │   ├── composables/       # 可组合函数（useSort / useDebouncedRef / useSubmit / useDownload / useLogout）
+│   │   ├── composables/       # 可组合函数（useCrudList / useSort / useDebouncedRef / useSubmit / useDownload / useLogout）
 │   │   ├── components/        # ImportDialog / Markdown / MarkdownEditor / StudentSelect / StudentCard / SortBar / PaginationBar / StateView（四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList
 │   │   ├── mobile/            # 移动端（Vant）：layout + views + api
 │   │   ├── views/student/     # 学生端页面（登录/作业/优秀作品/我的提交+详情/编程练习/资料）
@@ -186,10 +186,11 @@ techhub/
 
 ### 5.3 外键删除策略（分层）
 
-外键共 40 个，按语义分层设置 `ondelete` 删除规则：
+外键共 70 个（模型定义口径），按语义分层设置 `ondelete` 删除规则：
 
-- **CASCADE（16 个，纯从属关系）**：作业链（`assignment_attachments`/`submissions`→`assignments`、`excellent_works`/`submission_comments`→`submissions`、`work_comments`→`excellent_works`）+ 学生业务链（`scores`/`attendance`/`leaves`/`performances`/`communications`/`talks`/`return_records`/`student_comments`/`student_profile_tags`/`student_board_history`/`submissions`→`students`）。删父记录自动级联删子记录。
-- **RESTRICT（24 个，归属/操作人关系）**：`classrooms.teacher_id`、`class_teachers.teacher_id`、`assignments.created_by`、`excellent_works.selected_by`、各日志表的 `teacher_id`/`created_by`/`changed_by` 等，以及所有 `school_id`/`class_id` 引用。删归属主体时保留业务数据，由应用层显式处理。
+- **CASCADE（17 个，纯从属关系）**：作业链（`assignment_attachments`/`submissions`→`assignments`、`excellent_works`/`submission_comments`→`submissions`、`work_comments`→`excellent_works`）+ 学生业务链（`scores`/`attendance`/`leaves`/`performances`/`communications`/`talks`/`return_records`/`student_comments`/`student_profile_tags`/`student_board_history`/`submissions`→`students`）。删父记录自动级联删子记录。
+- **RESTRICT（52 个，归属/操作人关系）**：`classrooms.teacher_id`、`class_teachers.teacher_id`、`assignments.created_by`、`excellent_works.selected_by`、各日志表的 `teacher_id`/`created_by`/`changed_by` 等，以及所有 `school_id`/`class_id` 引用。删归属主体时保留业务数据，由应用层显式处理。
+- **SET NULL（1 个，租户归属可空）**：`refresh_tokens.school_id` → `schools.id`（学校删除后令牌保留但失去租户归属；平台超管的令牌本即 `NULL`）。
 - **代码双保险**：`cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序先删子表再删父表，与 DB CASCADE 兼容（先显式清空，CASCADE 无副作用）。
 
 > 说明一：模型大多**不定义 ORM relationship**，关联查询通过 `db.get()` / `filter()` 手动完成，以避免模块间循环 import；唯一例外是同文件内的 `Assignment ↔ AssignmentAttachment`（一对多，用 `relationship` + `cascade="all, delete-orphan"` 实现附件级联删除）。

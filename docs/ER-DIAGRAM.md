@@ -1,6 +1,6 @@
 # TeachHub 数据库 ER 图
 
-> 更新：2026-09-19 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：34 张 ｜ 迁移：23 个 revision（线性单链，head `d5e6f7a8b9c0`）
+> 更新：2026-09-21 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：34 张 ｜ 外键：70 个（模型定义口径）｜ 迁移：28 个 revision（线性单链，head `e2f3a4b5c6d7`）
 
 ## 一、实体关系总览（Mermaid）
 
@@ -71,7 +71,7 @@ erDiagram
 | | `class_teachers` | class_id + teacher_id（联合唯一） | 班级-教师多对多（科任） |
 | | `students` | class_id、student_no(唯一)、is_dropped_out | 学生档案（通学/寄宿） |
 | 认证 | `users` | username、role、school_id、class_id | 登录账号（4 角色 + 安全字段） |
-| | `refresh_tokens` | user_id、school_id、token_hash(唯一) | 刷新令牌（F3）：仅存 sha256 摘要，`expires_at` 过期 / `revoked_at` 撤销 / `replaced_by` 轮换链；`user_id` 级联删、`school_id` 置空删 |
+| | `refresh_tokens` | user_id、school_id、token_hash(唯一) | 刷新令牌（F3）：仅存 sha256 摘要，`expires_at` 过期 / `revoked_at` 撤销 / `replaced_by` 轮换链；`user_id` 级联删、`school_id` 置空删。**不含 `ip` 列**——客户端 IP 记录已下线，该列由迁移 `e2f3a4b5c6d7` 删除 |
 | 作业 | `assignments` | class_id、created_by、deadline | 作业任务 |
 | | `assignment_attachments` | assignment_id | 作业附件（一对多） |
 | | `submissions` | assignment_id、student_id | 作业提交 |

@@ -317,14 +317,11 @@ def update_user(db: Session, user_id: int, payload: dict, user: User) -> dict:
     u = db.get(User, user_id)
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
-    # 教师不能编辑其他教师/管理员的姓名、角色、班级归属（管理员不受限）
-    if user.role == "teacher" and u.role in ("teacher", "school_admin", "super_admin"):
-        if "name" in payload and payload["name"] is not None and payload["name"] != u.name:
-            raise HTTPException(status_code=403, detail="教师无权修改其他教师或管理员的姓名")
-        if "role" in payload and payload["role"] is not None:
-            raise HTTPException(status_code=403, detail="教师无权修改其他教师或管理员的角色")
-        if "class_id" in payload and payload["class_id"] is not None:
-            raise HTTPException(status_code=403, detail="教师无权修改其他教师或管理员的班级信息")
+    # 教师改其他教师/管理员的「姓名 / 角色 / 班级归属」的约束由**路由层**统一执行：
+    # `routers/admin.py` 的 `admin_dep = require_school_admin`（仅 school_admin /
+    # super_admin 可进入），教师根本到不了本函数。原先这里还有一段
+    # `user.role == "teacher"` 的分支，条件恒为 False（死代码，见 docs/CHANGELOG.md），
+    # 已于 2026-09-21 移除，避免后来人误以为防护落在这一层。
     # 角色 / 班级归属变更后，按 create_user 的同口径重新校验用户名唯一性，
     # 避免把学生改成教师后冒出两个「同校同名教师」账号。
     if ("role" in payload and payload["role"] is not None) or (
@@ -361,9 +358,10 @@ def reset_password(db: Session, user_id: int, payload: dict, user: User) -> dict
     u = db.get(User, user_id)
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")
-    # 教师不能重置其他教师/管理员的密码（只能重置学生密码；管理员可重置所有人）
-    if user.role == "teacher" and u.role in ("teacher", "school_admin", "super_admin"):
-        raise HTTPException(status_code=403, detail="教师无权重置其他教师或管理员的密码")
+    # 注：原有一段「教师不能重置其他教师/管理员密码」的判断，但本函数只被
+    # `routers/admin.py` 的 `admin_dep = require_school_admin`（仅 school_admin /
+    # super_admin 可进入）调用，`user.role == "teacher"` 恒为 False（死代码，见
+    # docs/CHANGELOG.md），已于 2026-09-21 移除。教师拦截点统一在路由依赖层。
     new_pwd = payload.get("password") or "123456"
     # 重置密码后标记首次登录需改密（除非新密码本身满足强度要求）
     u.must_change_password = validate_password_strength(new_pwd) is not None
@@ -382,9 +380,10 @@ def delete_user(db: Session, user_id: int, user: User) -> dict:
     # 不能删除自己
     if u.id == user.id:
         raise HTTPException(status_code=400, detail="不能删除当前登录账号")
-    # 教师不能删除其他教师/管理员
-    if user.role == "teacher" and u.role in ("teacher", "school_admin", "super_admin"):
-        raise HTTPException(status_code=403, detail="教师无权删除其他教师或管理员")
+    # 注：原有一段「教师不能删除其他教师/管理员」的判断，但本函数只被
+    # `routers/admin.py` 的 `admin_dep = require_school_admin`（仅 school_admin /
+    # super_admin 可进入）调用，`user.role == "teacher"` 恒为 False（死代码，见
+    # docs/CHANGELOG.md），已于 2026-09-21 移除。教师拦截点统一在路由依赖层。
     # 平台超管可跨校删除；学校管理员仅能删除本校账号
     if not is_platform_admin(user):
         ensure_same_school(user, u.school_id)

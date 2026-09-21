@@ -36,7 +36,7 @@ npm run dev                   # 启动，默认 :5173，代理 /api → :8080
 ### 1.4 Docker（推荐）
 
 ```bash
-cd techhub
+cd teachhub
 docker compose up -d --build  # 构建并启动前后端
 docker compose logs -f backend
 docker compose down           # 停止
@@ -98,7 +98,7 @@ python -m pytest tests/ -v
 - 确保「迁移链」与「模型 schema」保持一致，避免依赖 `create_all` 兜底而遗漏加列
 - **多租户约束调整**：改唯一约束（如 `settings.key` 全局唯一 → `(school_id, key)` 校内唯一）时，SQLite 不支持 `DROP CONSTRAINT`，需在迁移中**重建表**（新建→拷贝→删除→重命名），参考 `f1a2b3c4d5e6_settings_school_key_unique.py`；MySQL/PostgreSQL 可直接 `drop_constraint` + `create_unique_constraint`。
 - **手动改库须同步 `alembic_version`**：`main.py` 启动自动 `upgrade head`，若先用 SQL 手动改了库再触发迁移会重复执行报错（如 DROP INDEX 1091）。手动改库后需 `UPDATE alembic_version SET version_num='<rev>'` 到对应 revision。
-- **外键删除规则分层**：纯从属关系用 `ondelete="CASCADE"`（作业链、学生业务链，共 16 个）；归属/操作人关系保持 RESTRICT（`teacher_id`/`created_by`/`school_id`/`class_id` 等，共 24 个）。应用层 `cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序删除作双保险，与 CASCADE 兼容。
+- **外键删除规则分层**：纯从属关系用 `ondelete="CASCADE"`（作业链、学生业务链，共 17 个）；归属/操作人关系保持 RESTRICT（`teacher_id`/`created_by`/`school_id`/`class_id` 等，共 52 个）；另有 1 个 SET NULL（`refresh_tokens.school_id`，租户归属可空）。模型定义口径合计 70 个外键。应用层 `cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序删除作双保险，与 CASCADE 兼容。
 
 ### 3.5 工具函数与辅助
 

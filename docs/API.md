@@ -1,13 +1,13 @@
 # TeachHub API 接口文档
 
-> 更新：2026-09-19 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
+> 更新：2026-09-21 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
 >
 > 认证方式：请求头 `Authorization: Bearer <token>`（登录/注册/注册开关状态/学校下拉/班级下拉/刷新令牌/登出/编程练习无需认证）。
 > 令牌双轨：登录返回的访问令牌字段名为 `token`（短期有效，用于鉴权），另有 `refresh_token`（长期有效，用于换取新令牌对，详见「一、认证」末段）。
 >
 > 链路追踪：所有响应均带 `X-Request-ID` 响应头（请求头传入则透传，否则服务端生成 `uuid4`）；服务端日志每行带 `[rid=...]`，可用该 ID 串联同一请求的全部日志。
 >
-> 规模：**业务接口 136 条**（`/api/**`）+ 7 个非业务端点（`/`、`/health`、`/metrics`、`/docs`、`/redoc`、`/openapi.json`、`/docs/oauth2-redirect`），合计 143 条已注册路由
+> 规模：**业务接口 138 条**（`/api/**`）+ 8 条非业务路由（端点 `/`、`/health`、`/metrics`、`/docs`、`/docs/oauth2-redirect`、`/redoc`、`/openapi.json` + `/uploads` 静态挂载），合计 146 条已注册路由（以 `len(app.routes)` 为准）
 
 ## 角色权限说明
 
@@ -57,6 +57,7 @@
 | PUT | `/assignments/{id}` | 教师+ | 编辑作业 |
 | DELETE | `/assignments/{id}` | 教师+ | 删除作业 |
 | GET | `/assignments/{id}/submissions` | 登录 | 提交列表 |
+| GET | `/assignments/{id}/unsubmitted` | 教师+ | 未交名单（应交 = 班级在籍学生，未交 = 应交 − 已交） |
 | POST | `/assignments/{id}/submissions` | 学生 | 提交作业 |
 | GET | `/submissions/{id}` | 登录 | 提交详情（含点评 + 评优信息 excellent_id/excellent_note） |
 | POST | `/submissions/{id}/comments` | 教师+ | 添加点评（含评分 0-100） |
@@ -166,7 +167,8 @@
 | DELETE | `/api/talks/{id}` | 登录 | 删除谈心 |
 | GET/POST | `/api/return-records` | 登录 | 返校记录 |
 | DELETE | `/api/return-records/{id}` | 登录 | 删除返校 |
-| GET/POST | `/api/performances` | 登录 | 表现 |
+| GET/POST | `/api/performances` | 登录 | 表现（含积分） |
+| GET | `/api/performances/summary` | 登录 | 表现（含积分）汇总：`delta`/`positive`/`negative`/`count`/`student_count`，随列表筛选联动 |
 | DELETE | `/api/performances/{id}` | 登录 | 删除表现 |
 | GET | `/api/student-comments/suggest` | 登录 | 评语生成草稿 |
 | GET/POST | `/api/student-comments` | 登录 | 评语列表/新增 |

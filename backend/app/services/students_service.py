@@ -297,8 +297,11 @@ def update_classroom(db: Session, user: User, class_id: int, payload: dict) -> d
     # 教师只能修改自己可操作的班级（班主任或科任）
     if not is_any_admin(user) and not is_teacher_class_owner(db, user.id, class_id):
         raise HTTPException(status_code=403, detail="无权修改该班级")
-    # 教师不能修改班级对应的教师
-    if not is_any_admin(user) and "teacher_id" in payload and payload["teacher_id"] is not None:
+    # 教师不能修改班级对应的教师。判定用**值比较**，不能用「请求体里有没有这个键」：
+    # 前端若改成整行提交（连同未改动的 teacher_id 一起回传，同 StudentFormDialog.vue），
+    # 键存在性会把「没换班主任」误当成「换班主任」而报 403 —— 即 update_student 线上
+    # 故障的同形写法。值比较同时堵住「传 null 清空班主任」（None != 当前值 → 403）。
+    if not is_any_admin(user) and "teacher_id" in payload and payload["teacher_id"] != c.teacher_id:
         raise HTTPException(status_code=403, detail="教师无权修改班级对应的教师")
     # 管理员修改 teacher_id 时校验目标必须是教师角色
     if is_any_admin(user) and "teacher_id" in payload and payload["teacher_id"] is not None:
