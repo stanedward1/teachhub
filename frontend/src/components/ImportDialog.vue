@@ -4,7 +4,7 @@
     :title="title"
     width="560px"
     @update:model-value="$emit('update:modelValue', $event)"
-    @open="reset"
+    @open="onOpen"
     @close="reset"
   >
     <el-form label-width="80px">
@@ -46,6 +46,25 @@
       </div>
     </div>
 
+    <!-- 最近导入记录：只读摘要。逐行失败原因仅此一处留存——
+         审计日志（operation_logs）只记「成功 N 条」，关掉弹窗后就查不到失败明细了。 -->
+    <el-collapse v-if="history.length" class="import-history">
+      <el-collapse-item :title="`最近导入记录（${history.length} 条）`" name="history">
+        <div v-for="h in history" :key="h.id" class="history-item">
+          <div class="history-head">
+            <span class="history-file" :title="h.filename">{{ h.filename }}</span>
+            <el-tag :type="h.error_rows > 0 ? 'warning' : 'success'" size="small" effect="plain">
+              成功 {{ h.success_rows }} / 失败 {{ h.error_rows }}
+            </el-tag>
+            <span class="history-time">{{ h.created_at }}</span>
+          </div>
+          <div v-if="h.error_list?.length" class="error-list">
+            <div v-for="(err, i) in h.error_list" :key="i" class="error-item">{{ err }}</div>
+          </div>
+        </div>
+      </el-collapse-item>
+    </el-collapse>
+
     <template #footer>
       <el-button @click="$emit('update:modelValue', false)">关闭</el-button>
       <el-button type="primary" :loading="importing" @click="doImport">
@@ -65,6 +84,7 @@
  */
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { importApi } from '../api'
 import { downloadExcel } from '../composables/useDownload'
 
 const props = defineProps({
@@ -84,6 +104,11 @@ const props = defineProps({
    */
   importFn: { type: Function, required: true },
   /**
+   * 导入类别（`student` / `score`），用于筛选「最近导入记录」。
+   * 留空则不加载历史（见 loadHistory）。
+   */
+  importType: { type: String, default: '' },
+  /**
    * 模板下载请求（可选）：返回二进制内容；不传则隐藏「下载模板」按钮。
    */
   templateUrl: { type: Function, default: null },
@@ -97,11 +122,42 @@ const uploadRef = ref(null)
 const importing = ref(false)
 const file = ref(null)
 const result = ref(null)
+const history = ref([])
+
+/** 最近导入记录展示条数 */
+const HISTORY_SIZE = 5
 
 function reset() {
   file.value = null
   result.value = null
   uploadRef.value?.clearFiles()
+}
+
+/**
+ * 加载最近导入记录。
+ *
+ * 失败明细在服务端只落 `import_history.errors`：审计日志只有「成功 N 条」的汇总，
+ * 关掉弹窗后逐行失败原因就查不到了，故在此单独呈现。
+ * 属只读附加信息，失败**静默**降级：请求带 `_silent`，只写 console、不弹全局错误提示，
+ * 也绝不影响导入主流程（详见 api/request.js 的 notifyError）。
+ */
+async function loadHistory() {
+  if (!props.importType) return
+  try {
+    const res = await importApi.history(
+      { import_type: props.importType, page_size: HISTORY_SIZE },
+      { _silent: true },
+    )
+    history.value = res.items || []
+  } catch (e) {
+    console.error('[ImportDialog] 加载导入历史失败:', e)
+    history.value = []
+  }
+}
+
+function onOpen() {
+  reset()
+  loadHistory()
 }
 
 function onFileChange(f) {
@@ -131,6 +187,7 @@ async function doImport() {
       ElMessage.success(`成功导入 ${res.success} 条数据`)
       emit('success', res)
     }
+    loadHistory() // 本次导入立即反映到历史（全失败也是一次导入记录）
   } catch (e) {
     console.error('[ImportDialog] 导入失败:', e)
   } finally {
@@ -173,5 +230,39 @@ async function doImport() {
   color: #dc2626;
   line-height: 1.8;
   padding: 2px 0;
+}
+.import-history {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+.history-item {
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border-light);
+}
+.history-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.history-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  font-size: 13px;
+}
+.history-file {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.history-time {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.history-item .error-list {
+  margin-top: var(--gap-xs);
 }
 </style>

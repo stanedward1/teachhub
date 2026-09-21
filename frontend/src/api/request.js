@@ -20,8 +20,14 @@ function normalizeDetail(detail, fallback = '操作失败') {
   return fallback
 }
 
-// 根据当前路由判断是否移动端，选择对应的 toast 组件
-function notifyError(message) {
+// 根据当前路由判断是否移动端，选择对应的 toast 组件。
+//
+// 请求配置可带 `_silent: true` 抑制提示，用于「最近导入记录」这类**只读附加信息**的
+// 静默降级：拉取失败时不该在用户刚打开导入弹窗时弹一句「操作失败」，让人误以为导入出错。
+// 注意：会话过期（401 且刷新失败）的提示**刻意不受该开关影响** —— 它伴随跳转登录页，
+// 静默掉会让用户莫名其妙被踢出。
+function notifyError(message, config) {
+  if (config?._silent) return
   const path = router.currentRoute.value?.path || ''
   if (path.startsWith('/m')) {
     showToast({ message, position: 'top' })
@@ -166,7 +172,7 @@ request.interceptors.response.use(
     }
     // 网络层错误（超时、断网、跨域等），无 response
     if (!error.response) {
-      notifyError(error.code === 'ECONNABORTED' ? '请求超时，请重试' : '网络异常，请检查网络连接')
+      notifyError(error.code === 'ECONNABORTED' ? '请求超时，请重试' : '网络异常，请检查网络连接', error.config)
       return Promise.reject(error)
     }
     const detail = error.response?.data?.detail
@@ -176,7 +182,7 @@ request.interceptors.response.use(
     if (status === 401) {
       if (isLoginRequest) {
         // 登录接口返回 401 = 用户名或密码错误，展示真实原因，不做跳转/清空
-        notifyError(normalizeDetail(detail, '用户名或密码错误'))
+        notifyError(normalizeDetail(detail, '用户名或密码错误'), error.config)
       } else if (!error.config?._retried && getRefreshToken()) {
         // 其他接口 401 = access token 过期：尝试一次静默刷新后重放原请求
         const originalConfig = error.config
@@ -204,15 +210,15 @@ request.interceptors.response.use(
         redirectToLogin()
       }
     } else if (status === 403) {
-      notifyError(normalizeDetail(detail, '无权限执行此操作'))
+      notifyError(normalizeDetail(detail, '无权限执行此操作'), error.config)
     } else if (status === 404) {
-      notifyError(normalizeDetail(detail, '请求的资源不存在'))
+      notifyError(normalizeDetail(detail, '请求的资源不存在'), error.config)
     } else if (status === 423) {
-      notifyError(normalizeDetail(detail, '账号已锁定，请稍后再试'))
+      notifyError(normalizeDetail(detail, '账号已锁定，请稍后再试'), error.config)
     } else if (status === 429) {
-      notifyError(normalizeDetail(detail, '操作过于频繁，请稍后再试'))
+      notifyError(normalizeDetail(detail, '操作过于频繁，请稍后再试'), error.config)
     } else {
-      notifyError(normalizeDetail(detail, '操作失败'))
+      notifyError(normalizeDetail(detail, '操作失败'), error.config)
     }
     return Promise.reject(error)
   }

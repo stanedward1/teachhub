@@ -86,6 +86,7 @@
     <ImportDialog
       v-model="importDialog"
       title="批量导入成绩"
+      import-type="score"
       :import-fn="(fd) => scoreApi.import(fd)"
       :template-url="() => scoreApi.template()"
       template-filename="成绩导入模板.xlsx"

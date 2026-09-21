@@ -241,7 +241,9 @@ export function uploadFile(file) {
 
 // ============ 导入历史 ============
 export const importApi = {
-  history: (params) => request.get('/api/import-history', { params }),
+  // 第二参 config 用于传输层开关（如 `_silent: true`），
+  // 不要混进 params —— 那会被 axios 序列化成查询参数发给服务端。
+  history: (params, config = {}) => request.get('/api/import-history', { params, ...config }),
 }
 
 // ============ 班级周报 ============

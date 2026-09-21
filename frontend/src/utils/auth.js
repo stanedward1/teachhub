@@ -15,12 +15,6 @@ export function getRefreshToken() {
   return localStorage.getItem(REFRESH_TOKEN_KEY)
 }
 
-/** 写入 / 清除刷新令牌（传入空值时清除） */
-export function setRefreshToken(token) {
-  if (token) localStorage.setItem(REFRESH_TOKEN_KEY, token)
-  else localStorage.removeItem(REFRESH_TOKEN_KEY)
-}
-
 export function getUser() {
   try {
     return JSON.parse(localStorage.getItem(USER_KEY) || 'null')
@@ -90,11 +84,6 @@ export function isPlatformAdmin() {
 /** 学校管理员：本校最高管理员 */
 export function isSchoolAdmin() {
   return getUser()?.role === 'school_admin'
-}
-
-/** 当前用户所属学校（平台超管为 null） */
-export function getSchoolId() {
-  return getUser()?.school_id ?? null
 }
 
 /** 记住上次选择的学校（登录页用） */

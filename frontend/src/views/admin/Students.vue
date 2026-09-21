@@ -129,6 +129,7 @@
     <ImportDialog
       v-model="importDialog"
       title="批量导入学生"
+      import-type="student"
       :import-fn="(fd) => studentApi.import(fd)"
       :template-url="() => studentApi.template()"
       template-filename="学生导入模板.xlsx"
