@@ -9,7 +9,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | 文档 | 说明 |
 | ---- | ---- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、可观测性、设计决策 |
-| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（136 条业务接口 + 运维端点，方法 + 路径 + 权限 + 约定） |
+| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（138 条业务接口 + 运维端点，方法 + 路径 + 权限 + 约定） |
 | [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 34 张表、外键删除策略分层、软关联说明 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、权限与多租户隔离规范、Git 规范、测试规范、发布流程 |
 
@@ -32,7 +32,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 
 - 每个班级通过 `classrooms.teacher_id` 绑定一位**班主任**，并通过 `class_teachers` 表关联多位**科任老师**
 - 班主任与科任老师在**学生管理、成绩、积分、考勤、家校沟通、谈心、返校、表现、评语、课表、活动、座位、周报、看板、作业提交**中，均可查看/操作**自己所属班级**的数据
-- 教师只能查看/批改自己所属班级的作业与提交，管理员可查看所有班级的作业与提交
+- 教师只能查看/批改自己所属班级的作业与提交，并可查看**未交名单**（应交/已交/未交，用于催交）；管理员可查看所有班级的作业与提交
 - 教师不能修改其他教师/管理员的姓名、角色、班级归属，不能重置其密码、删除其账号
 - 账号管理与数据看板对教师展示**班主任/科任身份标识**；审计日志按「管理员全部 / 班主任本班 / 科任不可见」分级
 - 管理员拥有全部权限，可管理所有班级和学生，并可给班级配置班主任与科任老师
@@ -67,7 +67,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 - 班主任工作日志（Markdown 编辑，教师仅看自己的日志）
 - 班级/教师计划总结、课程表（**仅自己班级**）
 - 班级活动、师生谈心、返校记录（**仅自己班级学生**）
-- 学生表现：积极/消极记录 + 积分自动联动（**仅自己班级**）
+- 学生表现（含积分）：积极/消极记录 + 积分自动联动 + **筛选范围内积分汇总**（**仅自己班级**）
 - 学生评语（**仅自己班级**，支持班级联动筛选）
 - 系统设置：学期配置、年级升级（仅管理员）
 
@@ -127,7 +127,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 ## 项目结构
 
 ```
-techhub/
+teachhub/
 ├── backend/                    # FastAPI 后端
 │   ├── app/
 │   │   ├── main.py             # 应用入口（路由挂载、CORS、迁移、租户中间件）
@@ -170,7 +170,7 @@ techhub/
 │   │       ├── mobile.py       #   移动端轻量接口
 │   │       ├── admin.py        #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览 / 平台注册开关
 │   │       └── uploads.py      #   通用文件上传
-│   ├── alembic/                # 数据库迁移（schema 唯一来源，23 个 revision）
+│   ├── alembic/                # 数据库迁移（schema 唯一来源，28 个 revision，head e2f3a4b5c6d7）
 │   ├── logs/                   # 运行日志（teachhub.log，按天滚动保留 30 天）
 │   ├── tests/                  # pytest 自动化测试（含多租户隔离）
 │   ├── pytest.ini              # pytest 配置（testpaths = tests）
@@ -189,7 +189,7 @@ techhub/
 │   │   ├── router/             # 路由 + 角色守卫（四角色 + 强制改密）
 │   │   ├── stores/             # Pinia 状态（auth）
 │   │   ├── utils/              # 认证工具
-│   │   ├── composables/        # 可组合函数（useSort、useDebouncedRef、useSubmit、useDownload、useLogout）
+│   │   ├── composables/        # 可组合函数（useCrudList、useSort、useDebouncedRef、useSubmit、useDownload、useLogout）
 │   │   ├── components/         # ImportDialog（通用导入弹窗）/ Markdown / MarkdownEditor / StudentSelect（班级联动）/ StudentCard / SortBar / PaginationBar / StateView（列表四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList（后四者为统一体验态组件）
 │   │   ├── layout/             # AdminLayout（可折叠侧边栏）/ StudentLayout；页头/菜单下沉 layout/admin/（AdminSidebar / AdminHeader / menuConfig.js）
 │   │   ├── mobile/             # 移动端（Vant）：layout + views（登录/首页/学生/考勤/记录/请假/改密）+ api
@@ -219,7 +219,7 @@ techhub/
 无需本地安装 Python / Node / 数据库，一条命令拉起前后端：
 
 ```bash
-cd techhub
+cd teachhub
 docker compose up -d --build
 ```
 
@@ -261,7 +261,7 @@ docker compose down -v         # 停止并删除数据卷（清空数据）
 项目根目录提供 `start.sh` 一键脚本，自动完成：**架构检测（x86_64 / arm64）→ 安装系统依赖与 Node.js → 初始化数据库（默认 SQLite，可切 MySQL）→ 安装后端依赖（阿里云镜像）→ 安装前端依赖（npmmirror 镜像）→ 数据库迁移与首次 seed → 启动前后端服务**。
 
 ```bash
-cd techhub
+cd teachhub
 
 # 一键启动（首次运行会自动安装全部依赖，约 5-10 分钟）
 ./start.sh
@@ -451,7 +451,7 @@ server {
     server_name your-domain.com;
 
     # 前端静态文件
-    root /path/to/techhub/frontend/dist;
+    root /path/to/teachhub/frontend/dist;
     index index.html;
 
     # 前端页面（SPA 路由支持）
@@ -531,9 +531,9 @@ After=network.target
 [Service]
 Type=notify
 User=www-data
-WorkingDirectory=/path/to/techhub/backend
-Environment="PATH=/path/to/techhub/backend/.venv/bin"
-ExecStart=/path/to/techhub/backend/.venv/bin/gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 127.0.0.1:8080 app.main:app
+WorkingDirectory=/path/to/teachhub/backend
+Environment="PATH=/path/to/teachhub/backend/.venv/bin"
+ExecStart=/path/to/teachhub/backend/.venv/bin/gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 127.0.0.1:8080 app.main:app
 Restart=always
 RestartSec=5
 
