@@ -189,7 +189,7 @@ teachhub/
 │   │   ├── router/             # 路由 + 角色守卫（四角色 + 强制改密）
 │   │   ├── stores/             # Pinia 状态（auth）
 │   │   ├── utils/              # 认证工具
-│   │   ├── composables/        # 可组合函数（useCrudList、useSort、useDebouncedRef、useSubmit、useDownload、useLogout）
+│   │   ├── composables/        # 可组合函数（useCrudList、useSort、useDebouncedRef、useDownload、useLogout）
 │   │   ├── components/         # ImportDialog（通用导入弹窗）/ Markdown / MarkdownEditor / StudentSelect（班级联动）/ StudentCard / SortBar / PaginationBar / StateView（列表四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList（后四者为统一体验态组件）
 │   │   ├── layout/             # AdminLayout（可折叠侧边栏）/ StudentLayout；页头/菜单下沉 layout/admin/（AdminSidebar / AdminHeader / menuConfig.js）
 │   │   ├── mobile/             # 移动端（Vant）：layout + views（登录/首页/学生/考勤/记录/请假/改密）+ api

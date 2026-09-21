@@ -213,34 +213,6 @@ class CommunicationOut(_ORMOut):
     student_no: str | None = None
 
 
-class StudentOut(_ORMOut):
-    id: int | None = None
-    name: str | None = None
-    student_no: str | None = None
-    gender: str | None = None
-    class_id: int | None = None
-    major: str | None = None
-    parent_name: str | None = None
-    parent_phone: str | None = None
-    student_type: str | None = None
-    is_dropped_out: bool | None = None
-
-
-class ClassroomOut(_ORMOut):
-    id: int | None = None
-    name: str | None = None
-    code: str | None = None
-    major: str | None = None
-    grade: str | None = None
-    teacher_id: int | None = None
-    is_graduated: bool | None = None
-
-
-class SchoolOut(_ORMOut):
-    id: int | None = None
-    name: str | None = None
-
-
 class PerformanceOut(_ORMOut):
     id: int | None = None
     student_id: int | None = None
@@ -281,33 +253,6 @@ class StudentCommentOut(_ORMOut):
     created_at: str | None = None
     student_name: str | None = None
     student_no: str | None = None
-
-
-class AttendanceOut(_ORMOut):
-    id: int | None = None
-    class_id: int | None = None
-    student_id: int | None = None
-    date: str | None = None
-    status: str | None = None
-
-
-class WorkLogOut(_ORMOut):
-    id: int | None = None
-    teacher_id: int | None = None
-    date: str | None = None
-    content: str | None = None
-
-
-class UserOut(_ORMOut):
-    id: int | None = None
-    username: str | None = None
-    name: str | None = None
-    role: str | None = None
-    avatar: str | None = None
-    phone: str | None = None
-    school_id: int | None = None
-    class_id: int | None = None
-    must_change_password: bool | None = None
 
 
 # ============ 刷新令牌（F3） ============

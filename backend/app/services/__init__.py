@@ -10,6 +10,5 @@
 约束：
 - 对外 API 路径、请求/响应字段、状态码、中文提示文案、刷新时机必须与重构前**完全一致**。
 - 服务函数统一以 `db: Session` 作为第一个参数，保持无全局状态、可单测。
-- 租户隔离由 `app/tenant.py` 的 ORM 事件自动完成，service 内**不要**手动拼 `school_id` 过滤
-  （除非接口层需要显式双保险，参见 `tenant.tenant_filtered_query`）。
+- 租户隔离由 `app/tenant.py` 的 ORM 事件自动完成，service 内**不要**手动拼 `school_id` 过滤。
 """

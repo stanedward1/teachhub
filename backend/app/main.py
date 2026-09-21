@@ -88,7 +88,7 @@ app = FastAPI(
 - `teacher` 教师 / `school_admin` 学校管理员 —— 通过 `/admin` 进入后台，管理本校功能
 - `super_admin` 平台超管 —— 跨学校管理全部租户
 
-数据按 `school_id` 租户隔离，接口层与 ORM 层双重拦截。
+数据按 `school_id` 租户隔离，由 ORM 层自动为查询注入过滤（含 `db.get`），跨校访问返回 404。
 """,
     version=settings.APP_VERSION,
 )

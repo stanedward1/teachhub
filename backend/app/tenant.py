@@ -1,6 +1,7 @@
 """多租户上下文与 ORM 层自动隔离。
 
-设计要点（对应技术方案「接口层 + 数据层双重拦截」）：
+隔离全部由本模块的 ORM 事件统一完成：接口层只负责解析 JWT 写入租户上下文与角色鉴权，
+不做查询过滤（技术方案原设计的「接口层显式过滤」辅助函数因从未接线，已于 2026-09-21 移除）。
 
 - **租户上下文**：HTTP 中间件从 JWT 解析 `school_id` 写入 ContextVar，请求结束重置，
   避免线程池复用导致租户串号。
@@ -69,27 +70,6 @@ def tenant_scope(school_id: int | None):
         yield
     finally:
         reset_tenant(tokens)
-
-
-def get_tenant_id() -> int | None:
-    return _tenant_school_id.get()
-
-
-def is_filter_active() -> bool:
-    return _tenant_active.get()
-
-
-def tenant_filtered_query(query, model):
-    """为查询显式叠加租户过滤（接口层使用，与 ORM 事件形成双重保险）。
-
-    平台超管与无租户上下文时原样返回。
-    """
-    if not _tenant_active.get():
-        return query
-    school_id = _tenant_school_id.get()
-    if school_id is None:
-        return query
-    return query.filter(model.school_id == school_id)
 
 
 def assign_school_id(obj, school_id) -> None:

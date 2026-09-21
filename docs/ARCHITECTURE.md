@@ -112,7 +112,7 @@ teachhub/
 │   │   ├── stores/            # Pinia store（auth）
 │   │   ├── layout/            # StudentLayout / AdminLayout（可折叠外壳）
 │   │   │   └── admin/         #   AdminLayout 子件：AdminSidebar / AdminHeader / menuConfig.js
-│   │   ├── composables/       # 可组合函数（useCrudList / useSort / useDebouncedRef / useSubmit / useDownload / useLogout）
+│   │   ├── composables/       # 可组合函数（useCrudList / useSort / useDebouncedRef / useDownload / useLogout）
 │   │   ├── components/        # ImportDialog / Markdown / MarkdownEditor / StudentSelect / StudentCard / SortBar / PaginationBar / StateView（四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList
 │   │   ├── mobile/            # 移动端（Vant）：layout + views + api
 │   │   ├── views/student/     # 学生端页面（登录/作业/优秀作品/我的提交+详情/编程练习/资料）
@@ -139,7 +139,7 @@ teachhub/
 | `super_admin` | `/admin`（管理端） | 跨学校：学校开通/启停 + 全局概览 + 所有租户数据 | `require_super_admin` |
 
 **双重校验**：
-- 后端：`deps.require_roles(*roles)` 依赖注入，越权返回 `403`；另有多租户 `school_id` 隔离（接口层 + ORM 层双重拦截）。
+- 后端：`deps.require_roles(*roles)` 依赖注入，越权返回 `403`；另有多租户 `school_id` 隔离（由 ORM 层自动注入过滤，见下）。
 - 前端：`router.beforeEach` 路由守卫，按角色重定向。
 
 **多租户数据隔离**：每所学校是独立租户，通过 `school_id` 隔离——ORM 层自动为所有查询注入 `school_id` 过滤（含 `db.get`），跨校访问返回 `None`→404；平台超管 `school_id=NULL` 不受限。
