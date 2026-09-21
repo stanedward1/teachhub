@@ -23,6 +23,7 @@ export default [
         window: 'readonly',
         document: 'readonly',
         localStorage: 'readonly',
+        crypto: 'readonly',
         navigator: 'readonly',
         console: 'readonly',
         fetch: 'readonly',

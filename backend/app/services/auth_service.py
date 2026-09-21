@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.audit import audit
@@ -146,7 +146,6 @@ def _new_refresh_token(
     db: Session,
     user: User,
     user_agent: str | None = None,
-    ip: str | None = None,
 ) -> tuple[str, RefreshToken]:
     """构造一条刷新令牌记录（不提交），返回 (明文, 记录)。
 
@@ -161,7 +160,6 @@ def _new_refresh_token(
         expires_at=_utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
         created_at=_utcnow(),
         user_agent=(user_agent or None),
-        ip=(ip or None),
     )
     db.add(row)
     return plain, row
@@ -184,7 +182,6 @@ def login(
     db: Session,
     payload,
     user_agent: str | None = None,
-    ip: str | None = None,
 ) -> dict:
     """账号登录：校验凭证 / 锁定 / 租户 / 学籍，签发 access + refresh 令牌。
 
@@ -216,12 +213,7 @@ def login(
             raise HTTPException(status_code=403, detail="该学生已退学，无法登录")
 
     _reset_login_state(user)
-    # 最后登录留痕：记录时间与来源 IP（学生管理处「最后登录」列的数据源）。
-    # 取不到 IP 时保留上一次的值，避免把已有记录冲成 NULL。
-    if ip:
-        user.last_login_ip = ip
-    user.last_login_at = func.now()
-    refresh_plain, _row = _new_refresh_token(db, user, user_agent=user_agent, ip=ip)
+    refresh_plain, _row = _new_refresh_token(db, user, user_agent=user_agent)
     db.commit()
 
     token = create_access_token(subject=str(user.id), role=user.role, school_id=user.school_id)
@@ -317,7 +309,6 @@ def refresh(
     db: Session,
     refresh_token: str,
     user_agent: str | None = None,
-    ip: str | None = None,
 ) -> dict:
     """用刷新令牌换取新的令牌对（一次性轮换）。
 
@@ -345,7 +336,7 @@ def refresh(
         raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
 
     # 轮换：签发新令牌并撤销旧令牌，新摘要写入旧行的 replaced_by
-    new_plain, new_row = _new_refresh_token(db, user, user_agent=user_agent, ip=ip)
+    new_plain, new_row = _new_refresh_token(db, user, user_agent=user_agent)
     row.revoked_at = now
     row.replaced_by = new_row.token_hash
     db.commit()

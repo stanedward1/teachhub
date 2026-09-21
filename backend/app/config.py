@@ -90,15 +90,6 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
     ]
 
-    # 反向代理信任网段（逗号分隔 CIDR）：命中即视为「我们自己的代理」，而非客户端。
-    #
-    # **默认留空即可**：回环（127.0.0.0/8、::1）、链路本地、未指定地址本身就
-    # 一定不是客户端，代码已内置识别。只有当**内层代理以别的地址连入**时才需要配置 ——
-    # 典型是 docker 场景下网关地址（如 172.17.0.1）被写进 X-Real-IP。
-    # 排查方法：看登录日志的「客户端 IP 还原」一行，若 X-Real-IP 显示的是你的代理地址，
-    # 就把该网段填进来（例如 TRUSTED_PROXY_CIDRS=172.16.0.0/12）。
-    TRUSTED_PROXY_CIDRS: Annotated[list[str], NoDecode] = []
-
     @field_validator("SECRET_KEY", mode="before")
     @classmethod
     def _fill_default_secret_key(cls, value):
@@ -109,7 +100,7 @@ class Settings(BaseSettings):
             return _DEV_SECRET_KEY
         return value
 
-    @field_validator("CORS_ORIGINS", "TRUSTED_PROXY_CIDRS", mode="before")
+    @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_list_setting(cls, value):
         """兼容逗号分隔字符串（默认形态），也兼容已是 list/tuple/set 的情况。"""

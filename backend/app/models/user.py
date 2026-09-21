@@ -63,9 +63,6 @@ class User(Base):
     must_change_password = Column(Boolean, default=False, nullable=False)  # True=首次登录需改密
     failed_attempts = Column(Integer, default=0, nullable=False)           # 连续失败次数
     locked_until = Column(DateTime, nullable=True)           # 锁定截止时间
-    # 最后登录留痕：管理员/班主任据此判断账号是否异常地点登录（学生管理处的「最后登录」列）
-    last_login_at = Column(DateTime, nullable=True)
-    last_login_ip = Column(String(45), nullable=True)        # 长度 45 兼容 IPv6 完整写法
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

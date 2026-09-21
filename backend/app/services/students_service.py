@@ -15,7 +15,7 @@ from openpyxl import Workbook
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.audit import audit, batch_student_avatar_map, batch_student_login_map, batch_user_map
+from app.audit import audit, batch_student_avatar_map, batch_user_map
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
 from app.config import settings
 from app.models import Classroom, ClassTeacher, School, Student, StudentBoardHistory, User
@@ -50,16 +50,11 @@ def _students_out(db: Session, rows: list) -> list:
         if class_ids else {}
     )
     avatar_map = batch_student_avatar_map(db, [s.id for s in rows])
-    login_map = batch_student_login_map(db, [s.id for s in rows])
     items = []
     for s in rows:
         d = to_dict(s)
         d["class_name"] = class_map.get(s.class_id)
         d["avatar"] = avatar_map.get(s.id)
-        # 最后登录留痕（来自学生登录账号）：未登录过则为 None
-        login = login_map.get(s.id) or {}
-        d["last_login_at"] = login.get("last_login_at")
-        d["last_login_ip"] = login.get("last_login_ip")
         items.append(d)
     return items
 

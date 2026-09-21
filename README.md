@@ -495,115 +495,22 @@ sudo nginx -t           # 测试配置
 sudo systemctl reload nginx
 ```
 
-#### 6.1 客户端真实 IP 还原（重要）
+#### 6.1 客户端 IP（说明）
 
-> **核心原则**：客户端 IP 只有**最外层那个代理**知道。它没往下传，后端就**永远拿不到** ——
-> 这不是后端能修的 bug，必须去补**那一层**的转发配置。
+> **本项目已不做客户端 IP 的记录与还原。** 原先的「最后登录 IP」功能、`_client_ip` 还原代码、
+> 一度尝试的「设备识别（物理机）」功能，以及 `refresh_tokens.ip` 列（迁移 `e2f3a4b5c6d7` 删除），
+> 均已按需求下线并删除（详见 `docs/CHANGELOG.md`）。
 
-##### 第一步：确认你的前端是谁在提供服务
+若将来确实需要记录客户端 IP，先记住一条铁律：
+**客户端 IP 只有最外层那个代理知道；它没往下传，后端就永远拿不到** ——
+转发客户端 IP 是**最外层代理**的责任，不是后端代码能修的 bug。
 
-两种情况，改的地方完全不同：
-
-**情形 A —— 前端由 Vite 开发服务器提供（本项目当前线上就是这样）**
-
-启动方式见根目录 `start.sh`：`npm run dev -- --host 0.0.0.0`（监听 `:5173`）。
-此时**没有 nginx**，转发客户端 IP 是 **Vite 代理**的责任。若 `frontend/vite.config.js` 的
-`server.proxy` 只写了 `changeOrigin: true`，代理就会从 `localhost` 连后端且**不带任何转发头** ——
-后端只能看到 `127.0.0.1`。
-
-修法（加 `xfwd: true`）：
-
-```js
-server: {
-  port: 5173,
-  proxy: {
-    '/api': {
-      target: 'http://localhost:8080',
-      changeOrigin: true,
-      xfwd: true,          // ← 关键：让代理附加 X-Forwarded-For / -Proto / -Host / -Port
-    },
-    '/uploads': {
-      target: 'http://localhost:8080',
-      changeOrigin: true,
-      xfwd: true,
-    },
-  },
-},
-```
-
-改完**重启前端进程**（`npm run dev` 起的那个）即生效，无需改后端。
-
-> 实测对照（经 vite 代理打后端）：改前后端收到 `X-Forwarded-For=None`；
-> 改后收到 `X-Forwarded-For='<客户端地址>'`。
-
-**情形 B —— 前端静态文件由 Nginx 托管**
-
-若 `location /api` 只写了 `proxy_pass` / `Host`，**没写** `X-Real-IP` 与 `X-Forwarded-For`，
-Nginx 同样会从 `127.0.0.1` 连后端且不传任何代理头。正确写法：
-
-```nginx
-location /api {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;                      # ← 关键，不能少
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;  # ← 关键，不能少
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-改完执行 `sudo nginx -t && sudo systemctl reload nginx`，**无需重新部署后端**。
-
-> 两种情形的共同表现都是「**学生管理处所有用户的最后登录 IP 都是 `127.0.0.1`**」。
-> ⚠️ 此时**任何后端代码都救不了**：真实客户端 IP 从未被传到后端，客观上没有信息可用于还原。
-
-##### 怎么确认
-
-后端每次登录都会打一行诊断；**当还原结果不可信（仍是回环地址）时会额外打一条 WARNING**，
-直接把"该去改哪一行配置"说出来：
-
-```bash
-tail -20 backend/logs/teachhub.log | grep "客户端 IP 还原"
-```
-
-| 日志里看到 | 含义 | 处理 |
-|---|---|---|
-| `X-Real-IP=None` 且 `X-Forwarded-For=None`、`直连对端=127.0.0.1` | `/api` 没传客户端 IP（即上一节的情形） | 按上面补 `proxy_set_header` |
-| `X-Forwarded-For` 整条链只有回环地址 | 同上 | 同上 |
-| XFF 最左**已是**真实公网 IP，但 `ip=` 仍不对 | 后端没跑到最新代码 | 重启后端进程 |
-| `X-Real-IP='172.17.x'` / `'10.x'`（看着像服务器内网地址） | 反向代理用**非回环**地址连入且该网段未被声明 | 见下方 `TRUSTED_PROXY_CIDRS` |
-
-若**确实是从服务器本机、或经 SSH 端口转发**访问后台，客户端真的就是 `127.0.0.1` ——
-这是正常现象，不是缺陷（此时会命中上面那条 WARNING，可忽略）。请用一台外部机器验证。
-
-##### 后端的还原算法（供排查参考）
-
-后端 `routers/auth.py::_client_ip` 按可信度分级还原，**不再"取 XFF 最右一跳"**：
-
-1. `X-Real-IP` 存在且**不是自有代理跳** → 直接采用（它由直连代理写入，客户端无法伪造）；
-2. 否则（缺失，或被自有代理地址覆盖）→ 退回 `X-Forwarded-For`，取**最左的非自有跳**；
-3. 都没有 → 回退 TCP 对端。
-
-这里的"自有跳"**只按回环 / 链路本地 / 未指定判定**（`127.0.0.0/8`、`::1`、`169.254/fe80`、`0.0.0.0`），
-**不把 RFC1918 内网一律当自有**——因为真实客户端本身常常就在内网（校园网 `192.168.x`）。
-若把内网一律丢弃，会丢掉**不可伪造**的 `X-Real-IP`、转而信任**可被客户端伪造**的 XFF。
-
-多层代理（例如 `浏览器 → 云负载均衡 / CDN → 宿主机 Nginx → 后端`）时，内层代理的
-`$remote_addr` 会变成上一跳地址并被写进 `X-Real-IP`。若那一跳是**非回环**地址
-（如 `10.0.0.5`），它与"真实内网客户端"在协议层无法区分，需在 `backend/.env` 显式声明：
-
-```ini
-TRUSTED_PROXY_CIDRS=172.16.0.0/12,10.0.0.0/8
-```
-
-- 逗号分隔可填多个；**默认留空即可**（回环地址已内置识别，无需声明）。
-- **RFC1918 三类私有网段都能正确识别**：A 类 `10.0.0.0/8`、B 类 `172.16.0.0/12`、
-  C 类 `192.168.0.0/16`，另有 IPv6 私网 `fc00::/7` 与不带掩码的单地址（按 `/32`、`/128`）。
-  匹配走 `ipaddress` 的网段判定而非字符串前缀，边界精确（`172.16.0.0/12` 覆盖
-  `172.16.0.0`–`172.31.255.255`，不含 `172.32.0.0`），段外地址不会误伤。
-- ⚠️ **只声明代理自身连入的网段，不要"把内网全列上"**：若把整个 `192.168.0.0/16` 列为可信，
-  同一内网的客户端就会被当作代理跳丢弃，转而采信可被伪造的 `X-Forwarded-For` —— 反而更不安全。
-- 该 IP 仅供**展示与留痕**，不作为安全依据（登录限流走 TCP 对端，不受影响）。
-
+- 前端由 **Vite 开发服务器**提供时（本项目当前线上形态，无 nginx）：靠 `frontend/vite.config.js`
+  的 `server.proxy`。**当前刻意不开 `xfwd`** —— 既然不再记录客户端 IP，就没有转发转发头的必要；
+  将来要用时再打开（http-proxy 会附加 `X-Forwarded-For / -Proto / -Host / -Port`）。
+- 前端由 **Nginx** 托管时：`location /api` 必须显式写
+  `proxy_set_header X-Real-IP $remote_addr;` 与
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`。
 ### 7. 配置 HTTPS（推荐）
 
 ```bash

@@ -40,4 +40,3 @@ class RefreshToken(Base):
     replaced_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     user_agent = Column(String(255), nullable=True)
-    ip = Column(String(64), nullable=True)

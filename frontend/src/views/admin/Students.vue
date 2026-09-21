@@ -81,17 +81,6 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="最后登录" width="170">
-            <template #default="{ row }">
-              <div v-if="row.last_login_ip || row.last_login_at">
-                <div style="font-family: monospace">{{ row.last_login_ip || '—' }}</div>
-                <div style="font-size: 12px; color: #909399">
-                  {{ formatLoginTime(row.last_login_at) }}
-                </div>
-              </div>
-              <span v-else style="font-size: 12px; color: #c0c4cc">从未登录</span>
-            </template>
-          </el-table-column>
           <el-table-column label="操作" width="280" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" :disabled="row.is_dropped_out" @click="openEdit(row)"
@@ -181,15 +170,6 @@ const classes = ref([])
 const keyword = useDebouncedRef('', 300)
 const classId = ref(null)
 const droppedFilter = ref('false')
-
-/** 最后登录时间格式化（后端返回不带时区的本地时间字符串，如 2026-09-20T18:22:34） */
-function formatLoginTime(v) {
-  if (!v) return ''
-  const d = new Date(v)
-  if (Number.isNaN(d.getTime())) return String(v)
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
 
 // 通学生/寄宿生图表
 const chartRef = ref(null)
