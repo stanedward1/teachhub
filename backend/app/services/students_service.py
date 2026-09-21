@@ -518,14 +518,21 @@ def update_student(db: Session, user: User, student_id: int, payload: StudentUpd
     if s.is_dropped_out and payload.is_dropped_out is not False:
         raise HTTPException(status_code=403, detail="该学生已退学，无法修改（可将其改回在籍后操作）")
     data = payload.model_dump(exclude_unset=True)
+    # 教师不得调整学生的班级归属。⚠️ 判据必须是「目标值 != 当前值」，不能只看「请求体里有没有
+    # class_id」：前端编辑弹窗（StudentFormDialog.vue）刻意「整行原样提交」，未改动的 class_id
+    # 也会带上；只判存在会把班主任改通宿/寄宿误判成转班（线上故障：403 教师无权修改学生班级）。
+    if (
+        not is_any_admin(user)
+        and data.get("class_id") is not None
+        and data["class_id"] != s.class_id
+    ):
+        raise HTTPException(status_code=403, detail="教师无权修改学生班级")
     old_type = s.student_type
     for f in (
         "name", "gender", "birth_date", "class_id", "major",
         "parent_name", "parent_phone", "student_type", "is_dropped_out",
     ):
         if f in data and data[f] is not None:
-            if f == "class_id" and not is_any_admin(user):
-                raise HTTPException(status_code=403, detail="教师无权修改学生班级")
             setattr(s, f, parse_date(data[f]) if f == "birth_date" else data[f])
     # 记录寄宿/通学状态变更
     new_type = data.get("student_type")
