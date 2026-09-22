@@ -1,6 +1,6 @@
 # TeachHub 数据库 ER 图
 
-> 更新：2026-09-22 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：36 张 ｜ 外键：73 个（模型定义口径）｜ 迁移：29 个 revision（线性单链，head `f3a4b5c6d7e8`）
+> 更新：2026-09-22 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：37 张 ｜ 外键：73 个（模型定义口径）｜ 迁移：30 个 revision（线性单链，head `a9b8c7d6e5f4`）
 
 ## 一、实体关系总览（Mermaid）
 
@@ -67,7 +67,7 @@ erDiagram
     USERS ||--o{ OPERATION_LOGS : "操作人"
 ```
 
-## 二、表清单（按域分组，36 张）
+## 二、表清单（按域分组，37 张）
 
 | 域 | 表名 | 关键字段 | 说明 |
 | --- | --- | --- | --- |
@@ -106,6 +106,7 @@ erDiagram
 | | `student_comments` | student_id、content | 学生评语 |
 | AI 批改 | `ai_credentials` | provider、base_url、model、api_key_encrypted、updated_by | 平台级 AI 服务凭证（**刻意不含 `school_id` 列**：平台资产，跨校共用一套；密钥为 Fernet 密文，读接口只回掩码） |
 | | `ai_grading_results` | submission_id(唯一)、school_id、status、score、is_excellent_candidate | AI 批改结果（一提交一条，重跑覆盖）；`status` = `pending`/`success`/`failed`，与教师评语**并列存储、互不覆盖** |
+| | `ai_usage_daily` | day(唯一)、call_count | 平台级 AI 日调用计数（**无 `school_id` 列**：跨校共用一道额度刹车）；与 `ai_grading_results` 行生命周期解耦，投递前原子预留（`FOR UPDATE` + 唯一键兜底） |
 | 审计 | `operation_logs` | user_id、action、class_id | 操作审计日志 |
 
 ## 三、外键删除策略分层

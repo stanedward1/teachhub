@@ -177,6 +177,29 @@ def _load_refresh_token(db: Session, token_plain: str) -> RefreshToken | None:
     )
 
 
+def invalidate_user_sessions(db: Session, user: User) -> None:
+    """让该账号的**全部既有会话**立即失效（不提交，由调用方 `commit`）。
+
+    两件事缺一不可：
+
+    1. `token_version += 1` —— access token 是无状态 JWT，无法逐个撤销；把版本号写进
+       `tv` 声明、校验端比对（`app/deps.py`），即可让该用户此前签发的**全部** access
+       token 立刻失效；
+    2. **撤销该用户所有未撤销的 refresh token** —— 少了这步，攻击者仍可用旧 refresh
+       换到一枚**带新版本号**的 access token，吊销就被完全绕过。
+
+    调用场景：修改密码、管理员重置密码（即「改密 = 踢出所有设备」）。
+    """
+    user.token_version = (user.token_version or 0) + 1
+    now = _utcnow()
+    (
+        db.query(RefreshToken)
+        .execution_options(skip_tenant_filter=True)
+        .filter(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+        .update({RefreshToken.revoked_at: now}, synchronize_session=False)
+    )
+
+
 # ---------------- 对外业务用例 ----------------
 def login(
     db: Session,
@@ -216,7 +239,12 @@ def login(
     refresh_plain, _row = _new_refresh_token(db, user, user_agent=user_agent)
     db.commit()
 
-    token = create_access_token(subject=str(user.id), role=user.role, school_id=user.school_id)
+    token = create_access_token(
+        subject=str(user.id),
+        role=user.role,
+        school_id=user.school_id,
+        token_version=user.token_version,
+    )
     return {
         "token": token,
         "refresh_token": refresh_plain,
@@ -286,7 +314,12 @@ def register(db: Session, payload) -> dict:
     data = public_user(db, user)
     data["student_id"] = student.id
     db.commit()
-    token = create_access_token(subject=str(user.id), role=user.role, school_id=user.school_id)
+    token = create_access_token(
+        subject=str(user.id),
+        role=user.role,
+        school_id=user.school_id,
+        token_version=user.token_version,
+    )
     return {"token": token, "user": data}
 
 
@@ -300,6 +333,10 @@ def change_password(db: Session, user: User, payload) -> dict:
         raise HTTPException(status_code=400, detail=err)
     user.password_hash = hash_password(payload.new_password)
     user.must_change_password = False  # 改密后清除强制改密标记
+    # 🔴 改密即踢出该账号的**全部既有会话**（access + refresh）。前端在成功后本就
+    # 会清理本地登录态并跳登录页，因此本人只需重新登录；而攻击者手里的旧令牌同时失效
+    # —— 这才是「改密」应有的语义（原先只改哈希，旧令牌照常可用）。
+    invalidate_user_sessions(db, user)
     audit(db, user, "change_password", target=user.username)
     db.commit()
     return {"ok": True}
@@ -341,7 +378,12 @@ def refresh(
     row.replaced_by = new_row.token_hash
     db.commit()
 
-    token = create_access_token(subject=str(user.id), role=user.role, school_id=user.school_id)
+    token = create_access_token(
+        subject=str(user.id),
+        role=user.role,
+        school_id=user.school_id,
+        token_version=user.token_version,
+    )
     return {"token": token, "refresh_token": new_plain, "token_type": "bearer"}
 
 

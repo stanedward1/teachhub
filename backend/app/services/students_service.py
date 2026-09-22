@@ -22,6 +22,7 @@ from app.models import Classroom, ClassTeacher, School, Student, StudentBoardHis
 from app.pagination import paginate
 from app.permissions import (
     ensure_class_operable,
+    ensure_same_school,
     ensure_student_operable,
     filter_classrooms_by_teacher,
     get_student_account,
@@ -268,6 +269,9 @@ def create_classroom(db: Session, user: User, payload: dict) -> dict:
     if db.query(Classroom).filter(Classroom.code == code).first():
         raise HTTPException(status_code=400, detail="班级代码已存在")
     # 归属学校：平台超管必须显式指定；学校管理员默认取本校
+    # 🔴 必须先校验「请求体里的 school_id 属于本校」：`before_flush` 只在未赋值时回填，
+    # 显式传入他校 id 不会被纠正 ⇒ 学校管理员能把班级建到他校去。
+    ensure_same_school(user, payload.get("school_id"))
     school_id = payload.get("school_id") or user.school_id
     if not school_id:
         raise HTTPException(status_code=400, detail="请指定所属学校")
@@ -465,6 +469,8 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
             raise HTTPException(status_code=403, detail="无权在该班级添加学生")
     if db.query(Student).filter(Student.student_no == student_no).first():
         raise HTTPException(status_code=400, detail="学号已存在")
+    # 归属校验：显式指定的 school_id 必须是本校（平台超管不受限）
+    ensure_same_school(user, payload.school_id)
     # 归属学校：优先显式指定，否则从班级推导，再否则取当前用户学校
     school_id = payload.school_id
     if not school_id and class_id:

@@ -10,7 +10,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | ---- | ---- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、可观测性、设计决策 |
 | [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（145 条业务接口 + 运维端点，方法 + 路径 + 权限 + 约定） |
-| [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 36 张表、外键删除策略分层、软关联说明 |
+| [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 37 张表、外键删除策略分层、软关联说明 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、权限与多租户隔离规范、Git 规范、测试规范、发布流程 |
 | [docs/AI-GRADING-PRD.md](docs/AI-GRADING-PRD.md) | **（P0 已实现）** AI 作业批改与优秀作品推荐需求：现状底盘、功能需求、权限矩阵、验收标准、决策记录 |
 | [docs/MULTI-TENANT-PRD.md](docs/MULTI-TENANT-PRD.md) ｜ [docs/MULTI-TENANT-TECH.md](docs/MULTI-TENANT-TECH.md) | 多租户 SaaS 需求与技术方案：角色/租户模型、`school_id` 隔离实现、写入归属与唯一约束口径、迁移策略 |
@@ -162,7 +162,7 @@ teachhub/
 │   │   ├── observability.py    # 可观测性：访问日志中间件 + /metrics（Prometheus）
 │   │   ├── seed.py             # 假数据种子（默认校 + 第二校，多租户）
 │   │   ├── cleanup.py          # 级联清理（purge_student_data / purge_user_data）
-│   │   ├── models/             # 数据模型（按域分组，36 张表）
+│   │   ├── models/             # 数据模型（按域分组，37 张表）
 │   │   │   ├── user.py         #   User
 │   │   │   ├── school.py       #   School / Classroom / ClassTeacher / Student
 │   │   │   ├── refresh_token.py #  RefreshToken（刷新令牌：轮换 + 撤销，仅存 sha256 摘要）
@@ -188,7 +188,7 @@ teachhub/
 │   │       ├── mobile.py       #   移动端轻量接口
 │   │       ├── admin.py        #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览 / 平台注册开关 / AI 凭证与批改开关
 │   │       └── uploads.py      #   通用文件上传
-│   ├── alembic/                # 数据库迁移（schema 唯一来源，29 个 revision，head f3a4b5c6d7e8）
+│   ├── alembic/                # 数据库迁移（schema 唯一来源，30 个 revision，head a9b8c7d6e5f4）
 │   ├── logs/                   # 运行日志（teachhub.log，按天滚动保留 30 天）
 │   ├── tests/                  # pytest 自动化测试（含多租户隔离）
 │   ├── pytest.ini              # pytest 配置（testpaths = tests）

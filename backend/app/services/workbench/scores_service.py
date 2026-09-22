@@ -63,6 +63,21 @@ def list_scores(
     return {"items": items, "total": total}
 
 
+def _latest_exam_name(db: Session, class_student_ids, subject: str) -> str | None:
+    """班级内**最近一次**出现过的考试名（可按科目限定）；没有则返回 None。
+
+    用于给「未指定考试」的班级排名选一把统一的尺子（见 `score_analysis`）。
+    """
+    q = db.query(Score.exam_name).filter(
+        Score.student_id.in_(active_student_id_query(db)),
+        Score.student_id.in_(class_student_ids),
+        Score.exam_name.isnot(None),
+    )
+    if subject:
+        q = q.filter(Score.subject == subject)
+    return q.order_by(Score.created_at.desc()).limit(1).scalar()
+
+
 def score_analysis(
     db: Session,
     user,
@@ -98,9 +113,13 @@ def score_analysis(
         )
         if subject:
             rank_q = rank_q.filter(Score.subject == subject)
-        if exam_name:
-            rank_q = rank_q.filter(Score.exam_name == exam_name)
-        rows = rank_q.all()
+        # ⚠️ 排名必须用**同一把尺子**：若未指定考试就把学生近 90 天所有科目、所有考试的
+        # 分数混在一起取平均，各生的科目数与考试次数不同 ⇒ 排名不可比（还会被「最近考得
+        # 多的科目」系统性拉偏）。因此缺省收敛到该班级**最近一次考试**；连考试名都没有时
+        # 退化为不产出排名，而不是给出一份误导性榜单。真实口径经 `ranking_basis` 回传前端。
+        class_student_ids = db.query(Student.id).filter(Student.class_id == class_id)
+        used_exam = exam_name or _latest_exam_name(db, class_student_ids, subject)
+        rows = rank_q.filter(Score.exam_name == used_exam).all() if used_exam else []
         rank_map: dict = {}
         for r in rows:
             rank_map.setdefault(r.student_id, []).append(r)
@@ -125,6 +144,8 @@ def score_analysis(
             item["rank"] = i + 1
         resp["ranking"] = ranking
         resp["ranking_total"] = len(ranking)
+        # 排名口径回传（前端可提示「基于 2026 春季期末考试」），避免「跨科混排」的误读
+        resp["ranking_basis"] = {"subject": subject or None, "exam": used_exam or None}
 
     if student_id:
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):

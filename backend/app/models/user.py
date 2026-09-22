@@ -63,6 +63,10 @@ class User(Base):
     must_change_password = Column(Boolean, default=False, nullable=False)  # True=首次登录需改密
     failed_attempts = Column(Integer, default=0, nullable=False)           # 连续失败次数
     locked_until = Column(DateTime, nullable=True)           # 锁定截止时间
+    # 会话版本号：改密 / 重置密码时 +1，使该账号此前签发的全部 access token 失效。
+    # access token 是无状态 JWT 无法逐个撤销，只能靠版本号比对（见 app/deps.py）；
+    # 与「撤销全部 refresh token」配套，才构成完整的改密即踢出所有设备。
+    token_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

@@ -23,6 +23,7 @@ from app.platform_settings import (
     set_global_setting,
 )
 from app.schemas import RegistrationSetting
+from app.services.auth_service import invalidate_user_sessions
 from app.models import (
     Assignment,
     Attendance,
@@ -256,6 +257,15 @@ def create_user(db: Session, payload: dict, user: User) -> dict:
         raise HTTPException(status_code=400, detail="角色不合法")
     if role == "school_admin" and not is_platform_admin(user):
         raise HTTPException(status_code=403, detail="只有平台超管可以创建学校管理员")
+    # 🔴 归属校验：请求体里给出的 `school_id` / `class_id` 必须属于操作者本校。
+    # 少了这一步，学校管理员只要在 body 里塞一个他校 school_id 就能把账号建到他校
+    # —— 因为 `tenant.before_flush` 只在**未赋值时**回填，不会纠正显式传入的值。
+    # 平台超管不受限（`ensure_same_school` 对其直接放行）。
+    ensure_same_school(user, payload.get("school_id"))
+    if role == "student" and payload.get("class_id"):
+        # 跨校班级会被租户过滤挡成 None ⇒ 400，避免学生建到他校班级下
+        if db.get(Classroom, payload["class_id"]) is None:
+            raise HTTPException(status_code=400, detail="所选班级不存在")
     # 多租户：用户名唯一性按角色分叉，与数据库约束 uq_user_scope_username
     # （users.username_scope + username）保持同一口径。这里只是「先查后插」的友好提示，
     # 真正的唯一性保证在**数据库层** —— 并发提交时本校验可能双双通过，届时由约束兜底
@@ -345,6 +355,23 @@ def update_user(db: Session, user_id: int, payload: dict, user: User) -> dict:
             ).first():
                 raise HTTPException(status_code=400, detail="该校已存在同名用户名")
 
+    # 🔴 角色白名单：与 `create_user` 保持同一口径。
+    # 少了这一步，学校管理员只要 `PUT /api/admin/users/{自己的id}` 传
+    # `{"role": "super_admin"}` 就能**自提权为平台超管** —— 而超管的 school_id 为 NULL，
+    # 会直接绕过 `tenant.py` 的全部租户过滤（读写全平台数据），是最高危的越权。
+    # 口径：学校管理员只能设教师/学生，只有平台超管能设学校管理员；
+    # 任何角色都**不能**经本接口产生 super_admin（创建超管只能走种子/运维脚本）。
+    new_role = payload.get("role")
+    if new_role is not None:
+        if new_role not in ("teacher", "school_admin", "student"):
+            raise HTTPException(status_code=400, detail="角色不合法")
+        if new_role == "school_admin" and not is_platform_admin(user):
+            raise HTTPException(status_code=403, detail="只有平台超管可以设置学校管理员")
+    # 班级归属校验：跨校班级被租户过滤挡成 None ⇒ 400（与 create_user 同口径）
+    new_class_id = payload.get("class_id")
+    if new_class_id is not None and db.get(Classroom, new_class_id) is None:
+        raise HTTPException(status_code=400, detail="所选班级不存在")
+
     for f in ("name", "phone", "role", "class_id"):
         if f in payload and payload[f] is not None:
             setattr(u, f, payload[f])
@@ -368,6 +395,9 @@ def reset_password(db: Session, user_id: int, payload: dict, user: User) -> dict
     u.password_hash = hash_password(new_pwd)
     u.failed_attempts = 0
     u.locked_until = None
+    # 🔴 重置密码必须同时失效该账号的**全部既有会话**：否则管理员「改了密码」
+    # 只挡住新登录，攻击者手里的旧 access / refresh 令牌照常可用，改密形同虚设。
+    invalidate_user_sessions(db, u)
     audit(db, user, "reset_password", target=f"{u.username} ({u.name})")
     db.commit()
     return {"ok": True}
@@ -597,10 +627,20 @@ def dashboard(db: Session, user: User) -> dict:
     leave_count = _count(Leave, Leave.student_id, student_ids)
     comm_count = _count(Communication, Communication.student_id, student_ids)
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    # ⚠️ 「今天」的边界必须交给**数据库**计算：`Leave.created_at` 由 `server_default=func.now()`
+    # 生成（SQLite 为 UTC、MySQL 为库本地时区），而 Python 的 `datetime.now()` 取的是
+    # **进程本地日期**。两者时区基准不一致时（如 SQLite 下凌晨 CST），
+    # `created_at >= 本地今日零点` 会把当天记录全部漏掉 —— 与 ai_grading.today_call_count
+    # 修过的是同一个坑（docs/DEVELOPMENT.md §3.4：与 created_at 比时间必须用数据库时钟）。
     today_leaves = (
-        db.query(Leave).filter(Leave.created_at >= today, Leave.student_id.in_(student_ids)).count()
-        if student_ids is not None else db.query(Leave).filter(Leave.created_at >= today).count()
+        db.query(Leave)
+        .filter(
+            func.date(Leave.created_at) == func.current_date(),
+            Leave.student_id.in_(student_ids),
+        )
+        .count()
+        if student_ids is not None
+        else db.query(Leave).filter(func.date(Leave.created_at) == func.current_date()).count()
     )
 
     # 近 7 天请假详情（含人员姓名、类型、时长）：一次查询 + 批量加载，避免 N+1
@@ -700,13 +740,17 @@ def dashboard(db: Session, user: User) -> dict:
         )
 
     # 近 7 天出勤统计
-    att_start = (datetime.now() - timedelta(days=6)).strftime("%Y-%m-%d")
+    # 注：`attendance.date` 是**业务日期**（记录出勤发生在哪一天），不是时间戳，
+    # 因此按**本地日历日**比较是正确的 —— 与 created_at 类时间戳必须用数据库时钟
+    # 的规则不冲突（见 docs/DEVELOPMENT.md §3.4）。
+    att_start = (date.today() - timedelta(days=6)).isoformat()
+    att_end = date.today().isoformat()
     att_records = []
     if class_ids:
         att_records = db.query(Attendance).filter(
             Attendance.class_id.in_(class_ids),
             Attendance.date >= att_start,
-            Attendance.date <= today,
+            Attendance.date <= att_end,
         ).all()
     att_status = {"出勤": 0, "缺勤": 0, "请假": 0, "迟到": 0}
     att_trend_map = {}

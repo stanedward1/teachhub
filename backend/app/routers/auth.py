@@ -30,7 +30,21 @@ router = APIRouter(prefix="/api/auth", tags=["认证"])
 # 防止攻击者绕过账号锁定、用分布式 IP 对同一账号进行暴力破解。
 # 注意：limiter 实例在 main.py 中创建并挂到 app.state，这里复用同一个实例
 # （slowapi 要求所有路由共享同一个 Limiter 实例才能正确累计计数）。
-limiter = Limiter(key_func=get_remote_address)
+def _client_key(request: Request) -> str:
+    """限流键：默认取直连对端 IP；仅当显式开启 `TRUST_PROXY_HEADERS` 时才采信 XFF。
+
+    `X-Forwarded-For` 是**客户端可伪造**的头，因此必须由配置显式打开（见 `config.py`），
+    且取**最左**（最靠近真实客户端）的那个地址。不开启时直接用 `get_remote_address`
+    —— 在反向代理后这会让所有请求共用代理 IP，此时应改为开启本开关，而不是无条件信任头。
+    """
+    if settings.TRUST_PROXY_HEADERS:
+        first = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        if first:
+            return first
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_client_key)
 
 # 兼容旧引用：`public_user` 已下沉到 service，这里保留别名指向同一实现。
 public_user = auth_service.public_user

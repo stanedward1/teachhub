@@ -1,6 +1,6 @@
 # TeachHub 架构设计文档
 
-> 版本：2.7 ｜ 更新：2026-09-22 ｜ 适用对象：后端 / 前端 / 测试 / 运维
+> 版本：2.8 ｜ 更新：2026-09-22 ｜ 适用对象：后端 / 前端 / 测试 / 运维
 
 ## 1. 项目定位
 
@@ -94,7 +94,7 @@ teachhub/
 │   │   │   ├── ai_client.py / ai_attachments.py / ai_grading.py / ai_admin_service.py  # AI 批改：模型客户端 / 附件解析 / 批改调度与降级 / 超管凭证与开关
 │   │   │   └── workbench/     #   工作台子包：_common.py + scores/leaves/communications/resources/exams/seats/imports/profile/reports_service.py
 │   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
-│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 29 个 revision，head f3a4b5c6d7e8）
+│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 30 个 revision，head a9b8c7d6e5f4）
 │   ├── logs/                  # 运行日志（teachhub.log，按天滚动保留 30 天，不入库）
 │   ├── tests/                 # pytest 自动化测试（含 test_multi_tenant.py）
 │   ├── pytest.ini            # pytest 配置（testpaths = tests，仅收集 tests/）
@@ -164,14 +164,14 @@ teachhub/
 
 ## 5. 数据模型概览
 
-### 5.1 表清单（36 张表）
+### 5.1 表清单（37 张表）
 
 | 域 | 表 | 关键字段 |
 | --- | --- | -------- |
-| 认证 | `users` / `refresh_tokens` | users：username、password_hash、role、school_id、class_id、name；refresh_tokens：user_id、school_id、token_hash、expires_at、revoked_at、replaced_by |
+| 认证 | `users` / `refresh_tokens` | users：username、password_hash、role、school_id、class_id、name、`token_version`（会话代次，改密/重置后自增使旧 access token 失效）；refresh_tokens：user_id、school_id、token_hash、expires_at、revoked_at、replaced_by |
 | 基础 | `schools` / `classrooms` / `class_teachers` / `students` | 学校（status 启用/停用）/班级/班级教师（班主任+科任）/学生档案（student_type 通学/寄宿） |
 | 作业 | `assignments` / `assignment_attachments` / `submissions` / `submission_comments` / `excellent_works` / `work_comments` | 任务/任务附件（一对多）/提交/提交点评/优秀（含 `source` 来源：manual/ai_recommended）/评论 |
-| AI 批改 | `ai_credentials` / `ai_grading_results` | 平台级 AI 凭证（**无 `school_id` 列**，密钥 Fernet 密文）/批改结果（`submission_id` 唯一，`status` pending/success/failed，与教师评语并列存储互不覆盖） |
+| AI 批改 | `ai_credentials` / `ai_grading_results` / `ai_usage_daily` | 平台级 AI 凭证（**无 `school_id` 列**，密钥 Fernet 密文）/批改结果（`submission_id` 唯一，`status` pending/success/failed，与教师评语并列存储互不覆盖）/**平台级 AI 日用量计数**（`day` 唯一、`call_count`，与结果行生命周期解耦，额度投递前原子预留，无 `school_id` 列） |
 | 工作台 | `scores` / `leaves` / `attendance` / `communications` / `resources` / `exams` / `seats` / `settings` / `student_profile_tags` / `weekly_reports` / `student_board_history` | 成绩/请假/考勤点名/沟通/资源/试卷/座位/设置/画像标签/周报/住宿历史 |
 | 日志 | `work_logs` / `class_plans` / `teacher_plans` / `schedules` / `activities` / `talks` / `return_records` / `performances` / `student_comments` | 日志/计划/课表/活动/谈心/返校/表现/评语 |
 | 审计 | `operation_logs` | 操作审计日志（含 class_id 班级维度） |
@@ -188,6 +188,9 @@ teachhub/
 - `settings.school_id + key` → 系统设置校内唯一（多租户下不同学校可设置同名配置项）
 - `settings` 的**平台级全局配置**：`school_id IS NULL` 的行表示跨校全局配置（如 `allow_registration` 注册总开关、AI 批改的 `ai_grading_enabled`/`ai_daily_call_limit` 等），读写统一走 `app/platform_settings.py`，与校内配置（`school_id = 本校`）互不干扰；该模块查询显式 `skip_tenant_filter`，因全局行的 `school_id` 就是 `NULL`，不跳过过滤在带租户上下文里会永远查不到
 - `ai_credentials` **刻意不含 `school_id` 列**：凭证是平台资产、跨校共用一套，不带 `school_id` 就不会被 ORM 租户过滤器命中，安全性由接口依赖 `require_super_admin` 保证；`ai_grading_results.school_id` 则是普通租户列，由 ORM 事件自动回填与过滤
+- `users.token_version` → **会话代次**：access token 载荷内嵌 `tv` 声明，`deps.get_current_user` 校验 `tv == user.token_version`（老 token 无 `tv` 按 0 兼容）。改密（`auth_service.change_password`）与管理员重置密码（`admin_service.reset_password`）均调用 `invalidate_user_sessions()`，自增该值并批量置 `refresh_tokens.revoked_at`，使**已签发的旧 access token 立即失效**——弥补 JWT 无状态无法单个撤销的短板
+- `ai_usage_daily.day` → **平台级 AI 日用量唯一键**（`school_id IS NULL`，跨校共用一道额度刹车）：`call_count` 与 `ai_grading_results` 行生命周期解耦（删结果不清额），`reserve_quota()` 以 `SELECT ... FOR UPDATE` 行锁 + 唯一键兜底**原子预留**，超限部分不再投递
+- `submissions` 唯一约束 `uq_submission_assignment_student`（`assignment_id + student_id`）→ 同一学生同一作业至多一条提交；并发首次提交由 `IntegrityError` 兜底退化为更新（双击幂等）
 - `import_history.user_id` → `users.id`：导入操作人追溯
 
 ### 5.3 外键删除策略（分层）

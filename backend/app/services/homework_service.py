@@ -17,6 +17,7 @@ import os
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.audit import batch_student_avatar_map, batch_student_map, audit
@@ -43,7 +44,7 @@ from app.permissions import (
     get_teacher_class_ids,
     is_teacher_class_owner,
 )
-from app.utils import to_dict
+from app.utils import normalize_page, to_dict
 from app.services import ai_grading
 
 logger = logging.getLogger("teachhub.homework")
@@ -664,7 +665,32 @@ def submit(db: Session, assignment_id: int, payload: dict, user: User) -> dict:
         filepath=filepath,
     )
     db.add(s)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 并发兜底：上面的「先查后改」在**首次**提交并发时可能双双查不到、各插一行。
+        # 数据库唯一索引 `uq_submission_assignment_student` 会拦下第二次插入；
+        # 此时说明另一个请求已经建好该提交，因此退化为「更新」而不是把 409 抛给用户
+        # （双击提交按钮不应报错）。
+        db.rollback()
+        existing = (
+            db.query(Submission)
+            .filter(
+                Submission.assignment_id == assignment_id,
+                Submission.student_id == stu.id,
+            )
+            .first()
+        )
+        if existing is None:
+            raise
+        existing.content = content
+        if filepath:
+            existing.filepath = filepath
+            existing.filename = filename or existing.filename
+        db.commit()
+        db.refresh(existing)
+        _discard_ai_grading(db, existing.id)
+        return to_dict(existing)
     db.refresh(s)
     # 提交接口不做任何 AI 外呼：批改由教师在「上机作业管理」手动触发（§F3）
     return to_dict(s)
@@ -791,6 +817,10 @@ def list_excellent(db: Session, page: int, page_size: int, user: User) -> dict:
             .join(Assignment, Submission.assignment_id == Assignment.id)
             .where(Assignment.class_id.in_(get_teacher_class_ids(db, user.id)))
         )
+    # ⚠️ 必须规范分页参数：本函数此前是全项目**唯一**漏了 normalize_page 的列表接口，
+    # 因此 `?page_size=100000` 会原样落到 LIMIT，成为放大查询的入口（其余列表接口
+    # 都已在 service 层调用 normalize_page，上限 200）。
+    page, page_size = normalize_page(page, page_size)
     q = q.order_by(ExcellentWork.created_at.desc())
     rows, total = paginate(db, q, page, page_size)
     if not rows:

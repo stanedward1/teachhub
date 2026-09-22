@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -48,6 +48,15 @@ class Submission(Base):
     """学生的作业提交。"""
 
     __tablename__ = "submissions"
+
+    # 一名学生在一份作业下只允许有一条提交：既是业务不变量，也是**并发双击**的兜底
+    # ——应用层 `submit` 是「先查后改」，首次提交并发时两个请求可能双双查不到而各插一行；
+    # 由该唯一索引拦下第二次，`submit` 捕获 IntegrityError 后退化为更新（返回 200 而非 409）。
+    __table_args__ = (
+        UniqueConstraint(
+            "assignment_id", "student_id", name="uq_submission_assignment_student"
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
     assignment_id = Column(Integer, ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False, index=True)

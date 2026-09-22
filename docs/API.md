@@ -29,7 +29,7 @@
 | GET | `/api/auth/schools` | 公开 | 启用中学校下拉 |
 | GET | `/api/auth/registration-status` | 公开 | 学生自助注册开关（返回 `{allow_registration: bool}`） |
 | GET | `/api/auth/me` | 登录 | 当前用户信息 |
-| PUT | `/api/auth/password` | 登录 | 修改密码（需旧密码） |
+| PUT | `/api/auth/password` | 登录 | 修改密码（需旧密码）；成功后**吊销本账号全部会话**（自增 `users.token_version` + 撤销未过期 refresh token，旧 access token 立即失效） |
 | POST | `/api/auth/avatar` | 登录 | 上传自己头像 |
 
 **刷新令牌（refresh token）机制**
@@ -103,7 +103,7 @@
 | POST | `/api/students` | 教师+ | 创建学生（自动建账号） |
 | PUT | `/api/students/{id}` | 登录 | 修改学生 |
 | DELETE | `/api/students/{id}` | 登录 | 删除学生（级联清理） |
-| PUT | `/api/students/{id}/password` | 登录 | 重置学生密码 |
+| PUT | `/api/students/{id}/password` | 登录 | 重置学生密码；成功后**吊销该学生全部会话**（同 `/api/auth/password` 的 `token_version` 机制） |
 | POST | `/api/students/{id}/avatar` | 登录 | 上传学生头像 |
 | GET | `/api/students/{id}/profile` | 登录 | 学生画像（四维雷达） |
 | POST | `/api/students/{id}/tags` | 登录 | 添加标签 |
@@ -121,7 +121,7 @@
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/api/scores` | 登录 | 成绩列表 |
-| GET | `/api/scores/analysis` | 登录 | 成绩分析（班级排名 + 趋势） |
+| GET | `/api/scores/analysis` | 登录 | 成绩分析（班级排名 + 趋势）；**排名口径**：未显式指定 `exam_name` 时，默认收敛到所选科目的**最近一次考试**内排名（不再跨科、跨场混合），响应回传 `ranking_basis = {subject, exam}` 供前端展示口径 |
 | POST | `/api/scores` | 登录 | 录入成绩 |
 | PUT | `/api/scores/{id}` | 登录 | 修改成绩 |
 | DELETE | `/api/scores/{id}` | 登录 | 删除成绩 |
@@ -183,7 +183,7 @@
 | GET | `/users` | 管理员 | 账号列表 |
 | POST | `/users` | 管理员 | 创建账号 |
 | PUT | `/users/{id}` | 管理员 | 修改账号 |
-| PUT | `/users/{id}/password` | 管理员 | 重置密码 |
+| PUT | `/users/{id}/password` | 管理员 | 重置密码；成功后**吊销目标账号全部会话**（`token_version` 自增 + 撤销 refresh token）。权限：`school_admin` 只能重置**本校**账号，`super_admin` 不限 |
 | DELETE | `/users/{id}` | 管理员 | 删除账号 |
 | GET | `/audit-logs` | 登录 | 审计日志 |
 | GET | `/audit-logs/actions` | 登录 | 审计操作类型 |
@@ -194,7 +194,7 @@
 | GET | `/platform/ai-credential` | 超管 | 查询 AI 服务凭证（只回掩码 `api_key_masked`，**绝不回明文密钥**） |
 | PUT | `/platform/ai-credential` | 超管 | 保存 AI 服务凭证（`provider`/`base_url`/`model`/`api_key`/`vision_enabled`/`enabled`；`api_key` 留空＝保持原密钥，非空则 Fernet 加密覆盖） |
 | POST | `/platform/ai-credential/test` | 超管 | AI 凭证连通性测试（发一次最小请求，允许「先测后存」；`api_key` 留空则回退已存密钥） |
-| GET | `/platform/ai-grading` | 超管 | 查询 AI 批改开关（`enabled`/`auto_publish_excellent`/`daily_limit`/`max_tokens`/`configured`/`today_call_count` 当日用量） |
+| GET | `/platform/ai-grading` | 超管 | 查询 AI 批改开关（`enabled`/`auto_publish_excellent`/`daily_limit`/`max_tokens`/`configured`/`today_call_count` 当日用量）；`today_call_count` 取自平台级日计数表 `ai_usage_daily`，与批改结果行生命周期解耦 |
 | PUT | `/platform/ai-grading` | 超管 | 设置 AI 批改开关（`{enabled, auto_publish_excellent, daily_limit(1-100000), max_tokens(64-32000)}`） |
 
 ## 八、其他

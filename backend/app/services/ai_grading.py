@@ -18,12 +18,15 @@
    线程池里 `ContextVar` 可能是空的或残留别的租户。不设置会导致 ORM 过滤失效
    （跨校串数据）或查不到数据。这是本项目最易踩的坑。
 """
+import hashlib
 import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 
-from sqlalchemy import func
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import audit
@@ -32,6 +35,7 @@ from app.crypto import decrypt_secret
 from app.models import (
     AiCredential,
     AiGradingResult,
+    AiUsageDaily,
     Assignment,
     ExcellentWork,
     Submission,
@@ -155,35 +159,78 @@ def active_credential(db: Session) -> AiCredential | None:
     return cred
 
 
-def today_call_count(db: Session) -> int:
-    """当日已发生的批改调用次数（平台级口径，跨租户统计）。
+def _db_today(db: Session) -> date:
+    """取**数据库时钟**下的当天日期。
 
-    总开关是平台级的（§8 Q1 无按校粒度），因此成本护栏也必须按平台统计 ——
-    这里显式 `skip_tenant_filter`，否则会被 ORM 过滤成「本校次数」而低估成本。
-
-    ⚠️ 「今天」的边界**必须交给数据库计算**，不能用 Python 的 `date.today()`：
-    `created_at` 是数据库 `server_default=func.now()` 生成的（SQLite 为 **UTC**，
-    MySQL 为**库本地时区**），而 Python 的 `date.today()` 取的是**进程本地日期**。
-    两者时区不一致时（例如 SQLite 下 03:20 CST 属于 UTC 前一天），
-    `created_at >= 本地今日零点` 会把当天的记录全部过滤掉，
-    使计数恒为 0、**限额永不触发**（成本护栏静默失效）。
-    用 `func.date(created_at) == func.current_date()` 保证两侧同一时间基准。
+    额度统计必须与 `created_at` 用同一时间基准，否则会出现「进程本地凌晨 = 数据库
+    前一天」的错位（SQLite 存 UTC、MySQL 存库本地时区，而 Python 取进程本地日期）。
+    SQLite 的 `CURRENT_DATE` 返回字符串，MySQL 返回 `date`，这里统一成 `date`。
     """
-    return (
-        db.query(func.count(AiGradingResult.id))
-        .execution_options(skip_tenant_filter=True)
-        .filter(
-            func.date(AiGradingResult.created_at) == func.current_date(),
-            AiGradingResult.status.in_(("success", "failed")),
-        )
-        .scalar()
-        or 0
-    )
+    raw = db.execute(select(func.current_date())).scalar()
+    if isinstance(raw, date):
+        return raw
+    return date.fromisoformat(str(raw)[:10])
+
+
+def today_call_count(db: Session) -> int:
+    """当日已**预留**的批改外呼次数（平台级口径，跨租户统计）。
+
+    读 `ai_usage_daily` 而**不是**数 `ai_grading_results` 行数 —— 后者会被
+    「重跑 upsert 覆盖同一行」与「学生重交删行」扭曲，使额度这一唯一成本刹车失真
+    （详见 `AiUsageDaily` 的 docstring）。本口径与结果行的生命周期解耦，只增不减。
+    """
+    row = db.query(AiUsageDaily).filter(AiUsageDaily.day == _db_today(db)).first()
+    return int(row.call_count or 0) if row else 0
 
 
 def remaining_quota(db: Session) -> int:
     """今日剩余可批改次数（平台级口径，跨租户统计；额度耗尽返回 0）。"""
     return max(get_ai_daily_limit(db) - today_call_count(db), 0)
+
+
+def reserve_quota(db: Session, n: int) -> int:
+    """**原子**预留 `n` 次额度，返回实际预留成功的次数（<= n）。
+
+    为什么必须原子：`request_grading` 原本是「查剩余额度 → 截断 → 投递」，两次并发
+    请求会各自读到同一份剩余额度并各自满额投递 ⇒ 实际外呼可达额度的 2 倍，护栏失效。
+    这里对当天计数行加行锁（`SELECT ... FOR UPDATE`；SQLite 为单线程测试环境，
+    不支持该子句、SQLAlchemy 会静默忽略，语义仍正确），在锁内重读并只在额度内自增，
+    把「检查 + 占用」合成为一个原子操作。
+
+    语义：预留即代表**将要发生**一次外呼，因此额度在投递前就被占用；任务随后失败
+    也不回退 —— 这是成本护栏应有的方向（宁可少批，不可超支）。
+    """
+    if n <= 0:
+        return 0
+    limit = get_ai_daily_limit(db)
+    if limit <= 0:
+        return 0
+    day = _db_today(db)
+
+    row = db.query(AiUsageDaily).filter(AiUsageDaily.day == day).with_for_update().first()
+    if row is None:
+        # 首次创建当天行：并发下可能撞 `day` 唯一索引，用 SAVEPOINT 包住以便安全重读
+        try:
+            with db.begin_nested():
+                db.add(AiUsageDaily(day=day, call_count=0))
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+        row = (
+            db.query(AiUsageDaily)
+            .filter(AiUsageDaily.day == day)
+            .with_for_update()
+            .first()
+        )
+        if row is None:
+            return 0
+
+    used = int(row.call_count or 0)
+    take = max(0, min(n, limit - used))
+    if take:
+        row.call_count = used + take
+        db.commit()
+    return take
 
 
 def can_grade(db: Session) -> tuple[bool, str]:
@@ -314,6 +361,21 @@ def _maybe_auto_publish(db: Session, result: AiGradingResult, submission: Submis
 
 
 # ---------------- 主流程 ----------------
+def _content_fingerprint(submission: Submission) -> str:
+    """提交「批改依据」的内容指纹（正文 + 附件路径）。"""
+    payload = f"{submission.content or ''}\x00{submission.filepath or ''}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _submission_changed(db: Session, submission: Submission, fingerprint: str) -> bool:
+    """模型调用期间该提交是否被重交（内容指纹变化）；行已被删除也视为已变。"""
+    try:
+        db.refresh(submission)
+    except Exception:  # 行被删除 → 结果无处安放，按「已变化」处理
+        return True
+    return _content_fingerprint(submission) != fingerprint
+
+
 def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     """执行一次批改并落库。
 
@@ -324,6 +386,10 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     submission = db.get(Submission, submission_id)
     if submission is None:
         raise AiClientError("提交不存在")
+    # 记录批改所依据的**内容版本**：模型调用是慢 I/O，期间学生可能重交
+    # （`submit` 会原地改写 content 并作废旧结果）。成功写回前必须确认内容未变，
+    # 否则结果会被贴到一份它从未批过的新内容上（见 `_submission_changed`）。
+    content_fingerprint = _content_fingerprint(submission)
 
     cred = active_credential(db)
     if cred is None:
@@ -370,6 +436,18 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
 
     parsed = parse_model_output(response["content"])
     usage = response.get("usage") or {}
+    # 🔴 重交竞态兜底：批改期间若提交内容已变化，本次结果对当前提交**无效** ——
+    # 记 failed 让教师看到「需重新批改」，而不是把结果贴到它从未批过的新内容上。
+    if _submission_changed(db, submission, content_fingerprint):
+        logger.info("提交内容在批改期间已更新，丢弃本次结果 submission=%s", submission_id)
+        result = _upsert_result(
+            db,
+            submission_id,
+            status="failed",
+            error="提交内容在批改期间已更新，本次结果已作废，请重新批改",
+        )
+        db.commit()
+        return result
     result.status = "success"
     result.error = None
     result.summary = parsed["summary"] or None
@@ -420,8 +498,9 @@ def request_grading(
 ) -> dict:
     """教师手动触发的统一入口：校验总开关/凭证/额度后投递线程池。
 
-    额度是**平台级唯一成本刹车**，因此批量触发时必须按剩余额度截断 ——
-    宁可少批几份并如实回报，也不能一次性投出超过额度的任务（那样会绕过护栏）。
+    额度是**平台级唯一成本刹车**，因此批量触发必须先**原子预留**额度再投递，
+    按预留到的数量截断 —— 宁可少批几份并如实回报，也不能投出超过额度的任务
+    （`reserve_quota` 把「检查 + 占用」合并，避免并发下各自满额投递而超发）。
 
     Returns:
         ``{queued, skipped, reason}``：实际投递数、因额度不足被截断的份数、
@@ -431,7 +510,11 @@ def request_grading(
     if not allowed:
         return {"queued": 0, "skipped": len(submission_ids), "reason": reason}
 
-    queued = submission_ids[: remaining_quota(db)]
+    # 🔴 先**原子预留**额度，再按预留到的数量投递：把「查额度 → 截断 → 投递」三步
+    # 合成一个原子操作，消除并发批量触发各自按同一份剩余额度满额投递导致的超发
+    # （额度是平台级唯一成本刹车，超发即护栏失效）。
+    take = reserve_quota(db, len(submission_ids))
+    queued = submission_ids[:take]
     for submission_id in queued:
         trigger_grading(submission_id, school_id)
     logger.info(

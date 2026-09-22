@@ -40,12 +40,25 @@ def create_access_token(
     role: str,
     school_id: int | None = None,
     expires_delta: timedelta | None = None,
+    token_version: int | None = None,
 ) -> str:
-    """签发 JWT。payload 携带 school_id 作为租户上下文（super_admin 为 None）。"""
+    """签发 JWT。payload 携带 school_id 作为租户上下文（super_admin 为 None）。
+
+    `tv`（token_version）是**会话版本锚点**：access token 是无状态 JWT，无法逐个撤销，
+    因此把用户当前的会话版本号写进声明，校验时比对（见 `app/deps.py::get_current_user`）。
+    改密 / 重置密码只需把 `users.token_version` 加一，该用户此前签发的全部 access token
+    立即失效 —— 这是「改密即踢出所有设备」得以成立的关键。
+    """
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    payload = {"sub": subject, "role": role, "school_id": school_id, "exp": expire}
+    payload = {
+        "sub": subject,
+        "role": role,
+        "school_id": school_id,
+        "tv": int(token_version or 0),
+        "exp": expire,
+    }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 

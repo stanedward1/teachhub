@@ -2,7 +2,7 @@ import logging
 import os
 from logging.handlers import TimedRotatingFileHandler
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -93,13 +93,10 @@ app = FastAPI(
     version=settings.APP_VERSION,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ⚠️ CORSMiddleware 必须在**所有** `@app.middleware("http")` 之后注册（见文件末尾），
+# Starlette 里「后注册 = 更外层」。若在此处注册，它会被租户/日志中间件包在**里层**，
+# 而租户中间件对旧版 token 会直接 `return 401`（不经过内侧的 CORS）—— 该响应缺少
+# `Access-Control-Allow-Origin`，浏览器按 CORS 失败处理，前端拿不到真实状态码。
 
 # 限流：复用 auth 模块创建的 limiter 实例（slowapi 要求所有被 @limiter.limit 装饰的
 # 路由共享同一个 Limiter 实例，否则计数会各自独立、限流失效）。
@@ -146,11 +143,36 @@ async def integrity_error_handler(request, exc: IntegrityError):
     return JSONResponse(status_code=409, content={"detail": detail})
 
 
+def _cors_headers(request: Request) -> dict:
+    """为**绕过 CORSMiddleware** 的响应手工补上跨域头。
+
+    `@app.exception_handler(Exception)` 由 Starlette 的 `ServerErrorMiddleware` 执行，
+    而它位于**所有用户中间件之外**（含 CORSMiddleware）—— 未捕获异常向上冒泡时直接
+    绕过了 CORS，因此 500 响应会缺少 `Access-Control-Allow-Origin`，浏览器按 CORS 失败
+    处理，前端只能看到笼统的网络错误而拿不到真实状态码。这里按白名单回显 Origin 补上。
+    """
+    origin = request.headers.get("origin")
+    if not origin:
+        return {}
+    allowed = settings.CORS_ORIGINS or []
+    if origin in allowed or "*" in allowed:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+    return {}
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request, exc: Exception):
     """兜底异常处理：记录完整堆栈，返回统一的 500 结构，避免泄漏内部细节。"""
     logger.exception("未处理的异常: %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "服务器内部错误，请稍后重试"})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "服务器内部错误，请稍后重试"},
+        headers=_cors_headers(request),
+    )
 
 
 @app.middleware("http")
@@ -182,6 +204,17 @@ async def tenant_context_middleware(request, call_next):
         if tokens is not None:
             reset_tenant(tokens)
 
+
+# CORS 中间件必须注册在租户中间件**之后**：Starlette 是「后注册 = 更外层」，
+# 这样 CORS 才在租户中间件外层，租户中间件对旧版 token 的早期 401 也会带上 CORS 头。
+# 仍注册在日志中间件之前，日志保持最外层、可记录到所有请求的最终状态与耗时。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 访问日志 + 指标中间件（置于最外层，确保能记录到所有请求的最终状态与耗时）
 app.middleware("http")(request_logging_middleware)

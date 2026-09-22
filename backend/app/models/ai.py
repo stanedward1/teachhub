@@ -11,7 +11,7 @@
   不需要、也不应手工拼 `school_id` 条件。
 - `ai_key_encrypted` 存 Fernet 密文（见 `app/crypto.py`），读接口只回显掩码。
 """
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -74,5 +74,32 @@ class AiGradingResult(Base):
     excellent_reason = Column(Text)
     prompt_tokens = Column(Integer)
     completion_tokens = Column(Integer)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+
+class AiUsageDaily(Base):
+    """AI 批改**每日调用计数**（平台级，跨租户；不含 `school_id`，故不受租户过滤）。
+
+    为什么需要独立计数表：额度是平台级唯一成本刹车，必须按**实际外呼次数**统计。
+    早先用「当日 `ai_grading_results` 行数」近似，有两个可绕过的漏洞：
+
+    - 同一提交重跑走 `upsert`（覆盖同一行）⇒ 重复批改**不增加**计数；
+    - 学生重交时 `_discard_ai_grading` 删掉结果行 ⇒ 当日计数**回退**。
+
+    本表与结果行的生命周期彻底解耦：额度在**投递前原子预留**（见
+    `ai_grading.reserve_quota`），因此计数只增不减，且并发批量触发不会超发。
+    `day` 取自**数据库时钟**（`func.current_date()`），与写时间戳同一基准。
+    """
+
+    __tablename__ = "ai_usage_daily"
+    # 显式命名唯一约束，与迁移 a9b8c7d6e5f4 建出的索引名保持一致（「迁移链 = 模型 schema」）
+    __table_args__ = (UniqueConstraint("day", name="uq_ai_usage_daily_day"),)
+
+    id = Column(Integer, primary_key=True)
+    # 业务日（由数据库时钟决定）；唯一索引保证「一天一行」，也是并发首次创建的兜底
+    day = Column(Date, nullable=False)
+    # 当日已预留（≈ 已发生）的外呼次数
+    call_count = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())

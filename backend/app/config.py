@@ -105,6 +105,11 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
     ]
 
+    # 是否信任反向代理传来的 `X-Forwarded-For`（用于按**真实客户端 IP** 限流）。
+    # ⚠️ 默认 False。该头可被客户端伪造：只有部署在**自己可控的**反向代理之后、
+    # 且代理会重写该头时才可开启，否则攻击者可伪造 IP 绕过 / 干扰限流计数。
+    TRUST_PROXY_HEADERS: bool = False
+
     @field_validator("SECRET_KEY", mode="before")
     @classmethod
     def _fill_default_secret_key(cls, value):

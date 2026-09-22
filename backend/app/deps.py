@@ -33,6 +33,12 @@ def get_current_user(
     if token_school_id is not None and token_school_id != user.school_id:
         raise HTTPException(status_code=401, detail="账号归属已变更，请重新登录")
 
+    # 会话版本校验（token_version）：改密 / 重置密码会把 `users.token_version` 加一，
+    # 旧 access token 的 `tv` 声明随之失配 ⇒ 该账号的全部旧会话**立即失效**。
+    # 升级前签发的老 token 没有 `tv` 声明，按 0 处理，因此本次变更本身不会强制全体重登。
+    if int(payload.get("tv") or 0) != int(user.token_version or 0):
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
+
     # 租户上下文校验二：停用学校的全部账号拒绝访问（平台超管不属于任何学校，不受限）
     if user.school_id is not None and not is_platform_admin(user):
         school = db.get(School, user.school_id)
