@@ -13,11 +13,17 @@
   以 base64 data URL 形式随消息送入多模态；未开启则标注跳过（不报错）；
 - 其它（.zip/.doc/.xls 等二进制格式）→ 标注暂不支持。
 
+此外见 :func:`extract_inline_images` —— 学生用富文本编辑器「上传图片」时，图片会被写成
+``submissions.content`` 里的一行 Markdown（形如 ``![图片](/uploads/xxx.png)``），
+**不会**落到 ``submissions.filepath``。只读附件字段的批改流程因此完全看不到这张图，
+模型只能对着一个无法访问的 URL 猜内容（历史缺陷）。
+
 依赖延迟导入：解析库缺失只影响对应格式，不影响服务启动与其它格式解析。
 """
 import base64
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 
 from app.config import settings
@@ -43,6 +49,17 @@ IMAGE_EXTS = {
 # PDF 最多解析页数（避免超长文档拖垮调用）
 _PDF_MAX_PAGES = 20
 
+# 正文内嵌图片引用：Markdown ``![alt](url)`` 与 HTML ``<img src="url">``。
+#   - Markdown 的可选 title（``![x](/a.png "t")``）一并吃掉，避免把 title 误当 url；
+#   - HTML 只认 src，属性顺序不限。
+_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+[\"'][^\"']*[\"'])?\s*\)")
+_HTML_IMAGE_RE = re.compile(
+    r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"'][^>]*>", re.IGNORECASE
+)
+
+# 前端上传接口返回的访问前缀（见 uploads.save_upload 的 url 字段）
+_UPLOADS_URL_PREFIX = "/uploads/"
+
 
 @dataclass
 class AttachmentPayload:
@@ -57,6 +74,21 @@ class AttachmentPayload:
     text: str = ""
     images: list[str] = field(default_factory=list)
     note: str = ""
+
+
+@dataclass
+class InlineImagePayload:
+    """正文内嵌图片的抽取结果。
+
+    Attributes:
+        text: 把图片引用替换为文字占位后的正文（保留图片出现的位置信息）。
+        images: 成功转成 data URL 的图片列表（顺序与正文中的【图片N】一致）。
+        notes: 参与情况说明片段（用于拼接 `attachment_used`）。
+    """
+
+    text: str = ""
+    images: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
 
 def absolute_path(filepath: str) -> str:
@@ -98,13 +130,17 @@ def _extract_pdf(path: str) -> str:
 
 
 def _image_data_url(path: str, ext: str) -> tuple[str | None, str]:
-    """把图片转成 data URL。返回 (data_url | None, 失败原因)。"""
+    """把图片转成 data URL。返回 (data_url | None, 失败原因)。
+
+    大小上限用 ``AI_MAX_IMAGE_BYTES`` 而非 ``MAX_UPLOAD_SIZE``：后者是「上传」的宽松上限
+    （20MB），而 base64 后的请求体还要再涨约 1/3，直接送去必然被上游拒收。
+    """
     try:
         size = os.path.getsize(path)
     except OSError:
         return None, "无法读取文件"
-    if size > settings.MAX_UPLOAD_SIZE:
-        return None, "图片过大"
+    if size > settings.AI_MAX_IMAGE_BYTES:
+        return None, f"图片过大（>{settings.AI_MAX_IMAGE_BYTES // (1024 * 1024)}MB）"
     try:
         with open(path, "rb") as fh:
             raw = fh.read()
@@ -112,6 +148,118 @@ def _image_data_url(path: str, ext: str) -> tuple[str | None, str]:
         return None, "无法读取文件"
     encoded = base64.b64encode(raw).decode("ascii")
     return f"data:{IMAGE_EXTS[ext]};base64,{encoded}", ""
+
+
+def _local_upload_filepath(url: str) -> str | None:
+    """把 ``/uploads/xxx.png`` 形式的站内图片地址还原成 `absolute_path` 可用的相对路径。
+
+    只认站内上传目录的地址；外链（http/https/data:）一律返回 None —— 模型侧访问不到
+    任意外部 URL，交由服务端下载也不安全。容忍 ``?`` 查询串与 ``#`` 锚点。
+    """
+    if not url:
+        return None
+    raw = url.strip().split("#", 1)[0].split("?", 1)[0]
+    if not raw.startswith(_UPLOADS_URL_PREFIX):
+        return None
+    rel = raw[len(_UPLOADS_URL_PREFIX):]
+    return rel or None
+
+
+def extract_inline_images(
+    text: str,
+    *,
+    vision_enabled: bool = False,
+    max_images: int | None = None,
+) -> InlineImagePayload:
+    """抽取正文里内嵌的图片引用，转成可送入多模态的 data URL。
+
+    为什么需要它：学生在提交页用富文本编辑器「上传图片」，图片会被写成 ``content``
+    里的一行 Markdown（``![图片](/uploads/xxx.png)``），而 ``submissions.filepath``
+    仍为空。只读附件字段的批改流程因此完全看不到图片。
+
+    行为：
+      - 命中本地上传图片 → 读盘转 data URL（受 ``AI_MAX_IMAGE_BYTES`` 限制），并把引用
+        替换为 ``【图片N：alt】`` 占位，让模型知道此处有图、以及附图顺序；
+      - 同一图片重复引用 → 只送一次，占位复用同一序号；
+      - 未开启多模态 / 文件缺失 / 体积超限 / 超出张数上限 → 不送图，替换为
+        ``【图片未参与批改】`` 并记入 ``notes``（教师可见），**不抛异常**；
+      - 外链图片（http(s)、data:）→ 原样保留在正文，不下载、不送模型。
+
+    Args:
+        text: 学生提交正文（``submissions.content``）。
+        vision_enabled: 凭证是否启用多模态（决定图片是否送入）。
+        max_images: 本次最多送入的图片张数；``None`` 时取 ``settings.AI_MAX_IMAGES``。
+
+    Returns:
+        `InlineImagePayload`。
+    """
+    if not text:
+        return InlineImagePayload(text=text or "")
+
+    limit = settings.AI_MAX_IMAGES if max_images is None else max_images
+
+    # 按出现位置汇总所有图片引用（Markdown + HTML），保证占位与附图的顺序一致
+    matches: list[tuple[int, int, str, str]] = []  # (start, end, alt, url)
+    for m in _MD_IMAGE_RE.finditer(text):
+        matches.append((m.start(), m.end(), (m.group(1) or "").strip(), m.group(2)))
+    for m in _HTML_IMAGE_RE.finditer(text):
+        matches.append((m.start(), m.end(), "", m.group(1)))
+    matches.sort(key=lambda item: item[0])
+
+    images: list[str] = []
+    notes: list[str] = []
+    assigned: dict[str, int] = {}  # url → 已分配的图片序号（去重与占位都用它）
+    rebuilt: list[str] = []
+    cursor = 0
+
+    for start, end, alt, url in matches:
+        # 与上一段匹配交叠（如 HTML 里再嵌 Markdown）时跳过，避免重复处理同一段文本
+        if start < cursor:
+            continue
+        rebuilt.append(text[cursor:start])
+        cursor = end
+
+        label = alt or "图片"
+        rel = _local_upload_filepath(url)
+        if rel is None:
+            # 外链图片：原样保留（模型看不到也无害，至少不丢信息）
+            rebuilt.append(text[start:end])
+            continue
+
+        if url in assigned:
+            rebuilt.append(f"【图片{assigned[url]}：{label}】")
+            continue
+
+        if not vision_enabled:
+            notes.append(f"内嵌图片未参与批改：未启用多模态（{rel}）")
+            rebuilt.append("【图片未参与批改】")
+            continue
+
+        if len(images) >= limit:
+            notes.append(f"内嵌图片未参与批改：超出单次上限 {limit} 张（{rel}）")
+            rebuilt.append("【图片未参与批改】")
+            continue
+
+        ext = os.path.splitext(rel)[1].lower()
+        path = absolute_path(rel)
+        if ext not in IMAGE_EXTS or not os.path.exists(path):
+            notes.append(f"内嵌图片未参与批改：文件不存在或格式不支持（{rel}）")
+            rebuilt.append("【图片未参与批改】")
+            continue
+
+        data_url, reason = _image_data_url(path, ext)
+        if data_url is None:
+            notes.append(f"内嵌图片未参与批改：{reason}（{rel}）")
+            rebuilt.append("【图片未参与批改】")
+            continue
+
+        images.append(data_url)
+        assigned[url] = len(images)
+        notes.append(f"已纳入内嵌图片（{rel}）")
+        rebuilt.append(f"【图片{assigned[url]}：{label}】")
+
+    rebuilt.append(text[cursor:])
+    return InlineImagePayload(text="".join(rebuilt), images=images, notes=notes)
 
 
 def extract_attachment(

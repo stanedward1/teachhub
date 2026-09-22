@@ -62,6 +62,8 @@ python -m pytest tests/ -v
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Token 有效期 | `1440`（24 小时） |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | 刷新令牌有效期（天） | `30` |
 | `MAX_UPLOAD_SIZE` | 上传文件大小上限 | `20971520`（20MB） |
+| `AI_MAX_IMAGE_BYTES` | 单张图片送入多模态的字节上限（base64 后约 ×1.37，需明显小于 `MAX_UPLOAD_SIZE`） | `4194304`（4MB） |
+| `AI_MAX_IMAGES` | 单次 AI 批改最多送入模型的图片张数（附件 + 正文内嵌合计） | `6` |
 
 ## 3. 后端代码规范
 
@@ -118,6 +120,7 @@ python -m pytest tests/ -v
 - 业务专用上传（如试卷）使用独立接口，格式校验更严格。
 - 上传文件存储在 `backend/uploads/`，通过 `/uploads/<filename>` 访问。
 - **图文混排模块的图片**：图片 url 直接内嵌在正文 Markdown（`![图片](url)`）中，不再单独维护图片字段；历史字段（`activities.filepath` / `talks.images`）保留以兼容旧数据，但新写入不再使用。
+- **消费正文的模块必须处理内嵌图片**：正文里的 `![图片](url)` 对后端只是一段文本。任何需要「看到」图片的消费方（如 AI 批改）都必须显式解析这些引用并取出图片（参考 `services/ai_attachments.extract_inline_images`），**不能只读 `filepath` 之类的独立附件字段** —— 富文本插入的图片不会写进那些字段（历史缺陷，见 `CHANGELOG.md` 续 21）。
 
 ### 3.7 审计日志
 

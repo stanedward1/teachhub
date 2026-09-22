@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     AI_MAX_INPUT_CHARS: int = 8000
     # 单个附件抽取出的文本字符上限
     AI_MAX_ATTACHMENT_CHARS: int = 6000
+    # 单张图片送入多模态的字节上限。base64 后体积约 ×1.37，需明显小于 MAX_UPLOAD_SIZE，
+    # 否则请求体会被上游拒收（20MB 图片 base64 后约 27MB，几乎必然失败）。
+    AI_MAX_IMAGE_BYTES: int = 4 * 1024 * 1024
+    # 一次批改最多送入模型的图片张数（附件图片 + 正文内嵌图片，全局合计）
+    AI_MAX_IMAGES: int = 6
 
     # CORS：默认放行本地开发端口，生产通过环境变量收敛（逗号分隔或 JSON 列表）
     CORS_ORIGINS: Annotated[list[str], NoDecode] = [

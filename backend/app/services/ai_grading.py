@@ -48,7 +48,7 @@ from app.platform_settings import (
     is_ai_auto_publish_enabled,
     is_ai_grading_enabled,
 )
-from app.services.ai_attachments import extract_attachment
+from app.services.ai_attachments import extract_attachment, extract_inline_images
 from app.services.ai_client import AiClientError, chat_completion
 from app.tenant import tenant_scope
 
@@ -60,15 +60,28 @@ _MAX_WORKERS = 2
 _executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="ai-grading")
 
 _SYSTEM_PROMPT = """你是一位经验丰富的中小学教师，正在批改学生的上机作业。
-请客观、具体、以鼓励为主地评价，指出亮点并给出可执行的改进建议。
+
+【评价依据】
+只依据本条消息中的【作业要求】、【学生提交内容】、【附件内容】，以及随消息附上的图片
+进行评价。不得引入外部知识去臆测提交中并不存在的内容。
+
+【反幻觉要求（必须严格遵守）】
+- 若提交内容为空、截断后已无有效信息，或图片缺失/无法辨认/未附带，必须如实说明
+  「资料不足，无法评价」，并把 strengths 与 improvements 置为空字符串，**禁止编造亮点**；
+- 若提交内容与作业要求明显无关（例如要求上机编程、却只交了一张无关照片），应在 summary
+  中直接指出「提交内容与作业要求不符」，不要强行找优点、也不要把无关内容夸成创新；
+- 不要罗列放之四海而皆准的空话（如「态度端正」「界面美观」）充当优点，
+  每一条优点都必须能对应到提交里的具体内容；
+- 正文中的【图片N】标记与随消息附上的图片按顺序一一对应；若某张图片标注为
+  「未参与批改」，说明你没看到它，不得凭空评价该图。
 
 只输出一个 JSON 对象，不要输出任何其它文字，不要使用 Markdown 代码围栏。
 JSON 结构如下：
 {
   "score": 0 到 100 的整数（若无法判断则为 null）,
   "summary": "总体评价，80-200 字",
-  "strengths": "优点，分条书写，每条以 - 开头",
-  "improvements": "改进建议，分条书写，每条以 - 开头",
+  "strengths": "优点，分条书写，每条以 - 开头；资料不足时为空字符串",
+  "improvements": "改进建议，分条书写，每条以 - 开头；资料不足时为空字符串",
   "excellent": true 或 false（是否达到可在班级内展示的优秀水平）,
   "excellent_reason": "excellent 为 true 时说明理由，否则为空字符串"
 }
@@ -262,11 +275,16 @@ def _upsert_result(db: Session, submission_id: int, **fields) -> AiGradingResult
 
 def _build_messages(
     assignment: Assignment | None,
-    submission: Submission,
+    content_text: str,
     attachment_text: str,
-    attachment_images: list[str],
+    images: list[str],
 ) -> list[dict]:
-    """构造批改请求消息（作业要求 + 学生正文 + 附件内容）。"""
+    """构造批改请求消息（作业要求 + 学生正文 + 附件内容 + 图片）。
+
+    ``content_text`` 是**已把内嵌图片换成占位说明**的正文（见
+    `ai_attachments.extract_inline_images`），不再直接取 `submission.content` ——
+    否则正文里的图片引用（``![](/uploads/x.png)``）对模型只是一串访问不到的 URL。
+    """
     parts: list[str] = ["【作业要求】"]
     if assignment is not None:
         parts.append(f"标题：{assignment.title}")
@@ -278,20 +296,30 @@ def _build_messages(
         parts.append("（作业信息缺失）")
 
     parts.append("\n【学生提交内容】")
-    parts.append(submission.content.strip() if submission.content else "（未填写文字内容）")
+    body = content_text.strip() if content_text and content_text.strip() else ""
+    parts.append(body or "（未填写文字内容）")
     if attachment_text:
         parts.append("\n【附件内容】")
         parts.append(attachment_text)
+
+    if images:
+        parts.append(
+            f"\n（本条消息另附 {len(images)} 张图片，请结合图片内容评价；"
+            "正文中的【图片N】标记与附图顺序一一对应。）"
+        )
+    else:
+        parts.append("\n（本条消息没有可用的图片，请仅依据上述文字评价，不要臆测图片内容。）")
+
     parts.append("\n请按系统提示的 JSON 格式批改这份作业。")
 
     text = "\n".join(parts)
     if len(text) > settings.AI_MAX_INPUT_CHARS:
         text = text[: settings.AI_MAX_INPUT_CHARS] + "\n（内容过长已截断）"
 
-    if attachment_images:
+    if images:
         content: list[dict] = [{"type": "text", "text": text}]
         content.extend(
-            {"type": "image_url", "image_url": {"url": url}} for url in attachment_images
+            {"type": "image_url", "image_url": {"url": url}} for url in images
         )
         return [
             {"role": "system", "content": _SYSTEM_PROMPT},
@@ -401,10 +429,18 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         )
 
     assignment = db.get(Assignment, submission.assignment_id)
+    # 附件字段只承载「单个上传附件」；学生用富文本编辑器插入的图片是写在 content 里的
+    # Markdown（`![](/uploads/x.png)`），filepath 仍为空 —— 必须单独抽取，
+    # 否则模型只拿到一串访问不到的 URL，完全看不到图片（历史缺陷）。
     payload = extract_attachment(
         submission.filepath, submission.filename, vision_enabled=cred.vision_enabled
     )
-    messages = _build_messages(assignment, submission, payload.text, payload.images)
+    inline = extract_inline_images(
+        submission.content or "", vision_enabled=cred.vision_enabled
+    )
+    images = payload.images + inline.images
+    note = "；".join(n for n in [payload.note, *inline.notes] if n)
+    messages = _build_messages(assignment, inline.text, payload.text, images)
 
     # 先落 pending：前端可立即显示「批改中」
     result = _upsert_result(
@@ -413,7 +449,7 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         status="pending",
         provider=cred.provider,
         model=cred.model,
-        attachment_used=payload.note,
+        attachment_used=note,
         error=None,
     )
     db.commit()
@@ -430,6 +466,13 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         # 降级：提交早已成功，这里只把失败原因记给教师看
         result.status = "failed"
         result.error = str(exc)
+        if images:
+            # 带图调用失败时，最常见的原因是所配模型不支持图片输入。给出可操作提示，
+            # 否则「图片明明传了、批改却失败」在生产里很难排查。
+            result.error += (
+                f"（本次批改包含 {len(images)} 张图片；若上游模型不支持图片输入，"
+                "请在平台设置中关闭「多模态」或改配支持视觉的模型）"
+            )
         db.commit()
         logger.warning("AI 批改失败 submission=%s：%s", submission_id, exc)
         return result
