@@ -146,6 +146,10 @@ def _ai_status_map(db: Session, submission_ids: list[int]) -> dict[int, dict]:
             AiGradingResult.score,
             AiGradingResult.is_excellent_candidate,
         )
+        # 跳过租户过滤：这里的 submission_ids 已由调用方按租户范围查出，
+        # 而结果行按全局唯一的 submission_id 1:1 对应；带过滤会让归属异常的行
+        # 显示成「未批改」（列表与详情口径不一致）。
+        .execution_options(skip_tenant_filter=True)
         .filter(AiGradingResult.submission_id.in_(submission_ids))
         .all()
     )
@@ -166,6 +170,8 @@ def _discard_ai_grading(db: Session, submission_id: int) -> None:
     留着会让师生误以为当前内容已被批改过。删除后教师可再次手动触发。
     """
     try:
+        # 注意：ORM 的批量 delete/update **不受**租户过滤（`tenant.py` 只对 SELECT 注入），
+        # 因此这里是全局按 submission_id 删除 —— 这正是我们要的（含归属异常的历史行）。
         db.query(AiGradingResult).filter(
             AiGradingResult.submission_id == submission_id
         ).delete()
@@ -557,6 +563,9 @@ def get_submission(db: Session, submission_id: int, user: User) -> dict:
     # （本函数上方已校验：学生只能访问自己的提交）
     ai_result = (
         db.query(AiGradingResult)
+        # 上面已校验访问权限；结果行按全局唯一的 submission_id 1:1 对应，
+        # 带租户过滤只会把归属异常的历史行藏起来（教师看到「未批改」）。
+        .execution_options(skip_tenant_filter=True)
         .filter(AiGradingResult.submission_id == submission_id)
         .first()
     )
@@ -907,7 +916,11 @@ def get_excellent(db: Session, excellent_id: int, user: User) -> dict:
     ai_result = None
     if s:
         ai_result = (
-            db.query(AiGradingResult).filter(AiGradingResult.submission_id == s.id).first()
+            # 同上：结果行按全局唯一的 submission_id 定位，不参与租户过滤
+            db.query(AiGradingResult)
+            .execution_options(skip_tenant_filter=True)
+            .filter(AiGradingResult.submission_id == s.id)
+            .first()
         )
     return {
         "id": e.id,
