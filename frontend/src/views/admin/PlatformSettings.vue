@@ -106,8 +106,12 @@
             v-model="credForm.vision_enabled"
             active-text="参与批改"
             inactive-text="不参与"
+            @change="onVisionChange"
           />
-          <div class="hint">所配模型支持多模态时才开启；关闭时图片附件会标注「未参与批改」。</div>
+          <div class="hint">
+            deepseek-flash 原生支持图片输入（仅 JPEG/PNG/GIF/WebP），建议开启；关闭后图片会被静默跳过。
+            所配模型支持多模态时才开启；关闭时图片附件会标注「未参与批改」。
+          </div>
         </el-form-item>
         <el-form-item label="启用凭证">
           <el-switch v-model="credForm.enabled" />
@@ -122,7 +126,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminApi } from '../../api'
 
@@ -233,8 +237,37 @@ const credForm = reactive({
   enabled: true,
 })
 
+// 管理员是否手动动过「图片附件」开关；手动改过后绝不被服务商/模型的自动推断覆盖
+const visionTouched = ref(false)
+// 加载已存凭证期间抑制自动推断，避免覆盖服务端显式存储的值
+const suppressInfer = ref(false)
+
+// 与后端 backend/app/services/ai_admin_service.py::default_vision_enabled 口径一致：
+// base_url 含 "deepseek" 且 model 含 "flash"/"vision" → 默认开启视觉。
+function inferVisionEnabled(baseUrl, model) {
+  if (!baseUrl || !model) return false
+  const bu = baseUrl.toLowerCase()
+  const m = model.toLowerCase()
+  return bu.includes('deepseek') && (m.includes('flash') || m.includes('vision'))
+}
+
+function onVisionChange() {
+  visionTouched.value = true
+}
+
+// 管理员没手动改过开关时，按服务商与模型自动推断 vision_enabled，行为可见而非静默
+watch(
+  () => [credForm.base_url, credForm.model],
+  () => {
+    if (!visionTouched.value && !suppressInfer.value) {
+      credForm.vision_enabled = inferVisionEnabled(credForm.base_url, credForm.model)
+    }
+  }
+)
+
 async function loadCredential() {
   credLoading.value = true
+  suppressInfer.value = true
   try {
     const res = await adminApi.aiCredential()
     credMasked.value = res.api_key_masked || ''
@@ -249,6 +282,10 @@ async function loadCredential() {
     console.error('[PlatformSettings] 加载 AI 凭证失败:', e)
   } finally {
     credLoading.value = false
+    // 等上面的赋值触发的 watch 落定后再放开推断，避免覆盖服务端显式值
+    nextTick(() => {
+      suppressInfer.value = false
+    })
   }
 }
 

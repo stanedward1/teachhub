@@ -68,7 +68,7 @@ def chat_completion(
         temperature: 采样温度，批改取低值以保证稳定。
 
     Returns:
-        ``{"content": str, "usage": dict, "elapsed_ms": int}``
+        ``{"content": str, "usage": dict, "elapsed_ms": int, "finish_reason": str | None}``
 
     Raises:
         AiClientError: 任一环节失败。
@@ -116,8 +116,15 @@ def chat_completion(
     content = ((choices[0].get("message") or {}).get("content") or "").strip()
     if not content:
         raise AiClientError("模型返回内容为空")
+    # finish_reason 暴露给调用方：length 表示输出被 max_tokens 截断（文本可能非合法 JSON）
+    finish_reason = choices[0].get("finish_reason")
 
-    return {"content": content, "usage": data.get("usage") or {}, "elapsed_ms": elapsed_ms}
+    return {
+        "content": content,
+        "usage": data.get("usage") or {},
+        "elapsed_ms": elapsed_ms,
+        "finish_reason": finish_reason,
+    }
 
 
 def test_connection(*, base_url: str, api_key: str, model: str, timeout: int = 20) -> dict:

@@ -103,6 +103,17 @@ class Settings(BaseSettings):
     AI_MAX_IMAGE_BYTES: int = 4 * 1024 * 1024
     # 一次批改最多送入模型的图片张数（附件图片 + 正文内嵌图片，全局合计）
     AI_MAX_IMAGES: int = 6
+    # 图片预缩放的上限边长（像素）。官方每图 token 上限 1024，1300×1300 与 5000×5000
+    # 消耗完全相同，原图直送纯浪费；仅在长边超过此值时缩到该值（绝不放大）。
+    AI_IMAGE_MAX_SIDE: int = 1600
+    # JPEG 编码质量（1-95）。有损压缩大幅减小体积，对模型识别几乎无损。
+    AI_IMAGE_JPEG_QUALITY: int = 85
+    # 整批图片（data URL）总字节护栏。官方请求体上限 48MiB，base64 后体积约 ×1.37，
+    # 故留足余量限制在 24MiB，避免把整条请求撑爆被上游拒收。
+    AI_IMAGE_MAX_TOTAL_BYTES: int = 24 * 1024 * 1024
+    # 透传给 image_url.detail：original 保留原图，low 缩到 512×512 省 token，
+    # auto 当前等价 original。置空字符串则不带该字段。
+    AI_IMAGE_DETAIL: str = "original"
 
     # CORS：默认放行本地开发端口，生产通过环境变量收敛（逗号分隔或 JSON 列表）
     CORS_ORIGINS: Annotated[list[str], NoDecode] = [

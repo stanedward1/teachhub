@@ -9,8 +9,11 @@
 - 纯文本类（.txt/.md/.csv/.json 及常见代码后缀）→ 直接读取，编码容错；
 - Word（.docx）→ python-docx 抽取段落文本；
 - PDF（.pdf）→ pypdf 抽取前若干页文本；
-- 图片类（.jpg/.jpeg/.png/.gif/.webp/.bmp）→ **仅在凭证开启 `vision_enabled` 时**
-  以 base64 data URL 形式随消息送入多模态；未开启则标注跳过（不报错）；
+- 图片类（.jpg/.jpeg/.png/.gif/.webp/.jfif/.jpe）→ **仅在凭证开启 `vision_enabled` 时**
+  以 base64 data URL 形式随消息送入多模态；格式按**文件实际内容**嗅探（不看文件名/扩展名），
+  只认 JPEG/PNG/GIF/WebP 四种；送入前会**预缩放**（仅当长边超过 `AI_IMAGE_MAX_SIDE` 才缩、
+  绝不放大）并**按 EXIF 摆正方向**（手机照片横躺会显著拉低识别率）；BMP/HEIC/HEIF/AVIF/TIFF
+  等不支持格式**绝不送入模型**，而是精确说明原因；未开启多模态则标注跳过（不报错）；
 - 其它（.zip/.doc/.xls 等二进制格式）→ 标注暂不支持。
 
 此外见 :func:`extract_inline_images` —— 学生用富文本编辑器「上传图片」时，图片会被写成
@@ -20,13 +23,13 @@
 
 依赖延迟导入：解析库缺失只影响对应格式，不影响服务启动与其它格式解析。
 """
-import base64
 import logging
 import os
 import re
 from dataclasses import dataclass, field
 
 from app.config import settings
+from app.services.ai_image import prepare_data_url
 
 logger = logging.getLogger("teachhub.ai")
 
@@ -36,15 +39,33 @@ TEXT_EXTS = {
     ".py", ".js", ".ts", ".java", ".c", ".cpp", ".cs", ".go", ".rs",
     ".html", ".css", ".sql", ".sh", ".bat",
 }
-# 走多模态的图片类扩展名 → MIME
+# 尝试按图片处理的扩展名 → 回退 MIME（真正的格式由 `ai_image.sniff_format`
+# 按字节内容判定，此处扩展名仅用于「要不要尝试当图片处理」）。新增 .jfif/.jpe，
+# **移除 .bmp**（BMP 直送会被上游 400 拒收整条请求）。
 IMAGE_EXTS = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".gif": "image/gif",
     ".webp": "image/webp",
-    ".bmp": "image/bmp",
+    ".jfif": "image/jpeg",
+    ".jpe": "image/jpeg",
 }
+# 明确不受模型支持的图片扩展名：命中即给出精确说明、**绝不送入模型**（避免学生传
+# 一张 BMP 就让整份批改 400 失败）。真实格式最终由字节嗅探兜底，这里按扩展名快速拦截。
+UNSUPPORTED_IMAGE_EXTS = {".bmp", ".heic", ".heif", ".avif", ".tif", ".tiff"}
+
+
+def _unsupported_image_reason(ext: str) -> str:
+    """不受支持图片扩展名对应的中文说明（教师可见）。"""
+    return {
+        ".bmp": "BMP 不受模型支持，请转为 JPEG/PNG",
+        ".heic": "HEIC 不受模型支持，请转为 JPEG/PNG",
+        ".heif": "HEIF 不受模型支持，请转为 JPEG/PNG",
+        ".avif": "AVIF 不受模型支持，请转为 JPEG/PNG",
+        ".tif": "TIFF 不受模型支持，请转为 JPEG/PNG",
+        ".tiff": "TIFF 不受模型支持，请转为 JPEG/PNG",
+    }.get(ext, f"{ext} 不受模型支持，请转为 JPEG/PNG")
 
 # PDF 最多解析页数（避免超长文档拖垮调用）
 _PDF_MAX_PAGES = 20
@@ -129,25 +150,20 @@ def _extract_pdf(path: str) -> str:
     return "\n".join((page.extract_text() or "") for page in pages)
 
 
-def _image_data_url(path: str, ext: str) -> tuple[str | None, str]:
-    """把图片转成 data URL。返回 (data_url | None, 失败原因)。
+def _image_data_url(path: str) -> tuple[str | None, str]:
+    """把图片转成 data URL（含格式嗅探 / 缩放 / EXIF 摆正 / 字节护栏）。
 
-    大小上限用 ``AI_MAX_IMAGE_BYTES`` 而非 ``MAX_UPLOAD_SIZE``：后者是「上传」的宽松上限
-    （20MB），而 base64 后的请求体还要再涨约 1/3，直接送去必然被上游拒收。
+    薄包装 `ai_image.prepare_data_url`：只传入绝对路径与全局配置，所有格式判定、缩放、
+    不支持格式的精确原因都来自图片管线，避免「用扩展名推 MIME」导致 .jfif / 无后缀 /
+    后缀写错的图片被误判为「格式不支持」而静默跳过。返回 ``(data_url | None, 失败原因)``，
+    **永不抛异常**（失败原因最终落到 `ai_grading_results.attachment_used` 供教师查看）。
     """
-    try:
-        size = os.path.getsize(path)
-    except OSError:
-        return None, "无法读取文件"
-    if size > settings.AI_MAX_IMAGE_BYTES:
-        return None, f"图片过大（>{settings.AI_MAX_IMAGE_BYTES // (1024 * 1024)}MB）"
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError:
-        return None, "无法读取文件"
-    encoded = base64.b64encode(raw).decode("ascii")
-    return f"data:{IMAGE_EXTS[ext]};base64,{encoded}", ""
+    return prepare_data_url(
+        path,
+        max_bytes=settings.AI_MAX_IMAGE_BYTES,
+        max_side=settings.AI_IMAGE_MAX_SIDE,
+        jpeg_quality=settings.AI_IMAGE_JPEG_QUALITY,
+    )
 
 
 def _local_upload_filepath(url: str) -> str | None:
@@ -242,12 +258,17 @@ def extract_inline_images(
 
         ext = os.path.splitext(rel)[1].lower()
         path = absolute_path(rel)
+        if ext in UNSUPPORTED_IMAGE_EXTS:
+            # 命中明确不支持的格式：精确说明、绝不送入模型（否则学生传 BMP 会让整份批改 400）
+            notes.append(f"内嵌图片未参与批改：{_unsupported_image_reason(ext)}（{rel}）")
+            rebuilt.append("【图片未参与批改】")
+            continue
         if ext not in IMAGE_EXTS or not os.path.exists(path):
             notes.append(f"内嵌图片未参与批改：文件不存在或格式不支持（{rel}）")
             rebuilt.append("【图片未参与批改】")
             continue
 
-        data_url, reason = _image_data_url(path, ext)
+        data_url, reason = _image_data_url(path)
         if data_url is None:
             notes.append(f"内嵌图片未参与批改：{reason}（{rel}）")
             rebuilt.append("【图片未参与批改】")
@@ -297,12 +318,17 @@ def extract_attachment(
             text = _extract_docx(path)
         elif ext == ".pdf":
             text = _extract_pdf(path)
-        elif ext in IMAGE_EXTS:
+        elif ext in IMAGE_EXTS or ext in UNSUPPORTED_IMAGE_EXTS:
             if not vision_enabled:
                 return AttachmentPayload(
                     note=f"图片附件未参与批改：未启用多模态（{display}）"
                 )
-            data_url, reason = _image_data_url(path, ext)
+            if ext in UNSUPPORTED_IMAGE_EXTS:
+                # 命中明确不支持的格式：精确说明、绝不送入模型（避免 BMP 让整份批改 400）
+                return AttachmentPayload(
+                    note=f"图片附件未参与批改：{_unsupported_image_reason(ext)}（{display}）"
+                )
+            data_url, reason = _image_data_url(path)
             if data_url is None:
                 return AttachmentPayload(note=f"图片附件未参与批改：{reason}（{display}）")
             return AttachmentPayload(

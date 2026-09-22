@@ -23,7 +23,7 @@ import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -138,6 +138,7 @@ def parse_model_output(content: str) -> dict:
             "improvements": "",
             "is_excellent_candidate": False,
             "excellent_reason": "",
+            "parsed": False,
         }
 
     score = parsed.get("score")
@@ -155,6 +156,7 @@ def parse_model_output(content: str) -> dict:
         "improvements": _as_text(parsed.get("improvements")),
         "is_excellent_candidate": bool(parsed.get("excellent")),
         "excellent_reason": _as_text(parsed.get("excellent_reason")),
+        "parsed": True,
     }
 
 
@@ -258,8 +260,15 @@ def can_grade(db: Session) -> tuple[bool, str]:
 
 
 # ---------------- 结果落库 ----------------
-def _upsert_result(db: Session, submission_id: int, **fields) -> AiGradingResult:
-    """按 `submission_id` 更新或新建结果行（重跑覆盖，天然幂等）。"""
+def _upsert_result(
+    db: Session, submission_id: int, school_id: int | None = None, **fields
+) -> AiGradingResult:
+    """按 `submission_id` 更新或新建结果行（重跑覆盖，天然幂等）。
+
+    `school_id` 仅在传入且当前为空时回填：绝不覆盖已有的非空归属，
+    避免把正确归属的租户数据误写成 NULL（后台线程租户上下文为 None 时
+    ORM `before_flush` 自动填充是空操作，结果行会落成对所有租户不可见）。
+    """
     result = (
         db.query(AiGradingResult)
         .filter(AiGradingResult.submission_id == submission_id)
@@ -268,6 +277,9 @@ def _upsert_result(db: Session, submission_id: int, **fields) -> AiGradingResult
     if result is None:
         result = AiGradingResult(submission_id=submission_id)
         db.add(result)
+    # 显式归属：仅在非空且当前为空时回填，绝不覆盖已有归属
+    if school_id is not None and result.school_id is None:
+        result.school_id = school_id
     for key, value in fields.items():
         setattr(result, key, value)
     return result
@@ -318,9 +330,13 @@ def _build_messages(
 
     if images:
         content: list[dict] = [{"type": "text", "text": text}]
-        content.extend(
-            {"type": "image_url", "image_url": {"url": url}} for url in images
-        )
+        for url in images:
+            block: dict = {"type": "image_url", "image_url": {"url": url}}
+            # 透传 image_url.detail：original 保留原图，low 缩到 512×512 省 token；
+            # AI_IMAGE_DETAIL 为空时不带该字段（兼容不走 detail 的模型）。
+            if settings.AI_IMAGE_DETAIL:
+                block["image_url"]["detail"] = settings.AI_IMAGE_DETAIL
+            content.append(block)
         return [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": content},
@@ -414,6 +430,10 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     submission = db.get(Submission, submission_id)
     if submission is None:
         raise AiClientError("提交不存在")
+    # 提交归属学校：用于显式回填结果行的 school_id（见下方 pending 落库与诚实性守卫）。
+    # 后台线程租户上下文可能为 None（作业 school_id 为 NULL），此时 ORM `before_flush`
+    # 自动填充是空操作，结果行会落成对所有租户不可见，故必须显式携带。
+    owner_school_id = submission.school_id
     # 记录批改所依据的**内容版本**：模型调用是慢 I/O，期间学生可能重交
     # （`submit` 会原地改写 content 并作废旧结果）。成功写回前必须确认内容未变，
     # 否则结果会被贴到一份它从未批过的新内容上（见 `_submission_changed`）。
@@ -435,11 +455,37 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     payload = extract_attachment(
         submission.filepath, submission.filename, vision_enabled=cred.vision_enabled
     )
+    # 内嵌图片按「剩余预算」抽取：全局合计不超过 AI_MAX_IMAGES（修缺陷 5）。
+    # 例如附件已占 1 张，则正文内嵌最多再取 AI_MAX_IMAGES - 1 张，
+    # 避免「附件 1 张 + 内嵌 6 张 = 7 张」超出配置注释声明的全局合计。
     inline = extract_inline_images(
-        submission.content or "", vision_enabled=cred.vision_enabled
+        submission.content or "",
+        vision_enabled=cred.vision_enabled,
+        max_images=max(0, settings.AI_MAX_IMAGES - len(payload.images)),
     )
     images = payload.images + inline.images
-    note = "；".join(n for n in [payload.note, *inline.notes] if n)
+
+    # 整批图片总字节护栏：data URL 累加超过 AI_IMAGE_MAX_TOTAL_BYTES 的丢弃
+    # （保持顺序、靠前优先），并追加说明。说明并入现有 attachment_used 的组装方式，
+    # 不新增数据库字段。
+    kept_images: list[str] = []
+    total = 0
+    dropped = 0
+    for url in images:
+        total += len(url)
+        if total > settings.AI_IMAGE_MAX_TOTAL_BYTES:
+            dropped += 1
+            continue
+        kept_images.append(url)
+    images = kept_images
+
+    note_parts = [payload.note, *inline.notes]
+    if dropped:
+        note_parts.append(
+            f"图片过多（{dropped} 张因总体积超过 "
+            f"{settings.AI_IMAGE_MAX_TOTAL_BYTES // (1024 * 1024)}MB 上限未参与批改）"
+        )
+    note = "；".join(n for n in note_parts if n)
     messages = _build_messages(assignment, inline.text, payload.text, images)
 
     # 先落 pending：前端可立即显示「批改中」
@@ -451,6 +497,7 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         model=cred.model,
         attachment_used=note,
         error=None,
+        school_id=owner_school_id,
     )
     db.commit()
 
@@ -491,6 +538,31 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         )
         db.commit()
         return result
+
+    # 诚实性守卫：模型输出被截断（非合法 JSON）或未解析成功时，绝不假装成功 ——
+    # 否则教师会看到「有总评、没亮点/改进建议」的残缺批改。桩/旧调用不带
+    # finish_reason（为 None）→ 视为未截断，保持向后兼容。
+    truncated = response.get("finish_reason") == "length"
+    if truncated or not parsed.get("parsed", False):
+        result = _upsert_result(
+            db,
+            submission_id,
+            status="failed",
+            raw_response=response["content"],
+            error=(
+                "模型输出被截断（超出单次调用上限），未生成完整批改，请调高平台设置中的"
+                "「单次调用 max_tokens」后重新批改"
+                if truncated
+                else "模型返回内容不是预期的 JSON 结构，未生成完整批改，请重新批改或更换模型"
+            ),
+            school_id=owner_school_id,
+        )
+        db.commit()
+        logger.warning(
+            "AI 批改结果不完整，标记 failed submission=%s truncated=%s", submission_id, truncated
+        )
+        return result
+
     result.status = "success"
     result.error = None
     result.summary = parsed["summary"] or None
@@ -558,9 +630,94 @@ def request_grading(
     # （额度是平台级唯一成本刹车，超发即护栏失效）。
     take = reserve_quota(db, len(submission_ids))
     queued = submission_ids[:take]
+
+    # 投递前预写 pending：进程重启/重载时，尚未开跑的排队任务若一行痕迹都没有，
+    # 会静默消失且无可兜底；这里先落 pending + provider/model，便于恢复与对账。
+    if queued:
+        cred = active_credential(db)
+        existing = {
+            r.submission_id: r
+            for r in db.query(AiGradingResult)
+            .filter(AiGradingResult.submission_id.in_(queued))
+            .all()
+        }
+        for sid in queued:
+            row = existing.get(sid)
+            if row is None:
+                row = AiGradingResult(submission_id=sid)
+                db.add(row)
+            row.status = "pending"
+            row.provider = cred.provider if cred else None
+            row.model = cred.model if cred else None
+            row.error = None
+        db.commit()
+
     for submission_id in queued:
         trigger_grading(submission_id, school_id)
     logger.info(
         "AI 批改已投递 %s 份（跳过 %s 份）", len(queued), len(submission_ids) - len(queued)
     )
     return {"queued": len(queued), "skipped": len(submission_ids) - len(queued), "reason": ""}
+
+
+# ---------------- 启动兜底：清理中断的 pending ----------------
+def _parse_db_datetime(value) -> datetime | None:
+    """把数据库时钟归一化成 `datetime`。
+
+    不同驱动的 `func.now()` 返回类型不一致：MySQL 返回 `datetime`，SQLite 返回
+    字符串（如 ``"2026-09-22 21:00:00"``，可能带小数秒）。统一成 `datetime`
+    便于与结果行的时间戳比较，避免把 Python 本地时间与数据库服务端时间混用。
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day)  # noqa: DTZ001
+    s = str(value).strip().replace("T", " ")
+    if "." in s:
+        s = s.split(".", 1)[0]
+    try:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")  # noqa: DTZ007
+    except ValueError:
+        return None
+
+
+def reconcile_stale_pending(db: Session, older_than_seconds: int = 600) -> int:
+    """把上次进程中断遗留的 `pending` 批改标记为失败，避免教师永远看到「批改中」。
+
+    必须与调用方租户上下文无关：`status == "pending"` 的查询用
+    `skip_tenant_filter=True`，否则租户上下文为空时查不到任何行、兜底失效。
+
+    两侧时间**都用数据库时钟**（`func.now()` 与行时间戳同库同源），不掺入 Python
+    本地时间。任何内部异常都吞掉并返回 0，绝不能影响应用启动。
+
+    Returns:
+        被标记为失败的行数。
+    """
+    try:
+        raw_now = db.execute(select(func.now())).scalar()
+        db_now = _parse_db_datetime(raw_now)
+        if db_now is None:
+            return 0
+        cutoff = db_now - timedelta(seconds=older_than_seconds)
+
+        rows = (
+            db.query(AiGradingResult)
+            .execution_options(skip_tenant_filter=True)
+            .filter(AiGradingResult.status == "pending")
+            .all()
+        )
+        count = 0
+        for row in rows:
+            ts = _parse_db_datetime(row.updated_at) or _parse_db_datetime(row.created_at)
+            if ts is not None and ts < cutoff:
+                row.status = "failed"
+                row.error = "批改中断（服务重启），请重新发起批改"
+                count += 1
+        if count:
+            db.commit()
+        return count
+    except Exception:
+        logger.exception("清理中断的 AI 批改 pending 行失败（忽略）")
+        return 0

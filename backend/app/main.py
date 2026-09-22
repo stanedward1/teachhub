@@ -241,6 +241,27 @@ run_migrations()
 _setup_file_logging()
 
 
+def _reconcile_interrupted_grading() -> None:
+    """启动兜底：把上次进程中断遗留的 pending 批改标记为失败。"""
+    from app.database import SessionLocal
+    from app.services import ai_grading
+    from app.tenant import tenant_scope
+
+    db = SessionLocal()
+    try:
+        with tenant_scope(None):
+            n = ai_grading.reconcile_stale_pending(db)
+        if n:
+            logger.warning("启动兜底：%s 条中断的 AI 批改已标记为失败", n)
+    except Exception:
+        logger.exception("启动兜底清理 AI 批改 pending 行失败（忽略）")
+    finally:
+        db.close()
+
+
+_reconcile_interrupted_grading()
+
+
 @app.get("/")
 def root():
     return {"name": settings.APP_NAME, "version": settings.APP_VERSION, "docs": "/docs"}

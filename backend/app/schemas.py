@@ -41,7 +41,7 @@ class AiCredentialSetting(BaseModel):
     )
     model: str = Field(..., min_length=1, max_length=100, description="模型名，如 deepseek-chat")
     api_key: str | None = Field(None, max_length=500, description="API Key；留空表示不修改")
-    vision_enabled: bool = Field(False, description="是否让图片附件按多模态送入")
+    vision_enabled: bool | None = Field(None, description="是否让图片附件按多模态送入；留空则由服务商与模型自动推断")
     enabled: bool = Field(True, description="该凭证是否启用")
 
 

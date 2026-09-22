@@ -35,6 +35,24 @@ from app.services import ai_client, ai_grading
 logger = logging.getLogger("teachhub.ai")
 
 
+def default_vision_enabled(base_url: str | None, model: str | None) -> bool:
+    """按「服务商与模型看起来是否支持视觉」给出 `vision_enabled` 的默认值。
+
+    依据（DeepSeek 官方文档）：`deepseek-flash` 原生支持图片输入（仅
+    JPEG/PNG/GIF/WebP，且图片只能放在 user 消息）。因此当 `base_url` 含
+    "deepseek" 且 `model` 含 "flash" 或 "vision" 时默认开启，避免管理员忘勾
+    开关而导致所有图片被静默跳过（上一轮"AI 看不懂小狗图片"的成因之一）。
+
+    非 deepseek 服务商一律维持旧默认 `False`：我们无法核实其它服务商的视觉能力，
+    且旧行为本就是 `False`，保持向后兼容、不替管理员做可能错误的猜测。
+    """
+    if not base_url or not model:
+        return False
+    bu = base_url.lower()
+    m = model.lower()
+    return "deepseek" in bu and ("flash" in m or "vision" in m)
+
+
 def _credential(db: Session) -> AiCredential | None:
     """取平台唯一凭证行（无则 None）。
 
@@ -90,11 +108,27 @@ def set_credential(db: Session, payload: AiCredentialSetting, user: User) -> dic
     cred.provider = payload.provider.strip() or "deepseek"
     cred.base_url = base_url
     cred.model = model
-    cred.vision_enabled = payload.vision_enabled
+
+    # vision_enabled 的赋值策略：
+    # - 显式提供（payload.vision_enabled is not None）→ 以管理员选择为准；
+    # - 新建且未提供 → 按服务商与模型智能推断默认（default_vision_enabled）；
+    # - 更新且未提供 → 保持库里原值，绝不在管理员改别的字段时静默翻转他显式做过的选择。
+    old_vision = None if created else bool(cred.vision_enabled)
+    if payload.vision_enabled is not None:
+        new_vision = bool(payload.vision_enabled)
+    elif created:
+        new_vision = default_vision_enabled(base_url, model)
+    else:
+        new_vision = old_vision  # 保持原值
+    vision_changed = old_vision is not None and old_vision != new_vision
+    cred.vision_enabled = new_vision
+
     cred.enabled = payload.enabled
     cred.updated_by = user.id
 
-    changed = ["provider", "base_url", "model", "vision_enabled", "enabled"]
+    changed = ["provider", "base_url", "model", "enabled"]
+    if vision_changed:
+        changed.append("vision_enabled")
     new_key = (payload.api_key or "").strip()
     if new_key:
         cred.api_key_encrypted = encrypt_secret(new_key)
