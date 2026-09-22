@@ -6,17 +6,22 @@
         <div>
           <h2 class="page-title">{{ assignment.title }}</h2>
           <p class="page-subtitle">
-            {{ assignment.class_name }} · {{ assignment.creator_name }} · 截止 {{ assignment.deadline || '不限' }}
+            {{ assignment.class_name }} · {{ assignment.creator_name }} · 截止
+            {{ assignment.deadline || '不限' }}
           </p>
         </div>
-        <el-tag :type="submitted ? 'success' : 'warning'">{{ submitted ? '已提交' : '待提交' }}</el-tag>
+        <el-tag :type="submitted ? 'success' : 'warning'">{{
+          submitted ? '已提交' : '待提交'
+        }}</el-tag>
       </div>
       <el-divider />
       <Markdown :content="assignment.content" />
       <div v-if="assignment.attachments && assignment.attachments.length" class="attach-box">
         <span class="attach-label">任务附件：</span>
         <div v-for="(att, i) in assignment.attachments" :key="i" class="attach-link">
-          <el-link type="primary" :href="'/uploads/' + att.filepath" target="_blank">{{ att.filename }}</el-link>
+          <el-link type="primary" :href="'/uploads/' + att.filepath" target="_blank">{{
+            att.filename
+          }}</el-link>
         </div>
       </div>
     </div>
@@ -50,6 +55,8 @@
         </div>
         <div v-else class="tp-empty">教师暂未点评，请耐心等待</div>
       </div>
+      <!-- AI 批改意见（与教师点评并列展示，仅供参考） -->
+      <AiGradingPanel :ai="submission.ai_grading" />
     </div>
 
     <div class="page-card submit-card">
@@ -74,6 +81,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
+import AiGradingPanel from '../../components/AiGradingPanel.vue'
 import { homeworkApi, uploadFile } from '../../api'
 
 const route = useRoute()
@@ -127,7 +135,7 @@ async function submit() {
     const res = await homeworkApi.submit(route.params.id, {
       content: content.value,
       filepath: filepath.value,
-      filename: filename.value
+      filename: filename.value,
     })
     ElMessage.success('提交成功')
     submitted.value = true

@@ -2,7 +2,7 @@
 from fastapi import Depends, File, UploadFile
 from sqlalchemy.orm import Session
 
-from app.routers.workbench._common import dep, get_current_user, get_db, new_router
+from app.routers.workbench._common import dep, get_db, new_router
 from app.services.workbench import imports_service
 
 router = new_router("数据导入")
@@ -27,7 +27,10 @@ def list_import_history(
     import_type: str = "",
     page: int = 1,
     page_size: int = 20,
-    user=Depends(get_current_user),
+    # 读权限不得比写权限宽：导入接口挂 `dep`（= require_teacher），历史接口必须同权，
+    # 否则学生账号可读同校导入历史，而 error_list 里含学号
+    # （「第N行：学号 XXX 已存在」）。护栏见 tests/test_import_history.py。
+    user=Depends(dep),
     db: Session = Depends(get_db),
 ):
     return imports_service.list_import_history(

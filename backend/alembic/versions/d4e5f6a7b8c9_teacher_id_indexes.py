@@ -10,7 +10,6 @@ classrooms.teacher_id 用于 is_teacher_class_owner 高频判断，均缺索引�
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.

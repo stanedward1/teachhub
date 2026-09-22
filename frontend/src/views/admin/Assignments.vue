@@ -28,13 +28,16 @@
           <el-table-column prop="class_name" label="下发班级" width="150" />
           <el-table-column prop="deadline" label="截止时间" width="170" />
           <el-table-column prop="submission_count" label="提交数" width="90" />
-          <el-table-column label="操作" width="320" fixed="right">
+          <el-table-column label="操作" width="400" fixed="right">
             <template #default="{ row }">
               <el-button
                 link
                 type="primary"
                 @click="$router.push(`/admin/homework/${row.id}/submissions`)"
                 >审阅</el-button
+              >
+              <el-button link type="primary" :loading="aiGradingId === row.id" @click="aiGrade(row)"
+                >AI 批改</el-button
               >
               <el-button link type="warning" @click="openUnsubmitted(row)">未交名单</el-button>
               <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
@@ -184,6 +187,30 @@ onMounted(async () => {
   classes.value = res.items
   load()
 })
+
+// AI 批改：纯手动触发（学生提交不会自动批改），只批该作业下尚未批改的提交
+const aiGradingId = ref(null)
+
+async function aiGrade(row) {
+  if (!row.submission_count) return ElMessage.warning('该任务暂无提交')
+  await ElMessageBox.confirm(
+    `将对「${row.title}」下尚未批改的提交发起 AI 批改（已批改的会自动跳过），确认继续？`,
+    'AI 批改',
+    { type: 'info' }
+  )
+  aiGradingId.value = row.id
+  try {
+    const res = await homeworkApi.aiGradeAssignment(row.id)
+    const parts = [`已发起 ${res.queued} 份 AI 批改`]
+    if (res.already_graded) parts.push(`跳过 ${res.already_graded} 份已批改`)
+    if (res.skipped && res.skipped > res.already_graded) parts.push(`额度不足跳过其余`)
+    ElMessage.success(parts.join('，'))
+  } catch (e) {
+    // 失败原因（总开关未开启 / 未配凭证 / 额度耗尽）由全局拦截器提示
+  } finally {
+    aiGradingId.value = null
+  }
+}
 
 async function load() {
   loading.value = true

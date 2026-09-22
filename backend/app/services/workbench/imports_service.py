@@ -2,7 +2,6 @@
 import json
 from io import BytesIO
 
-from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from sqlalchemy import select
@@ -13,7 +12,6 @@ from app.pagination import paginate
 from app.permissions import get_student_account
 from app.security import hash_password
 from app.services.workbench._common import (
-    audit,
     get_teacher_class_ids,
     is_any_admin,
     normalize_page,

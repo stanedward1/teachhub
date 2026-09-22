@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Classroom, Score, Student
 from app.pagination import paginate
-from app.schemas import ScoreCreate, ScoreOut, ScoreUpdate
+from app.schemas import ScoreCreate, ScoreUpdate
 from app.services.workbench._common import (
     active_student_id_query,
     apply_student_class_filter,

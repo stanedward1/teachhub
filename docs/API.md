@@ -1,13 +1,13 @@
 # TeachHub API 接口文档
 
-> 更新：2026-09-21 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
+> 更新：2026-09-22 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
 >
 > 认证方式：请求头 `Authorization: Bearer <token>`（登录/注册/注册开关状态/学校下拉/班级下拉/刷新令牌/登出/编程练习无需认证）。
 > 令牌双轨：登录返回的访问令牌字段名为 `token`（短期有效，用于鉴权），另有 `refresh_token`（长期有效，用于换取新令牌对，详见「一、认证」末段）。
 >
 > 链路追踪：所有响应均带 `X-Request-ID` 响应头（请求头传入则透传，否则服务端生成 `uuid4`）；服务端日志每行带 `[rid=...]`，可用该 ID 串联同一请求的全部日志。
 >
-> 规模：**业务接口 138 条**（`/api/**`）+ 8 条非业务路由（端点 `/`、`/health`、`/metrics`、`/docs`、`/docs/oauth2-redirect`、`/redoc`、`/openapi.json` + `/uploads` 静态挂载），合计 146 条已注册路由（以 `len(app.routes)` 为准）
+> 规模：**业务接口 145 条**（`/api/**`）+ 8 条非业务路由（端点 `/`、`/health`、`/metrics`、`/docs`、`/docs/oauth2-redirect`、`/redoc`、`/openapi.json` + `/uploads` 静态挂载），合计 153 条已注册路由（以 `len(app.routes)` 为准）
 
 ## 角色权限说明
 
@@ -56,17 +56,19 @@
 | POST | `/assignments` | 教师+ | 布置作业 |
 | PUT | `/assignments/{id}` | 教师+ | 编辑作业 |
 | DELETE | `/assignments/{id}` | 教师+ | 删除作业 |
-| GET | `/assignments/{id}/submissions` | 登录 | 提交列表 |
+| GET | `/assignments/{id}/submissions` | 登录 | 提交列表（教师侧附 `ai_grading_status` / `ai_score` / `ai_excellent_candidate`，用于「AI 批改」按钮的结果反馈） |
 | GET | `/assignments/{id}/unsubmitted` | 教师+ | 未交名单（应交 = 班级在籍学生，未交 = 应交 − 已交） |
-| POST | `/assignments/{id}/submissions` | 学生 | 提交作业 |
-| GET | `/submissions/{id}` | 登录 | 提交详情（含点评 + 评优信息 excellent_id/excellent_note） |
+| POST | `/assignments/{id}/ai-grade` | 教师+ | **触发 AI 批改（教师手动，批量）**：批改该作业下**尚未成功批改**的提交；已批改的跳过，剩余额度不足时按额度截断。返回 `{queued, skipped, already_graded, reason}`。非阻塞（仅入队）。开关关 / 无凭证 / 额度耗尽 → 400 |
+| POST | `/assignments/{id}/submissions` | 学生 | 提交作业（**不触发任何 AI 调用**） |
+| GET | `/submissions/{id}` | 登录 | 提交详情（含 `assignment_title` + 点评 + 评优信息 excellent_id/excellent_note + AI 批改 `ai_grading`）。AI 结果**仅本人可见**（学生读他人提交 403）；学生侧**不含** `error`（失败原因只给教师） |
+| POST | `/submissions/{id}/ai-grade` | 教师+ | **触发 AI 批改（教师手动，单份）**：已有结果则重跑覆盖（用于补批失败件或重交后重批）。返回 `{queued, skipped, reason}`。开关关 / 无凭证 / 额度耗尽 → 400 |
 | POST | `/submissions/{id}/comments` | 教师+ | 添加点评（含评分 0-100） |
 | DELETE | `/submissions/{sid}/comments/{cid}` | 教师+ | 删除点评 |
-| GET | `/my-submissions` | 学生 | 我的提交 |
-| POST | `/submissions/{id}/excellent` | 教师+ | 评优秀 |
-| DELETE | `/submissions/{id}/excellent` | 教师+ | 取消优秀 |
-| GET | `/excellent` | 登录 | 优秀作品列表 |
-| GET | `/excellent/{id}` | 登录 | 优秀作品详情（含 `note` 评选评语 + `teacher_comments` 批改评语列表） |
+| GET | `/my-submissions` | 学生 | 我的提交（附 `ai_grading_status`：`success` / `pending` / `failed` / `null`） |
+| POST | `/submissions/{id}/excellent` | 教师+ | 评优秀（`from_ai=true` 时 `excellent_works.source` 记 `ai_recommended`，用于「AI 推荐采纳」来源追溯）。`school_id` 取**提交所属学校**（不取操作者）；重复评选返回 **400**「该作品已入选优秀」 |
+| DELETE | `/submissions/{id}/excellent` | 教师+ | 取消优秀（幂等；提交不存在返回 **404**，跨校 404） |
+| GET | `/excellent` | 登录 | 优秀作品列表（学生看**本班**，教师看自己班级，平台超管全量） |
+| GET | `/excellent/{id}` | 登录 | 优秀作品详情（含 `note` 评选评语 + `teacher_comments` 批改评语列表 + AI 批改 `ai_grading`）。`ai_grading` 与 `/submissions/{id}` 同口径（学生侧**不含** `error`）。⚠️ 可见范围为 **`school_id` 同校**（含同校学生），与 `/submissions/{id}` 的「仅本人」不同——优秀作品本就公开，AI 意见与 `teacher_comments` 随作品一并可见（**该可见性经 `AI-GRADING-PRD.md` §8.1 Q10 拍板接受，2026-09-22**） |
 | POST | `/excellent/{id}/comments` | 登录 | 发表评论 |
 
 ## 四、基础数据
@@ -189,6 +191,11 @@
 | GET | `/platform/overview` | 超管 | 平台概览 |
 | GET | `/platform/registration` | 超管 | 查询学生自助注册开关 |
 | PUT | `/platform/registration` | 超管 | 设置学生自助注册开关（`{allow_registration: bool}`） |
+| GET | `/platform/ai-credential` | 超管 | 查询 AI 服务凭证（只回掩码 `api_key_masked`，**绝不回明文密钥**） |
+| PUT | `/platform/ai-credential` | 超管 | 保存 AI 服务凭证（`provider`/`base_url`/`model`/`api_key`/`vision_enabled`/`enabled`；`api_key` 留空＝保持原密钥，非空则 Fernet 加密覆盖） |
+| POST | `/platform/ai-credential/test` | 超管 | AI 凭证连通性测试（发一次最小请求，允许「先测后存」；`api_key` 留空则回退已存密钥） |
+| GET | `/platform/ai-grading` | 超管 | 查询 AI 批改开关（`enabled`/`auto_publish_excellent`/`daily_limit`/`max_tokens`/`configured`/`today_call_count` 当日用量） |
+| PUT | `/platform/ai-grading` | 超管 | 设置 AI 批改开关（`{enabled, auto_publish_excellent, daily_limit(1-100000), max_tokens(64-32000)}`） |
 
 ## 八、其他
 
@@ -227,12 +234,21 @@
 | --- | --- | --- | --- |
 | 校内配置 | `school_id = 本校 id` | `school_name`、`semester`、`grade`、`max_upload_size` | `GET /api/settings`、`PUT /api/settings/{key}`（学校管理员及以上） |
 | 平台全局配置 | `school_id IS NULL` | `allow_registration` | `GET/PUT /api/admin/platform/registration`（仅平台超管） |
+| 平台全局配置 | `school_id IS NULL` | `ai_grading_enabled`、`ai_auto_publish_excellent`、`ai_auto_publish_owner`、`ai_daily_call_limit`、`ai_max_tokens` | `GET/PUT /api/admin/platform/ai-grading`（仅平台超管）；凭证存 `ai_credentials` 表，走 `/api/admin/platform/ai-credential` |
 
-> 读取统一走 `app/platform_settings.py`（`get_global_setting` / `set_global_setting` / `is_registration_allowed`）：**配置行不存在时按「开放注册」处理**，兼容引入开关之前的既有安装。
+> 读取统一走 `app/platform_settings.py`（`get_global_setting` / `set_global_setting` / `is_registration_allowed` / `is_ai_grading_enabled` 等）；该模块**所有查询显式 `skip_tenant_filter`**，因为全局配置行的 `school_id` 就是 `NULL`，在带租户上下文的请求里（如教师在带班级上下文中触发 AI 批改时读总开关与额度）不加此开关会**永远查不到**并静默落回默认值。
+>
+> **缺省值取向按功能分别约定**：学生自助注册 `allow_registration` 缺省 **开**（兼容引入开关之前的既有安装）；AI 批改相关开关缺省**一律关**（新功能默认不产生费用、不改动既有流程）。
+>
+> AI 批改相关键：`ai_grading_enabled`（平台级总开关，缺省关，关闭时**零外呼**且**触发接口返回 400**）、`ai_auto_publish_excellent`（优秀作品自动入库，缺省关＝推荐仅作候选待教师确认）、`ai_auto_publish_owner`（开启自动入库的超管 id，自动入库时计入 `excellent_works.selected_by`）、`ai_daily_call_limit`（每日调用上限，**平台级唯一成本刹车**，缺省 200）、`ai_max_tokens`（单次 max_tokens，缺省 1200）。
+>
+> **AI 批改触发点**：**仅** `POST /api/homework/assignments/{id}/ai-grade` 与 `POST /api/homework/submissions/{id}/ai-grade`
+> （教师+，班级归属校验）。学生提交接口 `/assignments/{id}/submissions` **不做任何 AI 调用**。
+> 学生重交时其提交的 AI 批改结果行被删除（旧结果只对旧版本内容成立）。
 
 ## 统一约定
 
 - **分页**：`page`（默认 1）、`page_size`（默认 20，最大 200），返回 `{items, total}`
 - **错误响应**：统一 `{detail: "中文提示"}`；状态码 400（参数）/ 401（未认证）/ 403（无权限）/ 404（不存在）/ 409（冲突）/ 413（文件过大）/ 422（校验）/ 423（锁定）/ 429（限流）/ 500（服务器错误）
 - **学生语义**：所有业务表 `student_id` 均指向 `students.id`（学生档案），学生登录账号（`users.id`）通过「班级 + 姓名」软关联
-- **多租户隔离**：接口层 + ORM 层双重按 `school_id` 隔离，平台超管（`school_id=NULL`）跨校
+- **多租户隔离**：由 **ORM 层事件统一按 `school_id` 隔离**（查询自动注入过滤、写入自动回填），平台超管（`school_id=NULL`）跨校

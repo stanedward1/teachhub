@@ -38,6 +38,9 @@
         <div v-else class="tp-empty">教师暂未点评</div>
       </div>
 
+      <!-- AI 批改建议（仅供参考，以教师评语为准） -->
+      <AiGradingPanel :ai="item.ai_grading" />
+
       <el-divider />
       <h4 class="sec-title">我的作业内容</h4>
       <Markdown :content="item.content || ''" />
@@ -61,6 +64,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Markdown from '../../components/Markdown.vue'
+import AiGradingPanel from '../../components/AiGradingPanel.vue'
 import { homeworkApi } from '../../api'
 
 const route = useRoute()

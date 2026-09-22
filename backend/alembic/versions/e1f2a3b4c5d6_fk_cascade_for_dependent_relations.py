@@ -16,7 +16,6 @@ leaves/performances 等以 student_id 引用 students.id 的表）是「纯从�
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.

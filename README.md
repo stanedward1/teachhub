@@ -9,9 +9,14 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | 文档 | 说明 |
 | ---- | ---- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、可观测性、设计决策 |
-| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（138 条业务接口 + 运维端点，方法 + 路径 + 权限 + 约定） |
-| [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 34 张表、外键删除策略分层、软关联说明 |
+| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（145 条业务接口 + 运维端点，方法 + 路径 + 权限 + 约定） |
+| [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 36 张表、外键删除策略分层、软关联说明 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、权限与多租户隔离规范、Git 规范、测试规范、发布流程 |
+| [docs/AI-GRADING-PRD.md](docs/AI-GRADING-PRD.md) | **（P0 已实现）** AI 作业批改与优秀作品推荐需求：现状底盘、功能需求、权限矩阵、验收标准、决策记录 |
+| [docs/MULTI-TENANT-PRD.md](docs/MULTI-TENANT-PRD.md) ｜ [docs/MULTI-TENANT-TECH.md](docs/MULTI-TENANT-TECH.md) | 多租户 SaaS 需求与技术方案：角色/租户模型、`school_id` 隔离实现、写入归属与唯一约束口径、迁移策略 |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | **变更日志**：按时间倒序记录每一次功能/修复/重构（含根因、验证与文档同步情况） |
+
+> 其余按需查阅：`docs/MOBILE-TECH.md`（移动端方案）、`docs/REQUIREMENTS.md`（移动端 MVP 需求）、`docs/OPTIMIZATION_PLAN.md`（全栈优化清单）、`docs/REVIEW-*.md`（复扫报告）、`docs/system_design.md`（积分→表现合并设计，历史快照）。
 
 ## 核心特性
 
@@ -24,7 +29,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | 学校管理员 `school_admin` | 管理端 `/admin` | **本校全部**班级 + 学生 + 系统管理（班级/账号 CRUD + 年级升级 + 班级教师配置） |
 | 平台超管 `super_admin` | 管理端 `/admin`（独立用户名） | **跨学校**：学校开通/启停、全局概览、所有租户数据 |
 
-> 多租户：每所学校是独立租户，通过 `school_id` 在**接口层 + ORM 层**双重隔离，跨校访问一律返回 404/403。
+> 多租户：每所学校是独立租户，`school_id` 隔离由 **ORM 层事件统一完成**（查询自动注入过滤、写入自动回填），跨校访问一律返回 404/403。
 
 学生账号**无法**访问后台接口（返回 403），权限在前后端双重校验。
 
@@ -95,6 +100,15 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 - 学生提交后教师可逐份点评，学生端可见
 - **学生端反馈闭环**：「我的提交」每行可进入**提交详情页**，查看完整内容、教师批改点评（含分数与点评人）与评优评选评语；作业详情页在提交后直接展示「教师反馈」卡片
 
+### 🤖 AI 作业批改与优秀作品推荐（平台级）
+- **平台统一接入**：平台超管在「系统 → 平台设置」配置第三方大模型凭证（兼容 OpenAI Chat Completions 协议，如 DeepSeek）；密钥 **Fernet 加密入库、只写不回显**（读接口仅回掩码），支持「先测后存」的连通性测试
+- **平台级总开关**（默认关闭）：关闭时**零外呼**；**批改由教师手动触发** —— 在「上机作业管理」中点击作业行「审阅」旁的 **「AI 批改」** 即可批量批改该作业下尚未批改的提交（已批改的自动跳过、额度不足按额度截断）；提交审阅列表与提交详情页还可对**单份**提交发起或重跑批改。**学生提交作业不产生任何 AI 调用**
+- **附件纳入批改**：文本型附件（txt/md/代码/docx/pdf）自动抽取正文；图片按所配模型能力走多模态（base64），解析失败降级为「未参与批改」
+- **结果对教师与学生可见**：教师端提交详情展示分数/总评/亮点/改进建议；学生端**三处**展示 AI 意见——「我的提交详情」（**仅本人**，读他人提交 403）、「作业详情（教师反馈）」、「**优秀作品详情**」（该页同校可见，AI 意见随作品一并公开）；均标注「AI 生成，仅供参考，以教师评语为准」，复用同一纯展示面板
+- **优秀作品推荐**：AI 判定可作范例时给出候选与理由，**默认需教师确认采纳**；可配置为**自动入库**（开启需显著确认），`source` 记 `ai_recommended`、`selected_by` 记开启者，可复用撤销评选链路回收
+- **成本护栏**：平台级每日调用上限（默认 200）+ 单次 max_tokens 上限（默认 1200），达上限后触发接口直接返回 400 且不再外呼；超管可实时查看当日用量
+- **降级彻底**：未配置凭证 / 关闭开关 / 超时 / 5xx / 超限 / 附件解析失败 —— 任一情形学生提交照常成功，且**不向学生暴露任何 AI 错误**；学生重交时旧批改结果自动作废，避免出现与当前内容不符的评价
+
 ### 🖼️ 图文混排与详情纵览
 - **家校沟通 / 工作日志 / 计划总结 / 班级活动 / 师生谈心** 五大模块统一使用 Markdown 图文混排编辑，**图片可插入正文任意位置**
 - 五个模块列表均支持「查看」弹窗，用 Markdown 渲染全文与图片，纵览完整内容
@@ -121,6 +135,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | 数据可视化 | ECharts | 5.5 |
 | Markdown | marked + DOMPurify（XSS 防护） | 12 |
 | Excel 处理 | openpyxl | 3.1 |
+| AI 批改 | httpx（OpenAI 兼容接口）+ cryptography（Fernet）+ python-docx / pypdf（附件解析） | — |
 | 测试 | pytest + FastAPI TestClient | — |
 | 部署 | Docker + Nginx | — |
 
@@ -136,6 +151,7 @@ teachhub/
 │   │   ├── logging_config.py   # 结构化日志（X-Request-ID 透传 + RequestIdFilter + StructuredFormatter）
 │   │   ├── database.py         # SQLAlchemy 连接 + Alembic 迁移
 │   │   ├── security.py         # JWT + bcrypt 密码哈希
+│   │   ├── crypto.py           # 对称加密（Fernet）：AI 凭证密钥加解密 + 掩码
 │   │   ├── deps.py             # 依赖注入（角色权限 + 停用学校拦截）
 │   │   ├── tenant.py           # 多租户核心：ORM 层 school_id 自动隔离
 │   │   ├── permissions.py      # 班级权限 + 租户辅助（班主任/科任 + 管理员）
@@ -146,11 +162,12 @@ teachhub/
 │   │   ├── observability.py    # 可观测性：访问日志中间件 + /metrics（Prometheus）
 │   │   ├── seed.py             # 假数据种子（默认校 + 第二校，多租户）
 │   │   ├── cleanup.py          # 级联清理（purge_student_data / purge_user_data）
-│   │   ├── models/             # 数据模型（按域分组，34 张表）
+│   │   ├── models/             # 数据模型（按域分组，36 张表）
 │   │   │   ├── user.py         #   User
 │   │   │   ├── school.py       #   School / Classroom / ClassTeacher / Student
 │   │   │   ├── refresh_token.py #  RefreshToken（刷新令牌：轮换 + 撤销，仅存 sha256 摘要）
 │   │   │   ├── homework.py     #   Assignment / AssignmentAttachment / Submission / ExcellentWork / WorkComment / SubmissionComment
+│   │   │   ├── ai.py           #   AiCredential（平台凭证，无 school_id）/ AiGradingResult（批改结果，一提交一条）
 │   │   │   ├── workbench.py    #   Score / Leave / Communication / Resource / Exam / Seat / Setting / ImportHistory / StudentProfileTag / WeeklyReport / StudentBoardHistory
 │   │   │   ├── classlog.py     #   WorkLog / ClassPlan / TeacherPlan / Schedule / Activity / Talk / ReturnRecord / Performance / StudentComment
 │   │   │   └── operation_log.py
@@ -158,6 +175,7 @@ teachhub/
 │   │   │   ├── auth_service.py / students_service.py / classlog_service.py
 │   │   │   ├── homework_service.py / admin_service.py / mobile_service.py
 │   │   │   ├── meta_service.py / attendance_service.py / uploads_service.py
+│   │   │   ├── ai_client.py / ai_attachments.py / ai_grading.py / ai_admin_service.py  # AI 批改：模型客户端 / 附件解析 / 批改调度与降级 / 超管凭证与开关
 │   │   │   └── workbench/      #   教师工作台子域（_common + scores/leaves/communications/resources/exams/seats/imports/profile/reports）
 │   │   └── routers/            # API 路由（按业务域分组，均为薄壳）
 │   │       ├── auth.py         #   登录/注册/注册开关状态/密码/头像上传/学校下拉/令牌刷新/登出（含登录限流）
@@ -168,14 +186,15 @@ teachhub/
 │   │       ├── classlog.py     #   日志/计划/课表/活动/谈心/返校/表现/评语
 │   │       ├── attendance.py   #   考勤点名 + 出勤率统计
 │   │       ├── mobile.py       #   移动端轻量接口
-│   │       ├── admin.py        #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览 / 平台注册开关
+│   │       ├── admin.py        #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览 / 平台注册开关 / AI 凭证与批改开关
 │   │       └── uploads.py      #   通用文件上传
-│   ├── alembic/                # 数据库迁移（schema 唯一来源，28 个 revision，head e2f3a4b5c6d7）
+│   ├── alembic/                # 数据库迁移（schema 唯一来源，29 个 revision，head f3a4b5c6d7e8）
 │   ├── logs/                   # 运行日志（teachhub.log，按天滚动保留 30 天）
 │   ├── tests/                  # pytest 自动化测试（含多租户隔离）
 │   ├── pytest.ini              # pytest 配置（testpaths = tests）
 │   ├── clean_data.sql          # 数据清理 SQL（清空业务数据，保留账号+学校）
 │   ├── repair_student_profiles.py  # 存量学生档案修复脚本
+│   ├── repair_excellent_school_id.py # 运维脚本：回填优秀作品 school_id（幂等，支持 --dry-run）
 │   ├── ensure_school_admin.py      # 幂等补建学校管理员
 │   ├── requirements.txt        # 运行时依赖
 │   ├── requirements-dev.txt    # 开发/测试依赖（pytest、httpx）
@@ -190,7 +209,7 @@ teachhub/
 │   │   ├── stores/             # Pinia 状态（auth）
 │   │   ├── utils/              # 认证工具
 │   │   ├── composables/        # 可组合函数（useCrudList、useSort、useDebouncedRef、useDownload、useLogout）
-│   │   ├── components/         # ImportDialog（通用导入弹窗）/ Markdown / MarkdownEditor / StudentSelect（班级联动）/ StudentCard / SortBar / PaginationBar / StateView（列表四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList（后四者为统一体验态组件）
+│   │   ├── components/         # ImportDialog（通用导入弹窗）/ Markdown / MarkdownEditor / StudentSelect（班级联动）/ StudentCard / SortBar / PaginationBar / StateView（列表四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList（后四者为统一体验态组件）/ AiGradingPanel（AI 批改纯展示面板，学生端三处复用）
 │   │   ├── layout/             # AdminLayout（可折叠侧边栏）/ StudentLayout；页头/菜单下沉 layout/admin/（AdminSidebar / AdminHeader / menuConfig.js）
 │   │   ├── mobile/             # 移动端（Vant）：layout + views（登录/首页/学生/考勤/记录/请假/改密）+ api
 │   │   └── views/              # 页面（student/ 9 个 + admin/ 29 个，含学校管理、平台设置；Students/Scores 页内子组件见 admin/students/、admin/scores/）
@@ -579,7 +598,7 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-测试覆盖：登录认证、权限隔离、作业流程、优秀作品评选、CRUD 操作、越权场景。
+测试覆盖：登录认证、权限隔离、作业流程、优秀作品评选、CRUD 操作、越权场景、**AI 批改**（凭证/开关超管专属、**提交零外呼**、手动触发的批量与单份语义、学生与跨班教师触发 403、关闭/未配凭证/超限 400、模型报错与附件失败降级、重交作废旧结果、推荐来源标记）。
 
 ## 配置参考
 
@@ -593,6 +612,12 @@ python -m pytest tests/ -v
 | `MAX_UPLOAD_SIZE` | 上传文件大小上限 | `20971520`（20MB） | 按需调整 |
 | `CORS_ORIGINS` | 允许跨域的前端地址 | `http://localhost:5173` | 生产域名 |
 | `ALGORITHM` | JWT 签名算法 | `HS256` | 保持默认 |
+| `AI_CREDENTIAL_KEY` | AI 凭证加密主密钥（Fernet，base64 32 字节） | 未设时由 `SECRET_KEY` 派生 | **建议独立设置**并妥善保管；变更后已存凭证将无法解密 |
+| `AI_REQUEST_TIMEOUT` | 单次模型调用超时（秒） | `60` | 按上游服务调整 |
+| `AI_DEFAULT_DAILY_LIMIT` | 每日调用上限缺省值（可被平台设置覆盖） | `200` | 按预算调整 |
+| `AI_DEFAULT_MAX_TOKENS` | 单次 max_tokens 缺省值（可被平台设置覆盖） | `1200` | 按需调整 |
+| `AI_MAX_INPUT_CHARS` | 送入模型的作业正文上限（字符，超出截断） | `8000` | 按需调整 |
+| `AI_MAX_ATTACHMENT_CHARS` | 送入模型的附件文本上限（字符，超出截断） | `6000` | 按需调整 |
 
 ## 故障排除
 
@@ -608,6 +633,8 @@ python -m pytest tests/ -v
 | 想排查接口报错/慢请求 | 需要运行日志 | 查看 `backend/logs/teachhub.log`（慢请求 ≥1s 标注 `[SLOW]`）；或抓取 `/metrics` 看耗时直方图与状态码分布 |
 | 接入 Prometheus | 需要指标端点 | 将抓取目标指向 `http://<host>:8080/metrics` |
 | 学生登录页没有「学生注册」入口 | 平台注册开关处于关闭状态 | 平台超管登录管理端 → 「系统 → 平台设置」打开注册开关；接口 `GET /api/auth/registration-status` 可查看当前状态 |
+| AI 批改没生效 | **尚未手动触发**（批改不随学生提交自动执行）；或平台总开关关闭 / 凭证未配置或未启用 / 已达每日上限 | 教师端「上机作业管理」点击作业行的「AI 批改」（提交审阅列表可对单份触发）；若提示 400，由平台超管在「系统 → 平台设置」检查「AI 批改」总开关与「AI 服务凭证」，用「连通性测试」验证连通与密钥；页面会显示当日用量与上限 |
+| 学生提交后 AI 一直显示「批改中」 | 上游响应慢 / 超时 / 后台线程异常 | 查看 `backend/logs/teachhub.log` 中 `teachhub.ai` 记录；失败会落 `failed`，**原因只在教师/超管侧可见**，学生侧不受影响 |
 
 ## License
 

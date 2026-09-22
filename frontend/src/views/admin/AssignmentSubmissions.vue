@@ -17,7 +17,7 @@
         :loading="loading"
         :error="error"
         :empty="!items.length"
-        :columns="6"
+        :columns="7"
         empty-description="暂无提交记录"
         @retry="load"
       >
@@ -40,6 +40,17 @@
             </template>
           </el-table-column>
           <el-table-column prop="created_at" label="提交时间" width="170" />
+          <el-table-column label="AI 批改" width="110">
+            <template #default="{ row }">
+              <el-tag v-if="row.ai_grading_status === 'success'" size="small" type="success"
+                >已批改</el-tag
+              >
+              <el-tag v-else-if="row.ai_grading_status === 'pending'" size="small" type="warning"
+                >批改中</el-tag
+              >
+              <span v-else class="muted">未批改</span>
+            </template>
+          </el-table-column>
           <el-table-column label="状态" width="110">
             <template #default="{ row }">
               <el-tag :type="row.is_excellent ? 'success' : 'info'" size="small">
@@ -47,13 +58,27 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="220" fixed="right">
+          <el-table-column label="操作" width="300" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
+              <el-button
+                link
+                type="primary"
+                :loading="aiGradingId === row.id"
+                @click="aiGrade(row)"
+                >{{ row.ai_grading_status === 'success' ? '重新批改' : 'AI 批改' }}</el-button
+              >
               <el-button v-if="!row.is_excellent" link type="success" @click="mark(row)"
                 >选为优秀</el-button
               >
-              <el-button v-else link type="warning" @click="unmark(row)">取消优秀</el-button>
+              <el-button
+                v-else
+                link
+                type="warning"
+                :loading="unmarkingId === row.id"
+                @click="unmark(row)"
+                >取消优秀</el-button
+              >
             </template>
           </el-table-column>
         </el-table>
@@ -67,8 +92,8 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" @click="confirmMark">确定</el-button>
+        <el-button :disabled="saving" @click="dialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="confirmMark">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -89,6 +114,8 @@ const assignment = ref(null)
 const dialog = ref(false)
 const note = ref('')
 const target = ref(null)
+const saving = ref(false) // 评选优秀提交中（防重复提交）
+const unmarkingId = ref(null) // 正在取消优秀的提交 id
 
 // 作业提交审阅：单个作业的「作业详情 + 全部提交」一次取回。非标准分页 CRUD，用 wrapper
 // 把两路请求收敛进 useCrudList，去掉手写 loading/error/items 样板（不改后端）。
@@ -114,16 +141,51 @@ function openDetail(row) {
 }
 
 async function confirmMark() {
-  await homeworkApi.markExcellent(target.value.id, { note: note.value })
-  ElMessage.success('已评选为优秀作品')
-  dialog.value = false
-  load()
+  // 防重复提交：确定按钮无 loading 时双击会并发两个 POST，第二个请求的「已入选」预检
+  // 先于第一个请求的写入生效，最终撞数据库唯一索引报 409「数据冲突」。
+  if (saving.value) return
+  saving.value = true
+  try {
+    await homeworkApi.markExcellent(target.value.id, { note: note.value })
+    ElMessage.success('已评选为优秀作品')
+    dialog.value = false
+    load()
+  } catch (e) {
+    // 失败原因由全局拦截器提示（如「该作品已入选优秀」）
+  } finally {
+    saving.value = false
+  }
 }
 
 async function unmark(row) {
-  await homeworkApi.unmarkExcellent(row.id)
-  ElMessage.success('已取消优秀')
-  load()
+  if (unmarkingId.value === row.id) return
+  unmarkingId.value = row.id
+  try {
+    await homeworkApi.unmarkExcellent(row.id)
+    ElMessage.success('已取消优秀')
+    await load()
+  } catch (e) {
+    // 失败原因由全局拦截器提示
+  } finally {
+    unmarkingId.value = null
+  }
+}
+
+// AI 批改：单份触发（已有结果则重跑覆盖）；未批改 / 失败的提交也可单独补批
+const aiGradingId = ref(null)
+
+async function aiGrade(row) {
+  aiGradingId.value = row.id
+  try {
+    await homeworkApi.aiGradeSubmission(row.id)
+    ElMessage.success('已发起 AI 批改，稍后刷新查看结果')
+    // 批改在后台线程执行，稍作延迟再拉取，避免立刻刷新仍是「批改中」
+    setTimeout(load, 1200)
+  } catch (e) {
+    // 失败原因（总开关未开启 / 未配凭证 / 额度耗尽）由全局拦截器提示
+  } finally {
+    aiGradingId.value = null
+  }
 }
 </script>
 
@@ -161,5 +223,9 @@ async function unmark(row) {
   text-align: center;
   color: #9ca3af;
   padding: 40px 0;
+}
+.muted {
+  color: #9ca3af;
+  font-size: 13px;
 }
 </style>

@@ -29,6 +29,36 @@ class RegistrationSetting(BaseModel):
     allow_registration: bool = Field(..., description="是否开放学生自助注册")
 
 
+class AiCredentialSetting(BaseModel):
+    """平台级 AI 服务凭证请求体（平台超管）。
+
+    只写不回显：`api_key` 留空表示「保持原密钥不变」，读接口永远只返回掩码。
+    """
+
+    provider: str = Field("deepseek", max_length=50, description="服务商标识（仅作展示）")
+    base_url: str = Field(
+        ..., min_length=1, max_length=255, description="服务地址，如 https://api.deepseek.com"
+    )
+    model: str = Field(..., min_length=1, max_length=100, description="模型名，如 deepseek-chat")
+    api_key: str | None = Field(None, max_length=500, description="API Key；留空表示不修改")
+    vision_enabled: bool = Field(False, description="是否让图片附件按多模态送入")
+    enabled: bool = Field(True, description="该凭证是否启用")
+
+
+class AiGradingSetting(BaseModel):
+    """平台级 AI 批改开关请求体（平台超管）。
+
+    总开关为**平台级**（无按校粒度），因此 `daily_limit` 是唯一的成本刹车。
+    """
+
+    enabled: bool = Field(..., description="AI 批改总开关")
+    auto_publish_excellent: bool = Field(
+        False, description="优秀作品是否自动入库（默认候选制，需教师确认）"
+    )
+    daily_limit: int = Field(..., ge=1, le=100000, description="每日调用次数上限")
+    max_tokens: int = Field(1200, ge=64, le=32000, description="单次调用 max_tokens 上限")
+
+
 # ============ 成绩 ============
 class ScoreCreate(BaseModel):
     student_id: int = Field(..., gt=0)

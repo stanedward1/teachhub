@@ -84,6 +84,21 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE: int = 20 * 1024 * 1024  # 默认 20MB
     ALLOWED_UPLOAD_EXTS: set[str] = ALLOWED_UPLOAD_EXTS
 
+    # ---------------- AI 批改（docs/AI-GRADING-PRD.md） ----------------
+    # 凭证加密主密钥（可选）。留空则由 SECRET_KEY 派生（开箱即用）；
+    # 生产环境建议显式设置，以便日后轮换登录签名密钥时不牵连已存凭证的加解密。
+    AI_CREDENTIAL_KEY: str = ""
+    # 单次模型调用超时（秒）。批改在后台线程执行，不占用学生提交响应。
+    AI_REQUEST_TIMEOUT: int = 60
+    # 每日调用次数上限（成本护栏）。总开关是平台级的，限额是唯一的成本刹车。
+    AI_DEFAULT_DAILY_LIMIT: int = 200
+    # 单次调用 max_tokens 上限（控制单次成本与超长输出）
+    AI_DEFAULT_MAX_TOKENS: int = 1200
+    # 送入模型的输入字符上限（作业要求 + 正文 + 附件合并后截断）
+    AI_MAX_INPUT_CHARS: int = 8000
+    # 单个附件抽取出的文本字符上限
+    AI_MAX_ATTACHMENT_CHARS: int = 6000
+
     # CORS：默认放行本地开发端口，生产通过环境变量收敛（逗号分隔或 JSON 列表）
     CORS_ORIGINS: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",

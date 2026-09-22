@@ -1,6 +1,6 @@
 # TeachHub 数据库 ER 图
 
-> 更新：2026-09-21 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：34 张 ｜ 外键：70 个（模型定义口径）｜ 迁移：28 个 revision（线性单链，head `e2f3a4b5c6d7`）
+> 更新：2026-09-22 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：36 张 ｜ 外键：73 个（模型定义口径）｜ 迁移：29 个 revision（线性单链，head `f3a4b5c6d7e8`）
 
 ## 一、实体关系总览（Mermaid）
 
@@ -58,11 +58,16 @@ erDiagram
     SCHOOLS ||--o{ SETTINGS : "系统设置"
     USERS ||--o{ IMPORT_HISTORY : "导入人"
 
+    %% ============ AI 批改（平台级） ============
+    USERS ||--o{ AI_CREDENTIALS : "最后修改人(updated_by)"
+    SUBMISSIONS ||--o| AI_GRADING_RESULTS : "AI 批改(submission_id, UNIQUE, CASCADE)"
+    SCHOOLS o|--o{ AI_GRADING_RESULTS : "租户归属(school_id)"
+
     %% ============ 审计 ============
     USERS ||--o{ OPERATION_LOGS : "操作人"
 ```
 
-## 二、表清单（按域分组，34 张）
+## 二、表清单（按域分组，36 张）
 
 | 域 | 表名 | 关键字段 | 说明 |
 | --- | --- | --- | --- |
@@ -76,7 +81,7 @@ erDiagram
 | | `assignment_attachments` | assignment_id | 作业附件（一对多） |
 | | `submissions` | assignment_id、student_id | 作业提交 |
 | | `submission_comments` | submission_id、teacher_id、score | 提交点评 |
-| | `excellent_works` | submission_id(唯一)、selected_by | 优秀作品 |
+| | `excellent_works` | submission_id(唯一)、selected_by、source | 优秀作品；`source` 区分来源（`manual` 教师评选 / `ai_recommended` AI 推荐被采纳或自动入库） |
 | | `work_comments` | excellent_id、user_id | 作品评论 |
 | 工作台 | `scores` | student_id、subject、score、exam_name | 成绩 |
 | | `leaves` | student_id、start/end_date、status | 请假 |
@@ -99,13 +104,15 @@ erDiagram
 | | `return_records` | student_id、return_date | 返校记录 |
 | | `performances` | student_id、ptype、points | 表现（积极/消极） |
 | | `student_comments` | student_id、content | 学生评语 |
+| AI 批改 | `ai_credentials` | provider、base_url、model、api_key_encrypted、updated_by | 平台级 AI 服务凭证（**刻意不含 `school_id` 列**：平台资产，跨校共用一套；密钥为 Fernet 密文，读接口只回掩码） |
+| | `ai_grading_results` | submission_id(唯一)、school_id、status、score、is_excellent_candidate | AI 批改结果（一提交一条，重跑覆盖）；`status` = `pending`/`success`/`failed`，与教师评语**并列存储、互不覆盖** |
 | 审计 | `operation_logs` | user_id、action、class_id | 操作审计日志 |
 
 ## 三、外键删除策略分层
 
 MySQL InnoDB 强制外键约束，删除策略已按「关系语义」分层：
 
-### 1. CASCADE（17 个，纯从属关系）
+### 1. CASCADE（18 个，纯从属关系）
 
 从属数据随父记录删除自动级联：
 
@@ -127,6 +134,7 @@ MySQL InnoDB 强制外键约束，删除策略已按「关系语义」分层：
 | `student_profile_tags` | student_id | students |
 | `student_board_history` | student_id | students |
 | `refresh_tokens` | user_id | users |
+| `ai_grading_results` | submission_id | submissions |
 
 ### 2. RESTRICT（默认，归属/操作人关系）
 
@@ -137,6 +145,7 @@ MySQL InnoDB 强制外键约束，删除策略已按「关系语义」分层：
 - `students.school_id` / `students.class_id` → 学生归属
 - `assignments.created_by` / `class_id` → 作业归属
 - `excellent_works.selected_by`、`submission_comments.teacher_id`、`work_comments.user_id` → 操作人
+- `ai_credentials.updated_by`（凭证最后修改的超管）→ 操作人；`ai_grading_results.school_id` → AI 结果租户归属（与其它业务表 `school_id` 同约定，均无 `ondelete`）
 - `talks.teacher_id`、`work_logs.teacher_id`、`class_plans.teacher_id` 等 → 教师归属
 - `weekly_reports.created_by`、`import_history.user_id` → 创建人
 - `schools.created_by` → 学校创建人
@@ -155,4 +164,5 @@ MySQL InnoDB 强制外键约束，删除策略已按「关系语义」分层：
 | --- | --- | --- |
 | 学生账号 ↔ 学生档案 | `users.class_id + name` = `students.class_id + name` | 无外键，通过 `get_student_account()` / `get_student_by_account()` 定位 |
 | 头像 | 存于 `users.avatar` | 学生档案不冗余存储，通过软关联取账号头像 |
-| 平台级全局配置 | `settings.school_id IS NULL` | 唯一约束为 `(school_id, key)`，而 MySQL 唯一索引**不约束 NULL**，因此全局键的去重由应用层保证——统一走 `app/platform_settings.py` 的 `get_global_setting` / `set_global_setting`（先查后写，不直接 INSERT） |
+| 平台级全局配置 | `settings.school_id IS NULL` | 唯一约束为 `(school_id, key)`，而 MySQL 唯一索引**不约束 NULL**，因此全局键的去重由应用层保证——统一走 `app/platform_settings.py` 的 `get_global_setting` / `set_global_setting`（先查后写，不直接 INSERT）。AI 批改的 5 个全局键（`ai_grading_enabled` 等）同样走此路径；且该模块所有查询显式 `skip_tenant_filter`，否则在带租户上下文里读 `NULL` 行会永远查不到 |
+| AI 凭证的作用域 | `ai_credentials` 表**无 `school_id` 列** | 凭证是平台资产、跨校共用一套，**刻意不带 `school_id`**——因此不会被 ORM 租户过滤器命中（`tenant.py` 只收集含 `school_id` 的映射类），在任何租户上下文下都读得到；安全性改由接口依赖 `require_super_admin` 保证。该设计同时绕开「把密钥塞进 `settings` 表」的三个坑：明文返回 / 值 255 容量 / `NULL` 唯一失效 |

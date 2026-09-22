@@ -85,8 +85,13 @@ python -m pytest tests/ -v
 ### 3.3 权限
 
 - 只读接口用 `Depends(get_current_user)`；写接口按角色挂 `Depends(require_teacher)` / `require_school_admin` / `require_super_admin`，学生端写接口挂 `require_student`。
+- **读权限不得比写权限宽**：同一资源的读接口至少要挂与写接口同级的角色依赖。反例（已修）：`routers/workbench/imports.py` 的导入历史读接口一度只挂 `get_current_user`，导致学生能读到含学号的失败明细；现统一为 `dep`（`require_teacher`）。新增「读」接口时对照同资源的「写」接口复核一遍依赖。
+- **平台级配置与凭证不复用 `/api/settings`**：全局配置走 `app/platform_settings.py` + `/api/admin/platform/*`（`require_super_admin`）；敏感凭证（如 AI 的 `api_key`）**单独建表、不进 `settings`**（避免明文返回 / 255 容量 / `NULL` 唯一失效三个坑），密钥用 Fernet 加密入库、读接口只回掩码。
+- **持久化只存在于数据库的敏感值，读接口一律不回显明文**：如 AI 凭证的 `api_key`，保存响应与读接口都只返回掩码（`mask_secret`），审计只记「改了哪些字段」不记值。
 - 任何新增管理端接口**必须**挂 `require_teacher`（教师及以上）；平台级能力（学校开通/启停、跨校概览）挂 `require_super_admin`。
 - **多租户隔离（必须）**：所有涉及租户数据的查询/写入必须带 `school_id`。ORM 层已通过 `app/tenant.py` 全局自动隔离（`do_orm_execute` 注入 `school_id` 过滤 + `before_flush` 回填），平台超管（`school_id=NULL`）不受限；跨校按 ID 访问应返回 404（不泄露存在性）。角色判断用 `permissions.is_any_admin()`（本校全量）/ `is_platform_admin()`（跨校），**不要**直接比较 `user.role == "admin"`。
+- **写入租户表时 `school_id` 由「业务归属」决定，不能只靠 ORM 自动填充**：`before_flush` 仅在租户上下文有 `school_id` 时回填，而**平台超管的上下文 `school_id` 为 NULL** —— 其写入的租户行会落成 `school_id = NULL`，而租户过滤条件是 `school_id = 当前学校`，NULL 匹配不上，于是该行**对所有学校都不可见**。反例（已修）：平台超管「选为优秀」把 `excellent_works.school_id` 写成 NULL，学生端完全看不到这条优秀作品。规则：父资源明确时（提交→作业、评语→提交、互评→作品）**显式**写 `school_id=<父资源>.school_id`。
+- **唯一约束与租户过滤必须同口径**：`excellent_works.submission_id` 这类唯一索引是**全局**的（不随 `school_id` 变化），而应用层「先查后插」的预检走租户过滤 —— 当目标行 `school_id` 为 NULL 或属其他租户时，预检查不到、插入却撞唯一键，用户只能拿到 409「数据冲突：已存在重复记录」且无法自救。规则：**唯一性预检加 `.execution_options(skip_tenant_filter=True)`**，与索引同口径、返回可理解的 400；同时**预检前必须先完成租户可见性与归属校验**（`db.get()` 带过滤天然 404），否则放宽口径会引入越权。参考 `homework_service._find_excellent_of_submission`。
 - 教师班级数据隔离**统一**走 `permissions.get_teacher_class_ids()` / `is_teacher_class_owner()`，这两个函数已支持「班主任 + 科任老师」多教师模型；**不得**直接比较 `Classroom.teacher_id` 做权限判断，否则会漏掉科任老师。
 - **登录/注册限流**：认证入口用 `slowapi` 的 `@limiter.limit("5/minute")`（登录）/ `("10/minute")`（注册）装饰；`main.py` 已挂 `app.state.limiter` 与 `RateLimitExceeded` handler，新增认证端点须沿用该模式。
 
@@ -98,7 +103,8 @@ python -m pytest tests/ -v
 - 确保「迁移链」与「模型 schema」保持一致，避免依赖 `create_all` 兜底而遗漏加列
 - **多租户约束调整**：改唯一约束（如 `settings.key` 全局唯一 → `(school_id, key)` 校内唯一）时，SQLite 不支持 `DROP CONSTRAINT`，需在迁移中**重建表**（新建→拷贝→删除→重命名），参考 `f1a2b3c4d5e6_settings_school_key_unique.py`；MySQL/PostgreSQL 可直接 `drop_constraint` + `create_unique_constraint`。
 - **手动改库须同步 `alembic_version`**：`main.py` 启动自动 `upgrade head`，若先用 SQL 手动改了库再触发迁移会重复执行报错（如 DROP INDEX 1091）。手动改库后需 `UPDATE alembic_version SET version_num='<rev>'` 到对应 revision。
-- **外键删除规则分层**：纯从属关系用 `ondelete="CASCADE"`（作业链、学生业务链，共 17 个）；归属/操作人关系保持 RESTRICT（`teacher_id`/`created_by`/`school_id`/`class_id` 等，共 52 个）；另有 1 个 SET NULL（`refresh_tokens.school_id`，租户归属可空）。模型定义口径合计 70 个外键。应用层 `cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序删除作双保险，与 CASCADE 兼容。
+- **外键删除规则分层**：纯从属关系用 `ondelete="CASCADE"`（作业链、学生业务链，共 18 个，含 `ai_grading_results`→`submissions`）；归属/操作人关系保持 RESTRICT（`teacher_id`/`created_by`/`school_id`/`class_id` 等，共 54 个）；另有 1 个 SET NULL（`refresh_tokens.school_id`，租户归属可空）。模型定义口径合计 73 个外键。应用层 `cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序删除作双保险，与 CASCADE 兼容。
+- **🔴 与 `created_at` 比时间必须用数据库时钟**：本项目时间戳统一由 `server_default=func.now()` 生成（SQLite 为 **UTC**、MySQL 为**库本地时区**），而 Python 的 `date.today()` 取的是**进程本地日期**。两者的时区基准不保证一致（例如 SQLite 下本地 03:20 属于 UTC 前一天），用 `created_at >= 本地今日零点` 会把当天记录整片过滤掉 —— AI 批改的每日限额就曾因此**恒为 0、永不触发**。正确写法是让数据库自己算边界，如 `func.date(Col.created_at) == func.current_date()`（参考 `services/ai_grading.py::today_call_count`）。历史数据 `admin_service.py` 的周统计也有 `date.today()`，改动涉及跨日统计时需一并核对。
 
 ### 3.5 工具函数与辅助
 
@@ -150,9 +156,9 @@ python -m pytest tests/ -v
 - 使用全局 CSS 变量（`--brand`、`--text-*`、`--bg-*` 等）而非硬编码颜色。
 - Element Plus 图标通过 `main.js` 全局注册，页面直接 `<el-icon><Xxx /></el-icon>`。
 - 表单校验：必填字段在提交前显式校验并 `ElMessage` 提示；复杂校验建议上 `el-form` rules。
-- **防重复提交**：写操作复用 `src/composables/useSubmit.js` 的 loading 包裹；网络层 `request.js` 已做并发去重（AbortController + pending Map）。
+- **防重复提交**：写操作在组件内用本地 `saving` ref 实现（`:loading="saving"` 绑到提交按钮，Element Plus 在 loading 期间不可点），**没有**统一 composable；网络层 `request.js` 另做并发去重（同「方法+URL+参数」取消前一个，AbortController + pending Map），两道合起来兜住快速与慢速重复点击。
 - **文件下载**：Excel 等文件导出复用 `src/composables/useDownload.js` 的 `downloadExcel(data, filename)`（内部封装 `Blob → createObjectURL → click → revoke`），不要在页面里重复写这套样板。
-- **通用弹窗**：Excel 批量导入复用 `src/components/ImportDialog.vue`（`v-model` 控制显隐，`importFn` / `templateUrl` 注入业务差异，`@success` 回调刷新列表），不要在页面里重复实现导入弹窗。
+- **通用弹窗**：Excel 批量导入复用 `src/components/ImportDialog.vue`（`v-model` 控制显隐，`importFn` / `templateUrl` / `importType` 注入业务差异，`@success` 回调刷新列表）；弹窗内自带「最近导入记录」（按 `importType` 拉 `GET /api/import-history`，展开可见逐行失败原因），不要在页面里重复实现导入弹窗。
 - **统一体验态（强制约定）**：列表页的「加载 / 空 / 错误」一律用 `src/components/StateView.vue` 接入，**不要再手写 `v-if` 判断或直接用 `el-empty`**。把 `<el-table>`（或自绘列表）包进去，传 `:loading` / `:error` / `:empty` 与 `@retry="load"`：
   ```vue
   <StateView
@@ -174,6 +180,7 @@ python -m pytest tests/ -v
   }
   ```
   **保留 `el-table` 上的 `v-loading`**：骨架屏只在首屏出现，后续刷新靠它反馈。非表格页面（图表 / 画像）可用 `#skeleton` 具名插槽自定义骨架。
+- **AI 批改展示**：**学生端**的 AI 批改意见统一复用 `src/components/AiGradingPanel.vue`（`:ai` 传 `ai_grading` 对象；纯展示、学生口径，不含 `error` / `model` / `excellent_reason`）。**教师端刻意不复用** —— 教师侧 AI 区块带「采纳为优秀 / 重新批改」等交互与教师专属字段，保留各自实现。新增学生端 AI 展示位请复用它，**不要**再内联复制这套模板与样式。
 - **虚拟滚动**：固定行高的长列表用 `src/components/VirtualList.vue`（`:items` + `:item-height` + `:height`，默认插槽作用域为 `{ item, index }`），避免一次性渲染海量行。注意它自任滚动容器，**不要嵌在 `van-pull-refresh` 之类自身依赖滚动位置的容器内**。
 
 ### 4.3 样式系统

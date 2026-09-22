@@ -71,6 +71,19 @@ def unsubmitted_students(
     return homework_service.unsubmitted_students(db, assignment_id, user)
 
 
+@router.post("/assignments/{assignment_id}/ai-grade")
+def ai_grade_assignment(
+    assignment_id: int,
+    user=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """教师手动触发 AI 批改：批改该作业下所有**尚未成功批改**的提交。
+
+    非阻塞：仅投递后台线程池后立即返回；总开关关闭 / 无凭证 / 额度耗尽时 400。
+    """
+    return homework_service.ai_grade_assignment(db, assignment_id, user)
+
+
 @router.get("/submissions/{submission_id}")
 def get_submission(
     submission_id: int,
@@ -79,6 +92,16 @@ def get_submission(
 ):
     """获取提交详情（含完整内容 + 教师点评列表）。"""
     return homework_service.get_submission(db, submission_id, user)
+
+
+@router.post("/submissions/{submission_id}/ai-grade")
+def ai_grade_submission(
+    submission_id: int,
+    user=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """教师手动触发 AI 批改：**单份**提交（已有结果则重跑覆盖）。"""
+    return homework_service.ai_grade_submission(db, submission_id, user)
 
 
 @router.post("/submissions/{submission_id}/comments")

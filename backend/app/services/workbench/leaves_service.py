@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Leave
 from app.pagination import paginate
-from app.schemas import LeaveCreate, LeaveOut, LeaveUpdate
+from app.schemas import LeaveCreate, LeaveUpdate
 from app.services.workbench._common import (
     active_student_id_query,
     apply_student_class_filter,

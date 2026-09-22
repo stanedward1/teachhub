@@ -47,6 +47,9 @@ export const homeworkApi = {
   // 未交名单：该作业下发班级中尚未提交的学生
   unsubmitted: (id) => request.get(`/api/homework/assignments/${id}/unsubmitted`),
   submissionDetail: (id) => request.get(`/api/homework/submissions/${id}`),
+  // AI 批改（教师手动触发）：整份作业批量批改 / 单份提交批改
+  aiGradeAssignment: (id) => request.post(`/api/homework/assignments/${id}/ai-grade`),
+  aiGradeSubmission: (id) => request.post(`/api/homework/submissions/${id}/ai-grade`),
   addSubmissionComment: (id, data) =>
     request.post(`/api/homework/submissions/${id}/comments`, data),
   deleteSubmissionComment: (submissionId, commentId) =>
@@ -228,6 +231,12 @@ export const adminApi = {
   platformOverview: () => request.get('/api/admin/platform/overview'),
   platformRegistration: () => request.get('/api/admin/platform/registration'),
   setPlatformRegistration: (data) => request.put('/api/admin/platform/registration', data),
+  // AI 批改（平台超管专属）：凭证只写不回显，读接口仅返回掩码
+  aiCredential: () => request.get('/api/admin/platform/ai-credential'),
+  setAiCredential: (data) => request.put('/api/admin/platform/ai-credential', data),
+  testAiCredential: (data) => request.post('/api/admin/platform/ai-credential/test', data),
+  aiGrading: () => request.get('/api/admin/platform/ai-grading'),
+  setAiGrading: (data) => request.put('/api/admin/platform/ai-grading', data),
 }
 
 // ============ 文件上传 ============

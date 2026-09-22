@@ -7,7 +7,7 @@
       :loading="loading"
       :error="error"
       :empty="!items.length"
-      :columns="5"
+      :columns="6"
       empty-description="暂无提交记录"
       @retry="load"
     >
@@ -22,6 +22,14 @@
             <el-tag :type="row.is_excellent ? 'success' : 'info'" size="small">
               {{ row.is_excellent ? '优秀作品' : '已提交' }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="AI 批改" width="110">
+          <template #default="{ row }">
+            <el-tag v-if="row.ai_grading_status === 'success'" type="success" size="small">已批改</el-tag>
+            <el-tag v-else-if="row.ai_grading_status === 'pending'" type="warning" size="small">批改中</el-tag>
+            <el-tag v-else-if="row.ai_grading_status === 'failed'" type="info" size="small">未完成</el-tag>
+            <span v-else class="muted">—</span>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="110" align="center">
@@ -70,5 +78,8 @@ onMounted(load)
   text-align: center;
   color: #9ca3af;
   padding: 40px 0;
+}
+.muted {
+  color: #9ca3af;
 }
 </style>

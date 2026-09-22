@@ -10,8 +10,8 @@ from app.deps import (
     require_teacher,
 )
 from app.models import User
-from app.schemas import RegistrationSetting
-from app.services import admin_service
+from app.schemas import AiCredentialSetting, AiGradingSetting, RegistrationSetting
+from app.services import admin_service, ai_admin_service
 
 router = APIRouter(prefix="/api", tags=["系统管理"])
 
@@ -110,3 +110,49 @@ def set_platform_registration(
     db: Session = Depends(get_db),
 ):
     return admin_service.set_platform_registration(db=db, payload=payload, user=user)
+
+
+# ---------------- AI 批改（平台超管专属） ----------------
+# 凭证与批改开关**不得**复用 GET/PUT /api/settings：该接口挂在 admin_dep
+# （= require_school_admin）下且明文返回全部配置行，凭证一旦入表每所学校的
+# 管理员都能读到平台密钥（详见 docs/AI-GRADING-PRD.md §2.3）。
+@router.get("/admin/platform/ai-credential")
+def platform_ai_credential(user=Depends(require_super_admin), db: Session = Depends(get_db)):
+    """读取 AI 服务凭证（**只返回掩码**，不含密钥明文）。"""
+    return ai_admin_service.credential_view(db)
+
+
+@router.put("/admin/platform/ai-credential")
+def set_platform_ai_credential(
+    payload: AiCredentialSetting,
+    user=Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """保存 AI 服务凭证（api_key 留空表示不修改；加密存储）。"""
+    return ai_admin_service.set_credential(db=db, payload=payload, user=user)
+
+
+@router.post("/admin/platform/ai-credential/test")
+def test_platform_ai_credential(
+    payload: AiCredentialSetting | None = None,
+    user=Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """连通性测试：可先用未保存的配置试连，api_key 留空则回退已存密钥。"""
+    return ai_admin_service.test_credential(db=db, payload=payload, user=user)
+
+
+@router.get("/admin/platform/ai-grading")
+def platform_ai_grading(user=Depends(require_super_admin), db: Session = Depends(get_db)):
+    """读取 AI 批改开关（总开关 / 自动入库 / 限额 / 当日用量）。"""
+    return ai_admin_service.grading_setting(db)
+
+
+@router.put("/admin/platform/ai-grading")
+def set_platform_ai_grading(
+    payload: AiGradingSetting,
+    user=Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """保存 AI 批改开关。总开关为平台级单一粒度（无按校开关）。"""
+    return ai_admin_service.set_grading_setting(db=db, payload=payload, user=user)

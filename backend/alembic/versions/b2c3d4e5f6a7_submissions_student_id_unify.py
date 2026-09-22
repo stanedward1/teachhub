@@ -11,7 +11,6 @@ performances 等业务表指向 students.id（学生档案）不一致，导致�
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.

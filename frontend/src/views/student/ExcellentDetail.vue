@@ -30,6 +30,8 @@
           </div>
         </div>
       </div>
+      <!-- AI 批改意见（与教师批改评语并列展示，仅供参考） -->
+      <AiGradingPanel :ai="item.ai_grading" />
       <el-divider />
       <h4>作业内容</h4>
       <Markdown :content="item.submission?.content || ''" />
@@ -66,6 +68,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
+import AiGradingPanel from '../../components/AiGradingPanel.vue'
 import { homeworkApi } from '../../api'
 
 const route = useRoute()

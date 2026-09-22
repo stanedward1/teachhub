@@ -12,6 +12,7 @@
 
 约束：服务函数首参 ``db: Session``，可抛 ``HTTPException``；本模块不 import router。
 """
+import logging
 import os
 
 from fastapi import HTTPException
@@ -22,6 +23,7 @@ from app.audit import batch_student_avatar_map, batch_student_map, audit
 from app.config import settings
 from app.pagination import paginate
 from app.models import (
+    AiGradingResult,
     Assignment,
     AssignmentAttachment,
     Classroom,
@@ -42,6 +44,9 @@ from app.permissions import (
     is_teacher_class_owner,
 )
 from app.utils import to_dict
+from app.services import ai_grading
+
+logger = logging.getLogger("teachhub.homework")
 
 
 # ---------------- 内部辅助 ----------------
@@ -98,6 +103,163 @@ def _sync_attachments(a: Assignment, attachments) -> None:
                 AssignmentAttachment(filename=att["filename"], filepath=att["filepath"])
             )
     _remove_upload_files(removed)
+
+
+def _ai_grading_out(result: AiGradingResult | None, *, for_student: bool = False) -> dict | None:
+    """把 AI 批改结果转成对外结构（无结果返回 None）。
+
+    学生端不返回 `error`：失败原因可能含服务商回执等内部信息，
+    且 PRD §6 F5 要求「处理中 / 失败不暴露内部状态」。
+    """
+    if result is None:
+        return None
+    data = {
+        "status": result.status,
+        "provider": result.provider,
+        "model": result.model,
+        "score": result.score,
+        "summary": result.summary,
+        "strengths": result.strengths,
+        "improvements": result.improvements,
+        "attachment_used": result.attachment_used,
+        "is_excellent_candidate": bool(result.is_excellent_candidate),
+        "excellent_reason": result.excellent_reason,
+        "updated_at": result.updated_at or result.created_at,
+    }
+    if not for_student:
+        data["error"] = result.error
+    return data
+
+
+def _ai_status_map(db: Session, submission_ids: list[int]) -> dict[int, dict]:
+    """批量取 AI 批改状态：``{submission_id: {status, score, is_excellent_candidate}}``。
+
+    一次查询覆盖整页，避免逐行查询造成 N+1；尚无批改结果的提交不出现在 map 中。
+    """
+    if not submission_ids:
+        return {}
+    rows = (
+        db.query(
+            AiGradingResult.submission_id,
+            AiGradingResult.status,
+            AiGradingResult.score,
+            AiGradingResult.is_excellent_candidate,
+        )
+        .filter(AiGradingResult.submission_id.in_(submission_ids))
+        .all()
+    )
+    return {
+        sid: {
+            "status": status,
+            "score": score,
+            "is_excellent_candidate": bool(is_excellent_candidate),
+        }
+        for sid, status, score, is_excellent_candidate in rows
+    }
+
+
+def _discard_ai_grading(db: Session, submission_id: int) -> None:
+    """作废某次提交的 AI 批改结果（学生重交后调用，失败静默）。
+
+    批改结果是**对某一版提交内容**的评价，重交后不再成立；
+    留着会让师生误以为当前内容已被批改过。删除后教师可再次手动触发。
+    """
+    try:
+        db.query(AiGradingResult).filter(
+            AiGradingResult.submission_id == submission_id
+        ).delete()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("作废旧 AI 批改结果失败 submission=%s", submission_id)
+
+
+# ---------------- AI 批改（教师手动触发，§F3） ----------------
+def ai_grade_submission(db: Session, submission_id: int, user: User) -> dict:
+    """教师手动批改**单份**提交（允许对已有结果重跑覆盖）。
+
+    Raises:
+        HTTPException: 提交不存在 404；非本班教师 403。
+    """
+    s = db.get(Submission, submission_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="提交不存在")
+    a = db.get(Assignment, s.assignment_id)
+    _check_teacher_assignment_access(db, user, a)
+
+    outcome = ai_grading.request_grading(
+        db, [submission_id], a.school_id if a else user.school_id
+    )
+    if outcome["queued"] == 0:
+        raise HTTPException(status_code=400, detail=outcome["reason"] or "无法发起批改")
+    audit(db, user, "ai_grade_submission", target=f"提交#{submission_id}")
+    db.commit()
+    return outcome
+
+
+def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
+    """教师手动批改**整个作业**的全部提交（§F3 批量入口）。
+
+    - 只批**尚无成功结果**的提交：已批改的跳过，避免重复点击白白消耗额度；
+      需要重批单份时走 `ai_grade_submission`。
+    - 剩余额度不足时按额度截断，并在返回值里如实回报 `skipped`。
+
+    Returns:
+        ``{queued, skipped, already_graded, reason}``
+    """
+    a = db.get(Assignment, assignment_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    _check_teacher_assignment_access(db, user, a)
+
+    submission_ids = [
+        sid
+        for (sid,) in db.query(Submission.id)
+        .filter(Submission.assignment_id == assignment_id)
+        .order_by(Submission.id)
+        .all()
+    ]
+    if not submission_ids:
+        return {"queued": 0, "skipped": 0, "already_graded": 0, "reason": "该作业暂无提交"}
+
+    graded_ids = {
+        sid
+        for (sid,) in db.query(AiGradingResult.submission_id)
+        .filter(
+            AiGradingResult.submission_id.in_(submission_ids),
+            AiGradingResult.status == "success",
+        )
+        .all()
+    }
+    pending_ids = [sid for sid in submission_ids if sid not in graded_ids]
+    if not pending_ids:
+        return {
+            "queued": 0,
+            "skipped": 0,
+            "already_graded": len(graded_ids),
+            "reason": "全部提交均已批改",
+        }
+
+    outcome = ai_grading.request_grading(db, pending_ids, a.school_id)
+    if outcome["queued"] == 0:
+        # 无法批改（开关关闭 / 无凭证 / 额度耗尽）时如实报错，不发审计
+        raise HTTPException(status_code=400, detail=outcome["reason"] or "无法发起批改")
+
+    audit(
+        db,
+        user,
+        "ai_grade_assignment",
+        target=f"作业#{assignment_id}",
+        detail=f"AI 批改 {outcome['queued']} 份",
+        class_id=a.class_id,
+    )
+    db.commit()
+    return {
+        "queued": outcome["queued"],
+        "skipped": outcome["skipped"] + len(graded_ids),
+        "already_graded": len(graded_ids),
+        "reason": outcome["reason"],
+    }
 
 
 # ---------------- 作业任务 ----------------
@@ -281,12 +443,18 @@ def list_submissions(db: Session, assignment_id: int, user: User) -> dict:
         .all()
     }
     items = []
+    ai_map = _ai_status_map(db, sid_list)
     for s in rows:
         d = to_dict(s)
         info = stu_map.get(s.student_id)
         d["student_name"] = info["name"] if info else None
         d["student_avatar"] = avatar_map.get(s.student_id)
         d["is_excellent"] = s.id in excellent_ids
+        # AI 批改状态：教师端「AI 批改」按钮的结果反馈（批改中 / 已批改 / 未批改）
+        ai = ai_map.get(s.id) or {}
+        d["ai_grading_status"] = ai.get("status")
+        d["ai_score"] = ai.get("score")
+        d["ai_excellent_candidate"] = ai.get("is_excellent_candidate", False)
         items.append(d)
     return {"items": items, "total": len(items)}
 
@@ -362,6 +530,8 @@ def get_submission(db: Session, submission_id: int, user: User) -> dict:
     stu = db.get(Student, s.student_id)
     d["student_name"] = stu.name if stu else None
     d["student_avatar"] = get_student_avatar(db, stu)
+    # 作业标题：学生端详情页标题与教师端面包屑都要用，缺了会退化成「作业提交」占位文案
+    d["assignment_title"] = a.title if a else None
     # 评优信息：是否优秀 + 评选评语（note），供学生端详情展示
     excellent = (
         db.query(ExcellentWork).filter(ExcellentWork.submission_id == submission_id).first()
@@ -382,6 +552,14 @@ def get_submission(db: Session, submission_id: int, user: User) -> dict:
         cd["teacher_name"] = t.name if t else None
         comment_items.append(cd)
     d["comments"] = comment_items
+    # AI 批改结果与教师评语并列展示、互不覆盖；学生侧仅本人可见
+    # （本函数上方已校验：学生只能访问自己的提交）
+    ai_result = (
+        db.query(AiGradingResult)
+        .filter(AiGradingResult.submission_id == submission_id)
+        .first()
+    )
+    d["ai_grading"] = _ai_grading_out(ai_result, for_student=(user.role == "student"))
     return d
 
 
@@ -405,6 +583,8 @@ def add_submission_comment(db: Session, submission_id: int, payload: dict, user:
     c = SubmissionComment(
         submission_id=submission_id,
         teacher_id=user.id,
+        # 同 mark_excellent：归属由「提交所属学校」决定，避免平台超管操作落成 NULL
+        school_id=s.school_id,
         content=content,
         score=score,
     )
@@ -470,6 +650,10 @@ def submit(db: Session, assignment_id: int, payload: dict, user: User) -> dict:
         existing.filename = filename or existing.filename
         db.commit()
         db.refresh(existing)
+        # AI 批改是教师手动触发的（§F3），提交接口不再外呼；但学生重交后旧结果已
+        # 不再对应当前内容 —— 留着会让师生看到「已批改」，实际批的是旧版本。
+        # 因此重交即作废旧结果，教师可再次点击「AI 批改」重新批改。
+        _discard_ai_grading(db, existing.id)
         return to_dict(existing)
 
     s = Submission(
@@ -482,6 +666,7 @@ def submit(db: Session, assignment_id: int, payload: dict, user: User) -> dict:
     db.add(s)
     db.commit()
     db.refresh(s)
+    # 提交接口不做任何 AI 外呼：批改由教师在「上机作业管理」手动触发（§F3）
     return to_dict(s)
 
 
@@ -511,16 +696,40 @@ def my_submissions(db: Session, user: User) -> dict:
         }
         if sub_ids else set()
     )
+    # AI 批改状态（学生端列表展示「批改中 / 已批改」）
+    ai_map = _ai_status_map(db, sub_ids)
     items = []
     for s in rows:
         d = to_dict(s)
         d["assignment_title"] = assigns.get(s.assignment_id)
         d["is_excellent"] = s.id in excellent_ids
+        d["ai_grading_status"] = (ai_map.get(s.id) or {}).get("status")
         items.append(d)
     return {"items": items, "total": len(items)}
 
 
 # ---------------- 优秀作品 ----------------
+def _find_excellent_of_submission(db: Session, submission_id: int) -> ExcellentWork | None:
+    """按 `submission_id` 查优秀作品行，**忽略租户过滤**。
+
+    为什么必须忽略租户过滤：`excellent_works.submission_id` 上的唯一索引是**全局**的，
+    不随 `school_id` 变化。若「是否已入选」的预检走租户过滤，则
+    `school_id` 为 NULL 或属于其他学校的行查不出来，插入时却照样撞唯一键 ——
+    用户拿到的是 409「数据冲突：已存在重复记录」这种无法自救的提示，
+    而不是「该作品已入选优秀」这种可理解的提示。
+    预检与唯一索引必须同口径，故这里统一用 `skip_tenant_filter`。
+
+    调用方务必要先完成**租户可见性 + 归属**校验（`db.get(Submission, ...)` 是带租户过滤的），
+    本函数只解决「看不见却撞键」的口径问题，不承担鉴权。
+    """
+    return (
+        db.query(ExcellentWork)
+        .execution_options(skip_tenant_filter=True)
+        .filter(ExcellentWork.submission_id == submission_id)
+        .first()
+    )
+
+
 def mark_excellent(db: Session, submission_id: int, payload: dict, user: User) -> dict:
     s = db.get(Submission, submission_id)
     if not s:
@@ -529,10 +738,20 @@ def mark_excellent(db: Session, submission_id: int, payload: dict, user: User) -
     _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
     # 退学/毕业限制
     _ensure_submission_operable(db, s)
-    existing = db.query(ExcellentWork).filter(ExcellentWork.submission_id == submission_id).first()
-    if existing:
+    if _find_excellent_of_submission(db, submission_id):
         raise HTTPException(status_code=400, detail="该作品已入选优秀")
-    e = ExcellentWork(submission_id=submission_id, selected_by=user.id, note=payload.get("note", ""))
+    e = ExcellentWork(
+        submission_id=submission_id,
+        selected_by=user.id,
+        # 归属取「提交所属学校」而非操作者：平台超管的 school_id 为 NULL，
+        # 交给 ORM 自动填充会落成 NULL —— 该行随后对**所有**学校都不可见
+        # （列表/详情/学生端全部查不到），而唯一索引仍会拦住重复插入，
+        # 形成「看不见却撞键」的死局。写入方的 school_id 必须由业务归属决定。
+        school_id=s.school_id,
+        note=payload.get("note", ""),
+        # 教师确认 AI 推荐时标记来源，便于区分人工评选与 AI 推荐（PRD §6 F4）
+        source="ai_recommended" if payload.get("from_ai") else "manual",
+    )
     db.add(e)
     audit(db, user, "mark_excellent", target=f"优秀-提交#{submission_id}", student_id=s.student_id)
     db.commit()
@@ -541,15 +760,17 @@ def mark_excellent(db: Session, submission_id: int, payload: dict, user: User) -
 
 
 def unmark_excellent(db: Session, submission_id: int, user: User) -> dict:
-    e = db.query(ExcellentWork).filter(ExcellentWork.submission_id == submission_id).first()
+    # 先做租户可见性 + 归属校验（`db.get(Submission)` 带租户过滤，跨校直接 404），
+    # 再以全局口径取优秀作品行 —— 顺序不能反，否则「查不到提交」会绕过权限校验。
+    s = db.get(Submission, submission_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="提交不存在")
+    _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
+    _ensure_submission_operable(db, s)
+    e = _find_excellent_of_submission(db, submission_id)
     if e:
-        # 教师只能操作自己班级的提交 + 退学/毕业限制
-        s = db.get(Submission, submission_id)
-        if s:
-            _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
-            _ensure_submission_operable(db, s)
         db.delete(e)
-        audit(db, user, "unmark_excellent", target=f"取消优秀-提交#{submission_id}", student_id=s.student_id if s else None)
+        audit(db, user, "unmark_excellent", target=f"取消优秀-提交#{submission_id}", student_id=s.student_id)
         db.commit()
     return {"ok": True}
 
@@ -652,6 +873,12 @@ def get_excellent(db: Session, excellent_id: int, user: User) -> dict:
             t = db.get(User, tc.teacher_id)
             tcd["teacher_name"] = t.name if t else None
             teacher_comments.append(tcd)
+    # AI 批改意见：优秀作品详情页同样展示（与提交详情同口径；学生侧不返回 error）
+    ai_result = None
+    if s:
+        ai_result = (
+            db.query(AiGradingResult).filter(AiGradingResult.submission_id == s.id).first()
+        )
     return {
         "id": e.id,
         "note": e.note,
@@ -664,16 +891,24 @@ def get_excellent(db: Session, excellent_id: int, user: User) -> dict:
         "class_name": cls.name if cls else None,
         "comments": comment_items,
         "teacher_comments": teacher_comments,
+        "ai_grading": _ai_grading_out(ai_result, for_student=(user.role == "student")),
     }
 
 
 def add_comment(db: Session, excellent_id: int, payload: dict, user: User) -> dict:
-    if not db.get(ExcellentWork, excellent_id):
+    ew = db.get(ExcellentWork, excellent_id)
+    if not ew:
         raise HTTPException(status_code=404, detail="作品不存在")
     content = (payload.get("content") or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="评论内容不能为空")
-    c = WorkComment(excellent_id=excellent_id, user_id=user.id, content=content)
+    c = WorkComment(
+        excellent_id=excellent_id,
+        user_id=user.id,
+        # 同上：归属继承作品行，平台超管互评时不会落成 NULL
+        school_id=ew.school_id,
+        content=content,
+    )
     db.add(c)
     db.commit()
     db.refresh(c)

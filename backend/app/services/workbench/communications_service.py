@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Communication
 from app.pagination import paginate
-from app.schemas import CommunicationCreate, CommunicationOut
+from app.schemas import CommunicationCreate
 from app.services.workbench._common import (
     active_student_id_query,
     apply_student_class_filter,

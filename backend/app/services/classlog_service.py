@@ -26,7 +26,6 @@ from app.audit import (
 )
 from app.models import (
     Activity,
-    ClassPlan,
     Leave,
     Performance,
     ReturnRecord,
@@ -35,7 +34,6 @@ from app.models import (
     Student,
     StudentComment,
     Talk,
-    TeacherPlan,
     User,
     WorkLog,
 )
