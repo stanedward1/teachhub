@@ -425,6 +425,54 @@ def _submission_changed(db: Session, submission: Submission, fingerprint: str) -
     return _content_fingerprint(submission) != fingerprint
 
 
+_TRUNCATION_RETRY_FACTOR = 3
+
+
+def _call_model(cred, messages: list[dict], max_tokens: int) -> dict:
+    """调用模型；输出被截断（含正文被思考挤空）时用更大预算重试**一次**。
+
+    推理模型下，思考 token 与正文共用 max_tokens 预算，极端情况下正文仍可能被挤空
+    （finish_reason == "length" 但 content 为空，或 content 非空但被截断）。此时用更大
+    预算重试一次，可能拿到完整正文；超过上限（AI_MAX_TOKENS_CEILING）则不再放大。
+    """
+    def invoke(budget: int) -> dict:
+        return chat_completion(
+            base_url=cred.base_url,
+            api_key=decrypt_secret(cred.api_key_encrypted),
+            model=cred.model,
+            messages=messages,
+            max_tokens=budget,
+            thinking=settings.AI_THINKING_MODE or None,
+            reasoning_effort=settings.AI_REASONING_EFFORT or None,
+        )
+
+    bigger = min(max_tokens * _TRUNCATION_RETRY_FACTOR, settings.AI_MAX_TOKENS_CEILING)
+
+    try:
+        response = invoke(max_tokens)
+    except AiClientError as exc:
+        # 正文被思考挤空（finish_reason == length 但 content 为空）属可重试的截断
+        if getattr(exc, "truncated", False) and bigger > max_tokens:
+            logger.warning(
+                "AI 批改输出被截断（正文为空），加大预算重试 max_tokens=%s→%s",
+                max_tokens,
+                bigger,
+            )
+            return invoke(bigger)
+        raise
+
+    # 正文非空但仍被 length 截断（JSON 可能不完整）→ 用更大预算重试一次，
+    # 仅当重试拿到非空正文才采纳，否则保留原结果交给诚实性守卫判 failed。
+    if response.get("finish_reason") == "length" and bigger > max_tokens:
+        logger.warning(
+            "AI 批改输出被截断，加大预算重试 max_tokens=%s→%s", max_tokens, bigger
+        )
+        retry = invoke(bigger)
+        if (retry.get("content") or "").strip():
+            return retry
+    return response
+
+
 def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     """执行一次批改并落库。
 
@@ -507,13 +555,7 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     db.commit()
 
     try:
-        response = chat_completion(
-            base_url=cred.base_url,
-            api_key=decrypt_secret(cred.api_key_encrypted),
-            model=cred.model,
-            messages=messages,
-            max_tokens=get_ai_max_tokens(db),
-        )
+        response = _call_model(cred, messages, get_ai_max_tokens(db))
     except AiClientError as exc:
         # 降级：提交早已成功，这里只把失败原因记给教师看
         result.status = "failed"
@@ -556,7 +598,7 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
             raw_response=response["content"],
             error=(
                 "模型输出被截断（超出单次调用上限），未生成完整批改，请调高平台设置中的"
-                "「单次调用 max_tokens」后重新批改"
+                "「单次调用 max_tokens」后重新批改（可尝试关闭模型思考模式或调高单次调用 max_tokens）"
                 if truncated
                 else "模型返回内容不是预期的 JSON 结构，未生成完整批改，请重新批改或更换模型"
             ),
@@ -564,7 +606,10 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         )
         db.commit()
         logger.warning(
-            "AI 批改结果不完整，标记 failed submission=%s truncated=%s", submission_id, truncated
+            "AI 批改结果不完整，标记 failed submission=%s truncated=%s reasoning_tokens=%s",
+            submission_id,
+            truncated,
+            response.get("reasoning_tokens"),
         )
         return result
 

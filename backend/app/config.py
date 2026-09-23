@@ -92,8 +92,18 @@ class Settings(BaseSettings):
     AI_REQUEST_TIMEOUT: int = 60
     # 每日调用次数上限（成本护栏）。总开关是平台级的，限额是唯一的成本刹车。
     AI_DEFAULT_DAILY_LIMIT: int = 200
-    # 单次调用 max_tokens 上限（控制单次成本与超长输出）
-    AI_DEFAULT_MAX_TOKENS: int = 1200
+    # 单次调用 max_tokens 上限（控制单次成本与超长输出）。
+    # 推理模型（如 deepseek-flash）的思考 token 与正文 content 共用同一 max_tokens 预算，
+    # 思考会挤占正文空间；批改已默认关闭思考（见 AI_THINKING_MODE），此处 2048 给正文留足余量。
+    AI_DEFAULT_MAX_TOKENS: int = 2048
+    # 思考模式开关：下发到请求体 ``thinking.type``；``disabled`` 关闭思考
+    # （批改是有界抽取类任务，不需要长思考，且思考会挤占正文预算）。
+    # 空串 = 不发送该字段，交由服务商默认行为。
+    AI_THINKING_MODE: str = "disabled"
+    # 思考强度：下发 ``reasoning_effort``（low/high/max）；空串 = 不发送，交由服务商默认。
+    AI_REASONING_EFFORT: str = ""
+    # 截断重试时单次 max_tokens 的上限，防止重试把成本放大到不可控。
+    AI_MAX_TOKENS_CEILING: int = 8192
     # 送入模型的输入字符上限（作业要求 + 正文 + 附件合并后截断）
     AI_MAX_INPUT_CHARS: int = 8000
     # 单个附件抽取出的文本字符上限
