@@ -1,6 +1,6 @@
 # TeachHub API 接口文档
 
-> 更新：2026-09-22 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
+> 更新：2026-09-23 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
 >
 > 认证方式：请求头 `Authorization: Bearer <token>`（登录/注册/注册开关状态/学校下拉/班级下拉/刷新令牌/登出/编程练习无需认证）。
 > 令牌双轨：登录返回的访问令牌字段名为 `token`（短期有效，用于鉴权），另有 `refresh_token`（长期有效，用于换取新令牌对，详见「一、认证」末段）。
@@ -240,7 +240,7 @@
 >
 > **缺省值取向按功能分别约定**：学生自助注册 `allow_registration` 缺省 **开**（兼容引入开关之前的既有安装）；AI 批改相关开关缺省**一律关**（新功能默认不产生费用、不改动既有流程）。
 >
-> AI 批改相关键：`ai_grading_enabled`（平台级总开关，缺省关，关闭时**零外呼**且**触发接口返回 400**）、`ai_auto_publish_excellent`（优秀作品自动入库，缺省关＝推荐仅作候选待教师确认）、`ai_auto_publish_owner`（开启自动入库的超管 id，自动入库时计入 `excellent_works.selected_by`）、`ai_daily_call_limit`（每日调用上限，**平台级唯一成本刹车**，缺省 200）、`ai_max_tokens`（单次 max_tokens，缺省 1200）。
+> AI 批改相关键：`ai_grading_enabled`（平台级总开关，缺省关，关闭时**零外呼**且**触发接口返回 400**）、`ai_auto_publish_excellent`（优秀作品自动入库，缺省关＝推荐仅作候选待教师确认）、`ai_auto_publish_owner`（开启自动入库的超管 id，自动入库时计入 `excellent_works.selected_by`）、`ai_daily_call_limit`（每日调用上限，**平台级唯一成本刹车**，缺省 200）、`ai_max_tokens`（单次 max_tokens，缺省 **2048**）。⚠️ **推理模型的思考 token 与正文共用这份预算**：`deepseek-flash` 等推理模型思考模式默认打开，预算偏小时会返回「`finish_reason=length` 且正文为空」；故批改侧显式下发`thinking.type=disabled`（配置项 `AI_THINKING_MODE`），并带一次截断重试（`min(max_tokens×3, AI_MAX_TOKENS_CEILING)`）。另：上表「配置默认值」只在 `settings` 表无对应行时生效 —— **DB 行优先**，改 `config.py` 不会影响已存 `ai_max_tokens` 的部署。
 >
 > **AI 批改触发点**：**仅** `POST /api/homework/assignments/{id}/ai-grade` 与 `POST /api/homework/submissions/{id}/ai-grade`
 > （教师+，班级归属校验）。学生提交接口 `/assignments/{id}/submissions` **不做任何 AI 调用**。

@@ -1,6 +1,6 @@
 # TeachHub 架构设计文档
 
-> 版本：2.8 ｜ 更新：2026-09-22 ｜ 适用对象：后端 / 前端 / 测试 / 运维
+> 版本：2.9 ｜ 更新：2026-09-23 ｜ 适用对象：后端 / 前端 / 测试 / 运维
 
 ## 1. 项目定位
 
@@ -31,9 +31,10 @@ TeachHub 是一套面向中职学校的「教学 + 班主任一体化工作平�
 | 构建 | Vite | 5.4 | 开发热更新 + 生产构建 |
 | Markdown | marked + DOMPurify | 12 | 作业正文/日志渲染 + XSS 防护 |
 | Excel | openpyxl | 3.1 | 导入/导出 |
+| AI 批改 | httpx + cryptography + python-docx / pypdf | — | OpenAI 兼容 Chat Completions；凭证 Fernet 加密；附件文本解析 |
 | 代码规范 | ESLint + Prettier | 10 / 3 | flat config + 格式化 |
 | 测试 | pytest | — | 后端自动化测试 |
-| 部署 | Docker + Nginx | — | 多阶段镜像 + 静态托管 + 反代 |
+| 部署 | 一键脚本（`start.sh` / `stop.sh`） | — | **线上形态**：后端 `run.py` :8080 + 前端 Vite :5173（无 Docker / Nginx）；仓库另附 Docker / Nginx 可选方案 |
 
 ## 3. 目录结构
 
@@ -111,8 +112,10 @@ teachhub/
 ├── frontend/
 │   ├── src/
 │   │   ├── api/               # axios 封装 + 各域 API 函数
+│   │   │   ├── request.js     # axios 实例：令牌注入 + 401 单飞静默刷新 + 同键去重 + 路由切换撤销在途请求
 │   │   │   └── index.js       # 所有 API 接口定义
 │   │   ├── router/            # 路由 + 角色守卫（四角色 + 强制改密）
+│   │   ├── utils/             # 认证工具（auth.js：setAuth/clearAuth/getToken/角色判断）
 │   │   ├── stores/            # Pinia store（auth）
 │   │   ├── layout/            # StudentLayout / AdminLayout（可折叠外壳）
 │   │   │   └── admin/         #   AdminLayout 子件：AdminSidebar / AdminHeader / menuConfig.js
@@ -125,12 +128,18 @@ teachhub/
 │   │       └── scores/        #   Scores 子件：成绩分析 / 录入弹窗
 │   ├── vite.config.js         # dev 代理 /api、/uploads → 8080
 │   ├── eslint.config.js       # ESLint 10（flat config）
-│   ├── Dockerfile             # 前端镜像（Node 构建 + Nginx 托管）
-│   ├── nginx.conf             # Nginx 静态托管 + 反代后端
+│   ├── Dockerfile             # 前端镜像（Node 构建 + Nginx 托管；**线上未采用该形态**）
 │   └── package.json
-├── docs/                      # 本文档集
-├── docker-compose.yml         # 一键编排后端 + 前端
+├── docs/                      # 本文档集（架构 / 接口 / ER / 规范 / 需求与技术方案 / 变更日志）
+├── scripts/                   # 运维与造数脚本（班主任一致性诊断 / 作业与班级假数据）
+├── docker-compose.yml         # 一键编排后端 + 前端（可选方案，线上未采用）
+├── start.sh / stop.sh         # 一键启动 / 停止（后端 :8080 + 前端 Vite :5173）
+├── commitlint.config.cjs      # 提交信息规范；.lintstagedrc.json 暂存文件校验规则
 └── README.md
+
+> ℹ️ **Git 钩子**：`commitlint.config.cjs` / `.lintstagedrc.json` 与 `.husky` 依赖均在仓库内，
+> 但 **`.husky/` 钩子目录当前未纳入版本控制**（`git config core.hooksPath` 指向 `.husky/_`），
+> 需在仓库根执行一次 `npm install` 生成后才生效。
 ```
 
 ## 4. 权限模型
@@ -274,7 +283,15 @@ teachhub/
 浏览器 → Vite(:5173) ──/api,/uploads──▶ FastAPI(:8080) ──▶ MySQL(teachhub)
 ```
 
-### Docker 部署（推荐）
+### 线上当前形态（实际）
+```
+浏览器 → Vite 开发服务器(:5173，server.proxy 转发 /api、/uploads) ──▶ FastAPI(:8080) ──▶ MySQL(teachhub)
+```
+- 由仓库根 `start.sh` 拉起：后端 `python run.py`（:8080）+ 前端 `npm run dev -- --host 0.0.0.0`（:5173）
+- **无 Docker、无 Nginx**；`frontend/nginx.conf` 已删除
+- 因不再记录客户端 IP，`vite.config.js` 的 `server.proxy` **刻意未开 `xfwd`**；若日后需要还原客户端 IP，改回该处即可
+
+### Docker 部署（仓库自带可选方案，线上未采用）
 ```
 docker compose up -d --build
 浏览器 → Nginx(:80，frontend 容器)
@@ -338,3 +355,9 @@ docker compose up -d --build
 | 注册开关默认值 | 配置缺失时视为「开放注册」 | 引入开关不改变既有安装行为，避免升级即停摆 |
 | 工作台路由组织 | `routers/workbench/` 子包按资源域拆分 | 单文件 1374 行难维护；拆分后对外路径与行为完全不变 |
 | 可观测性 | 自研中间件 + `/metrics`，零第三方依赖 | 单实例部署零成本接入 Prometheus；多副本再换共享计数 |
+| AI 凭证存储 | 专用 `ai_credentials` 表（**无 `school_id`**） | 绕过「塞进 `settings`」的三个坑：明文返回 / 值 255 容量 / `NULL` 唯一失效；安全性改由 `require_super_admin` 保证 |
+| AI 批改触发 | **教师手动**（不做学生提交自动批改） | 成本可控、外发时机可控；提交链路上零 AI 调用，AI 不可用不影响交作业 |
+| 推理模型调用 | **显式关闭思考**（`thinking.type=disabled`） | 思考 token 与正文共用 `max_tokens`，开启会把预算吃光导致正文为空（线上事故）；门控于 `base_url` 含 `deepseek` |
+| 重复内容的成本 | 靠**上游前缀缓存**，不靠「少发」 | 批改无状态，任务附件必然随每份提交重复送入；把稳定内容放消息最前即可命中 DeepSeek 自动前缀缓存（1/10~1/50 计价）。⚠️ 依赖**官方直连端点**，中转/聚合平台返回 `cached_tokens: 0` |
+| 任务附件纳入批改 | 读 `assignment_attachments`，但设预算与名额下限 | 上机任务常把要求只写在附件里；文本限 `AI_MAX_INPUT_CHARS` 的 25%，图片**至少为学生材料保留 1 个名额**，防附件把学生内容挤掉 |
+| 附件抽取缓存 | 按 `(路径, mtime_ns, size, vision_enabled, 配置指纹)` 缓存，**默认关闭** | 任务附件在一个班内被抽 N 次 → 只解析 1 次；学生提交附件每份不同，开缓存零收益还占内存 |

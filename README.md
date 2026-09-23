@@ -9,8 +9,8 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | 文档 | 说明 |
 | ---- | ---- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、可观测性、设计决策 |
-| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（145 条业务接口 + 运维端点，方法 + 路径 + 权限 + 约定） |
-| [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 36 张表、外键删除策略分层、软关联说明 |
+| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（**145 条业务接口 + 8 条运维端点**，方法 + 路径 + 权限 + 约定） |
+| [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 **37 张表**、外键删除策略分层、软关联说明 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、权限与多租户隔离规范、Git 规范、测试规范、发布流程 |
 
 ## 核心特性
@@ -98,10 +98,10 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 ### 🤖 AI 作业批改与优秀作品推荐（平台级）
 - **平台统一接入**：平台超管在「系统 → 平台设置」配置第三方大模型凭证（兼容 OpenAI Chat Completions 协议，如 DeepSeek）；密钥 **Fernet 加密入库、只写不回显**（读接口仅回掩码），支持「先测后存」的连通性测试
 - **平台级总开关**（默认关闭）：关闭时**零外呼**；**批改由教师手动触发** —— 在「上机作业管理」中点击作业行「审阅」旁的 **「AI 批改」** 即可批量批改该作业下尚未批改的提交（已批改的自动跳过、额度不足按额度截断）；提交审阅列表与提交详情页还可对**单份**提交发起或重跑批改。**学生提交作业不产生任何 AI 调用**
-- **附件纳入批改**：文本型附件（txt/md/代码/docx/pdf）自动抽取正文；图片按所配模型能力走多模态（base64），解析失败降级为「未参与批改」
+- **附件纳入批改**：**教师任务附件**（上机任务常把要求只写在附件里，`description` 留空）与**学生提交附件**两类均纳入 —— 文本型附件（txt/md/代码/docx/pdf）自动抽取正文；图片按所配模型能力走多模态（base64），解析失败降级为「未参与批改」。任务附件文本设有输入预算上限，且**至少为学生材料保留 1 个图片名额**（防「老师传 6 张参考图 → 学生交的一张都进不去」）
 - **结果对教师与学生可见**：教师端提交详情展示分数/总评/亮点/改进建议；学生端**三处**展示 AI 意见——「我的提交详情」（**仅本人**，读他人提交 403）、「作业详情（教师反馈）」、「**优秀作品详情**」（该页同校可见，AI 意见随作品一并公开）；均标注「AI 生成，仅供参考，以教师评语为准」，复用同一纯展示面板
 - **优秀作品推荐**：AI 判定可作范例时给出候选与理由，**默认需教师确认采纳**；可配置为**自动入库**（开启需显著确认），`source` 记 `ai_recommended`、`selected_by` 记开启者，可复用撤销评选链路回收
-- **成本护栏**：平台级每日调用上限（默认 200）+ 单次 max_tokens 上限（默认 1200），达上限后触发接口直接返回 400 且不再外呼；超管可实时查看当日用量
+- **成本护栏**：平台级每日调用上限（默认 200）+ 单次 max_tokens 上限（默认 2048），达上限后触发接口直接返回 400 且不再外呼；超管可实时查看当日用量。⚠️ 实际生效值取自 `settings` 表的全局行（**DB 行优先于配置默认值**），详见「配置参考」
 - **降级彻底**：未配置凭证 / 关闭开关 / 超时 / 5xx / 超限 / 附件解析失败 —— 任一情形学生提交照常成功，且**不向学生暴露任何 AI 错误**；学生重交时旧批改结果自动作废，避免出现与当前内容不符的评价
 
 ### 🖼️ 图文混排与详情纵览
@@ -132,7 +132,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | Excel 处理 | openpyxl | 3.1 |
 | AI 批改 | httpx（OpenAI 兼容接口）+ cryptography（Fernet）+ python-docx / pypdf（附件解析） | — |
 | 测试 | pytest + FastAPI TestClient | — |
-| 部署 | Docker + Nginx | — |
+| 部署 | 一键脚本 `start.sh` / `stop.sh`（后端 `run.py` :8080 + 前端 Vite :5173）；仓库另附 Docker / Nginx 可选方案 | — |
 
 ## 项目结构
 
@@ -157,7 +157,7 @@ teachhub/
 │   │   ├── observability.py    # 可观测性：访问日志中间件 + /metrics（Prometheus）
 │   │   ├── seed.py             # 假数据种子（默认校 + 第二校，多租户）
 │   │   ├── cleanup.py          # 级联清理（purge_student_data / purge_user_data）
-│   │   ├── models/             # 数据模型（按域分组，36 张表）
+│   │   ├── models/             # 数据模型（按域分组，37 张表）
 │   │   │   ├── user.py         #   User
 │   │   │   ├── school.py       #   School / Classroom / ClassTeacher / Student
 │   │   │   ├── refresh_token.py #  RefreshToken（刷新令牌：轮换 + 撤销，仅存 sha256 摘要）
@@ -183,7 +183,7 @@ teachhub/
 │   │       ├── mobile.py       #   移动端轻量接口
 │   │       ├── admin.py        #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览 / 平台注册开关 / AI 凭证与批改开关
 │   │       └── uploads.py      #   通用文件上传
-│   ├── alembic/                # 数据库迁移（schema 唯一来源，29 个 revision，head f3a4b5c6d7e8）
+│   ├── alembic/                # 数据库迁移（schema 唯一来源，30 个 revision，head a9b8c7d6e5f4）
 │   ├── logs/                   # 运行日志（teachhub.log，按天滚动保留 30 天）
 │   ├── tests/                  # pytest 自动化测试（含多租户隔离）
 │   ├── pytest.ini              # pytest 配置（testpaths = tests）
@@ -210,16 +210,15 @@ teachhub/
 │   │   └── views/              # 页面（student/ 9 个 + admin/ 29 个，含学校管理、平台设置；Students/Scores 页内子组件见 admin/students/、admin/scores/）
 │   ├── vite.config.js          # /api 与 /uploads 代理 + 构建优化
 │   ├── eslint.config.js        # ESLint 10（flat config）
-│   ├── Dockerfile              # 前端镜像（Node 构建 + Nginx 托管）
-│   ├── nginx.conf              # Nginx 配置（静态托管 + 反代后端）
+│   ├── Dockerfile              # 前端镜像（Node 构建 + Nginx 托管；**线上未采用该形态**，见「生产环境部署」）
 │   └── package.json
-├── docs/                       # 架构设计 / 接口 / ER 图 / 开发规范 / 变更日志
-├── .husky/                     # Git hooks（pre-commit 跑 lint-staged；commit-msg 跑 commitlint）
-├── commitlint.config.cjs       # 提交信息规范（Conventional Commits）
-├── .lintstagedrc.json          # 暂存文件 lint/格式化规则
-├── .gitattributes              # 换行符约定（.husky/* 强制 LF）
-├── docker-compose.yml          # 一键编排后端 + 前端
-├── start.sh                    # 一键启动脚本（Linux/macOS 本机）
+├── docs/                       # 架构设计 / 接口 / ER 图 / 开发规范
+├── scripts/                    # 运维与数据脚本（fix_head_teacher_class 班主任一致性诊断 / seed_homework、seed_liao_class 造数）
+├── commitlint.config.cjs       # 提交信息规范（Conventional Commits；type 限 feat/fix/refactor/docs/chore/test/perf/build/ci，scope 限 backend/frontend/docs/deps）
+├── .lintstagedrc.json          # 暂存文件 lint/格式化规则（frontend/src 下 js/vue 跑 eslint --fix + prettier --write）
+├── .gitattributes              # 换行符约定
+├── docker-compose.yml          # 一键编排后端 + 前端（可选方案，线上未采用）
+├── start.sh                    # 一键启动脚本（Linux/macOS 本机，后端 :8080 + 前端 Vite :5173）
 ├── stop.sh                     # 一键停止脚本（跨平台：按 PID/端口清理前后端进程）
 └── README.md
 ```
@@ -365,6 +364,13 @@ npm run dev
 ---
 
 ## 生产环境部署
+
+> ℹ️ **本项目当前线上形态（重要）**：**无 Docker、无 Nginx** ——
+> 后端 `python run.py`（:8080），前端 `npm run dev -- --host 0.0.0.0`（**Vite 开发服务器**，:5173），
+> 由仓库根 `start.sh` 一键拉起（见 `start.sh` 前端启动段）。
+> 下方 Docker / Nginx 章节是仓库附带的**可选部署方案**（`docker-compose.yml`、`backend/Dockerfile`、`frontend/Dockerfile` 均在仓库内），
+> 若改用该方案需一并调整；**两套形态不可混用**。
+> 另：`frontend/nginx.conf` 曾存在、现已删除，改用容器内 Nginx 时需自行编写。
 
 > **警告**：生产环境必须修改默认密钥和密码，否则存在严重安全风险。
 
@@ -593,7 +599,7 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-测试覆盖：登录认证、权限隔离、作业流程、优秀作品评选、CRUD 操作、越权场景、**AI 批改**（凭证/开关超管专属、**提交零外呼**、手动触发的批量与单份语义、学生与跨班教师触发 403、关闭/未配凭证/超限 400、模型报错与附件失败降级、重交作废旧结果、推荐来源标记）。
+测试覆盖：登录认证、权限隔离、作业流程、优秀作品评选、CRUD 操作、越权场景、**AI 批改**（凭证/开关超管专属、**提交零外呼**、手动触发的批量与单份语义、学生与跨班教师触发 403、关闭/未配凭证/超限 400、模型报错与附件失败降级、重交作废旧结果、推荐来源标记、**任务附件纳入批改**、**推理模型思考开关与截断重试**、**上游错误文案归一化**、**附件按批抽取缓存**）；当前全量 **171 passed**。
 
 ## 配置参考
 
@@ -610,9 +616,22 @@ python -m pytest tests/ -v
 | `AI_CREDENTIAL_KEY` | AI 凭证加密主密钥（Fernet，base64 32 字节） | 未设时由 `SECRET_KEY` 派生 | **建议独立设置**并妥善保管；变更后已存凭证将无法解密 |
 | `AI_REQUEST_TIMEOUT` | 单次模型调用超时（秒） | `60` | 按上游服务调整 |
 | `AI_DEFAULT_DAILY_LIMIT` | 每日调用上限缺省值（可被平台设置覆盖） | `200` | 按预算调整 |
-| `AI_DEFAULT_MAX_TOKENS` | 单次 max_tokens 缺省值（可被平台设置覆盖） | `1200` | 按需调整 |
+| `AI_DEFAULT_MAX_TOKENS` | 单次 max_tokens 缺省值（可被平台设置覆盖）。**推理模型的思考 token 与正文共用这份预算** | `2048` | 按需调整，**勿低于 2048** |
+| `AI_THINKING_MODE` | 下发 `thinking.type`：`disabled` 关闭思考（批改属有界抽取任务，思考会挤占正文预算） | `disabled` | 保持 `disabled` |
+| `AI_REASONING_EFFORT` | 下发 `reasoning_effort`（`low`/`high`/`max`）；留空＝不下发 | `""` | 留空 |
+| `AI_MAX_TOKENS_CEILING` | 输出被截断时**重试**所允许的 max_tokens 上限 | `8192` | 按需调整 |
 | `AI_MAX_INPUT_CHARS` | 送入模型的作业正文上限（字符，超出截断） | `8000` | 按需调整 |
 | `AI_MAX_ATTACHMENT_CHARS` | 送入模型的附件文本上限（字符，超出截断） | `6000` | 按需调整 |
+| `AI_MAX_IMAGES` | 单次批改送入模型的图片张数（任务附件 + 提交附件 + 正文内嵌**全局合计**） | `6` | 按需调整 |
+| `AI_IMAGE_MAX_SIDE` | 图片送多模态前的长边上限（仅缩小、绝不放大） | `1600` | 按需调整 |
+| `AI_MAX_IMAGE_BYTES` | 单张图片送入多模态的字节上限 | `4194304`（4MB） | 按需调整 |
+
+> 🔴 **上表 AI 限额项的「默认值」只在 `settings` 表里没有对应行时才生效**：
+> `platform_settings.get_ai_*()` 取值形如
+> `_as_positive_int(get_global_setting(db, KEY), settings.AI_DEFAULT_*)` —— **DB 行优先**。
+> 故改 `config.py` 的 `AI_DEFAULT_MAX_TOKENS` **不会**影响既有部署，
+> 真正的旋钮是**平台设置后台的 `max_tokens`**（或直接改 `settings` 表 `school_id IS NULL` 的行）。
+> 排查「改了配置没效果」时先查 `select * from settings where school_id is null;`
 
 ## 故障排除
 
