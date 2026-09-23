@@ -37,6 +37,7 @@ from app.models import (
     AiGradingResult,
     AiUsageDaily,
     Assignment,
+    AssignmentAttachment,
     ExcellentWork,
     Submission,
     User,
@@ -62,7 +63,7 @@ _executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="ai-
 _SYSTEM_PROMPT = """你是一位经验丰富的中小学教师，正在批改学生的上机作业。
 
 【评价依据】
-只依据本条消息中的【作业要求】、【学生提交内容】、【附件内容】，以及随消息附上的图片
+只依据本条消息中的【作业要求】、【任务附件】、【学生提交内容】、【附件内容】，以及随消息附上的图片
 进行评价。不得引入外部知识去臆测提交中并不存在的内容。
 
 【反幻觉要求（必须严格遵守）】
@@ -290,17 +291,90 @@ def _upsert_result(
     return result
 
 
+# 任务附件文本可占用的输入预算比例（相对于 AI_MAX_INPUT_CHARS）。
+# 附件可能是整本教材，不能让它把学生的提交内容挤出输入上限。
+_ASSIGNMENT_ATTACHMENT_BUDGET_RATIO = 0.25
+
+# 无论教师传了多少张任务附件图片，**至少为学生自己的材料（提交附件 / 正文内嵌）保留 1 个
+# 图片名额**。否则「老师传了 6 张参考图 → 学生交的东西一张都进不去」，批改会彻底失去依据。
+_RESERVED_IMAGE_SLOTS_FOR_SUBMISSION = 1
+
+
+def _extract_assignment_materials(
+    assignment: Assignment | None,
+    *,
+    vision_enabled: bool,
+    max_images: int,
+) -> tuple[str, list[str], list[str]]:
+    """抽取**教师布置任务时上传的附件**（`assignment_attachments`，一对多）。
+
+    为什么必须有：上机任务常把要求写在附件里（docx / pdf），而 `description` 与
+    `content` 留空。此前批改只读 `assignment.title/description/content`，模型看到的
+    【作业要求】几乎是空的 —— 只能对着学生提交内容凭空找亮点，教师侧表现为
+    「批得头头是道，但完全没按任务要求」（实现缺口，与 PRD §8 Q4「附件纳入批改」不一致）。
+
+    沿用 `extract_attachment` 的降级约定：**永不抛异常**，解析失败只写说明。
+    文本总量另设预算（`_ASSIGNMENT_ATTACHMENT_BUDGET_RATIO`）。
+
+    Returns:
+        `(拼接后的附件文本, 图片 data URL 列表, 逐条说明)`。
+        说明统一加 `[任务]` 前缀，与**学生**提交附件的说明区分开
+        （后者无前缀），最终落到 `attachment_used` 供教师查看。
+    """
+    if assignment is None or not assignment.attachments:
+        return "", [], []
+
+    text_budget = int(settings.AI_MAX_INPUT_CHARS * _ASSIGNMENT_ATTACHMENT_BUDGET_RATIO)
+    texts: list[str] = []
+    images: list[str] = []
+    notes: list[str] = []
+    used = 0
+    truncated = False
+
+    for att in assignment.attachments:
+        if len(images) >= max_images:
+            notes.append(f"[任务]图片附件超出单次张数上限，未参与批改（{att.filename}）")
+            continue
+        payload = extract_attachment(
+            att.filepath, att.filename, vision_enabled=vision_enabled
+        )
+        if payload.note:
+            notes.append(f"[任务]{payload.note}")
+        if payload.images:
+            images.extend(payload.images)
+        if not payload.text:
+            continue
+        remaining = text_budget - used
+        if remaining <= 0:
+            truncated = True
+            continue
+        chunk = payload.text[:remaining]
+        if len(chunk) < len(payload.text):
+            truncated = True
+        used += len(chunk)
+        texts.append(f"—— {att.filename} ——\n{chunk}")
+
+    if truncated:
+        notes.append("[任务]附件文本超出输入预算，已截断")
+    return "\n\n".join(texts), images, notes
+
+
 def _build_messages(
     assignment: Assignment | None,
     content_text: str,
     attachment_text: str,
     images: list[str],
+    requirement_text: str = "",
 ) -> list[dict]:
-    """构造批改请求消息（作业要求 + 学生正文 + 附件内容 + 图片）。
+    """构造批改请求消息（作业要求 + 任务附件 + 学生正文 + 学生附件 + 图片）。
 
     ``content_text`` 是**已把内嵌图片换成占位说明**的正文（见
     `ai_attachments.extract_inline_images`），不再直接取 `submission.content` ——
     否则正文里的图片引用（``![](/uploads/x.png)``）对模型只是一串访问不到的 URL。
+
+    ``requirement_text`` 是**教师任务附件**抽取出的文本（见
+    `_extract_assignment_materials`）：上机任务常把要求写在附件里、`description`
+    留空，缺了它【作业要求】就是空的。
     """
     parts: list[str] = ["【作业要求】"]
     if assignment is not None:
@@ -309,6 +383,17 @@ def _build_messages(
             parts.append(f"说明：{assignment.description}")
         if assignment.content:
             parts.append(f"正文：\n{assignment.content}")
+        if requirement_text:
+            parts.append(f"\n【任务附件】\n{requirement_text}")
+        elif not (assignment.description or "").strip() and not (
+            assignment.content or ""
+        ).strip():
+            # 既无文字说明也无可用任务附件：必须显式告知，否则模型会自己编一套评分标准，
+            # 而教师看到的是一份「有模有样但无依据」的批改（比报错更危险）。
+            parts.append(
+                "\n（⚠️ 本作业既无文字说明、也没有可解析的任务附件，"
+                "无法核对「是否达成任务要求」；请只评价提交内容本身，不要臆测任务要求。）"
+            )
     else:
         parts.append("（作业信息缺失）")
 
@@ -502,21 +587,32 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         )
 
     assignment = db.get(Assignment, submission.assignment_id)
-    # 附件字段只承载「单个上传附件」；学生用富文本编辑器插入的图片是写在 content 里的
-    # Markdown（`![](/uploads/x.png)`），filepath 仍为空 —— 必须单独抽取，
+    # ① 任务附件：先抽，让它优先占用图片名额 —— 它定义「要做什么」，缺了就无法判断完成度。
+    requirement_text, requirement_images, requirement_notes = (
+        _extract_assignment_materials(
+            assignment,
+            vision_enabled=cred.vision_enabled,
+            max_images=max(
+                0, settings.AI_MAX_IMAGES - _RESERVED_IMAGE_SLOTS_FOR_SUBMISSION
+            ),
+        )
+    )
+    # ② 学生提交附件。filepath 只承载「单个上传附件」；学生用富文本编辑器插入的图片写在
+    # content 里的 Markdown（`![](/uploads/x.png)`），filepath 仍为空 —— 必须单独抽取，
     # 否则模型只拿到一串访问不到的 URL，完全看不到图片（历史缺陷）。
     payload = extract_attachment(
         submission.filepath, submission.filename, vision_enabled=cred.vision_enabled
     )
-    # 内嵌图片按「剩余预算」抽取：全局合计不超过 AI_MAX_IMAGES（修缺陷 5）。
-    # 例如附件已占 1 张，则正文内嵌最多再取 AI_MAX_IMAGES - 1 张，
-    # 避免「附件 1 张 + 内嵌 6 张 = 7 张」超出配置注释声明的全局合计。
+    # ③ 内嵌图片按「剩余预算」抽取：全局合计不超过 AI_MAX_IMAGES（修缺陷 5）。
+    # 例如任务附件 + 提交附件已占 2 张，正文内嵌最多再取 AI_MAX_IMAGES - 2 张。
     inline = extract_inline_images(
         submission.content or "",
         vision_enabled=cred.vision_enabled,
-        max_images=max(0, settings.AI_MAX_IMAGES - len(payload.images)),
+        max_images=max(
+            0, settings.AI_MAX_IMAGES - len(requirement_images) - len(payload.images)
+        ),
     )
-    images = payload.images + inline.images
+    images = requirement_images + payload.images + inline.images
 
     # 整批图片总字节护栏：data URL 累加超过 AI_IMAGE_MAX_TOTAL_BYTES 的丢弃
     # （保持顺序、靠前优先），并追加说明。说明并入现有 attachment_used 的组装方式，
@@ -532,14 +628,16 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         kept_images.append(url)
     images = kept_images
 
-    note_parts = [payload.note, *inline.notes]
+    note_parts = [*requirement_notes, payload.note, *inline.notes]
     if dropped:
         note_parts.append(
             f"图片过多（{dropped} 张因总体积超过 "
             f"{settings.AI_IMAGE_MAX_TOTAL_BYTES // (1024 * 1024)}MB 上限未参与批改）"
         )
     note = "；".join(n for n in note_parts if n)
-    messages = _build_messages(assignment, inline.text, payload.text, images)
+    messages = _build_messages(
+        assignment, inline.text, payload.text, images, requirement_text
+    )
 
     # 先落 pending：前端可立即显示「批改中」
     result = _upsert_result(

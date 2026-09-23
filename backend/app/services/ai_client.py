@@ -34,6 +34,31 @@ class AiClientError(Exception):
         self.truncated = truncated
 
 
+#: HTTP 状态码 → 可直接行动的中文提示。
+#: 这类错误**重试不会有不同结果**，必须先由人去平台侧处理（充值 / 换密钥 / 改模型），
+#: 所以把结论放在最前面，让教师一眼知道该找谁，而不是对着一串英文 JSON 发懵。
+_HTTP_ERROR_HINTS: dict[int, str] = {
+    401: "AI 服务鉴权失败（密钥无效或已过期），请在平台设置中重新配置凭证",
+    402: "AI 服务账户余额不足，请充值后重试",
+    403: "上游拒绝访问（密钥无权调用该模型，或模型名填写有误）",
+    429: "触发上游调用频率限制，请稍后重试",
+}
+
+
+def _describe_http_error(status_code: int, snippet: str) -> str:
+    """把上游的 HTTP 错误翻译成「结论 + 原始片段」。
+
+    原始片段保留是为了排查（截断到 160 字符），但可读结论必须排在最前 ——
+    教师看到的是「余额不足，请充值」，运维仍能从片段里拿到上游原文。
+    """
+    hint = _HTTP_ERROR_HINTS.get(status_code)
+    if hint is None and 500 <= status_code < 600:
+        hint = "上游 AI 服务异常，请稍后重试"
+    if hint is None:
+        return f"服务返回 {status_code}：{snippet}"
+    return f"{hint}（服务返回 {status_code}：{snippet}）"
+
+
 def normalize_base_url(base_url: str) -> str:
     """把用户填写的 base_url 规范化成完整的 `chat/completions` 端点。
 
@@ -134,7 +159,7 @@ def chat_completion(
 
     if resp.status_code >= 400:
         snippet = (resp.text or "").replace("\n", " ")[:160]
-        raise AiClientError(f"服务返回 {resp.status_code}：{snippet}")
+        raise AiClientError(_describe_http_error(resp.status_code, snippet))
 
     try:
         data = resp.json()
