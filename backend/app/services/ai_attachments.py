@@ -27,6 +27,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from app.config import settings
 from app.services.ai_image import prepare_data_url
@@ -283,7 +284,101 @@ def extract_inline_images(
     return InlineImagePayload(text="".join(rebuilt), images=images, notes=notes)
 
 
+# ---------------- 抽取结果缓存（批内复用） ----------------
+# 批改一个班时，**同一份任务附件**会随每一份提交被重复抽取：40 份 = 40 次读盘 +
+# 40 次 docx/pdf 解析（图片则是 40 次缩放 + base64 编码）。
+#
+# token 侧的那份重复由上游前缀缓存兜住（DeepSeek 对重复前缀自动按 cache-hit 计价），
+# 但**本地这份开销没人兜**：它吃 CPU 与磁盘 IO，并随班级人数线性放大。
+#
+# 因此只对**批内复用**的附件开启（`cache=True`，当前仅任务附件）。学生提交附件每份都
+# 不同，缓存零收益，还会把 N 份图片 data URL 留在内存里 —— 故默认关闭。
+_ATTACHMENT_CACHE_MAXSIZE = 32
+
+
+def _file_stamp(path: str) -> tuple[int, int] | None:
+    """文件的 ``(mtime_ns, size)`` 指纹；文件不存在返回 ``None``。
+
+    作为缓存键的一部分：文件被重新上传 / 覆盖同名文件时指纹变化 → 缓存自动失效，
+    无需手工清理，也不会读到旧内容。纳秒精度是为了排除「同一秒内替换」的漏判。
+
+    注意「先不存在、后出现」的情形也靠它自愈：缺失时键里是 ``None``，
+    文件出现后变成本指纹，键不同 → 重新抽取，不会把「文件不存在」的结论缓存住。
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _config_fingerprint() -> tuple[int, int, int, int]:
+    """影响抽取结果的配置项（截断上限 / 图片字节与尺寸护栏）。
+
+    放进缓存键是为了「改了配置立即生效」—— 否则调大 `AI_MAX_ATTACHMENT_CHARS`
+    之后，旧结果会一直命中「已截断」的版本。
+    """
+    return (
+        settings.AI_MAX_ATTACHMENT_CHARS,
+        settings.AI_MAX_IMAGE_BYTES,
+        settings.AI_IMAGE_MAX_SIDE,
+        settings.AI_IMAGE_JPEG_QUALITY,
+    )
+
+
+@lru_cache(maxsize=_ATTACHMENT_CACHE_MAXSIZE)
+def _cached_extract(
+    key: tuple[str, str, bool, tuple[int, int] | None, tuple[int, ...]],
+) -> AttachmentPayload:
+    """按 ``key`` 缓存 `_extract_attachment_impl` 的结果。
+
+    参数刻意收成**单个元组**：`lru_cache` 按调用签名建键，``f(a)`` 与
+    ``f(a, vision_enabled=False)`` 会被算成两个不同的键 ——
+    用单参数可以彻底避免「写法不同就缓存不中」这类静默失效。
+    """
+    filepath, filename, vision_enabled, _stamp, _config = key
+    return _extract_attachment_impl(
+        filepath, filename, vision_enabled=vision_enabled
+    )
+
+
+def clear_attachment_cache() -> None:
+    """清空附件抽取缓存（供测试与运维使用；正常运行无需调用）。"""
+    _cached_extract.cache_clear()
+
+
 def extract_attachment(
+    filepath: str | None,
+    filename: str | None = None,
+    *,
+    vision_enabled: bool = False,
+    cache: bool = False,
+) -> AttachmentPayload:
+    """解析单个附件（本函数负责可选的**批内缓存**，实际抽取见 `_extract_attachment_impl`）。
+
+    Args:
+        cache: 是否启用批内缓存。**仅对同一批会重复出现的附件开启**（任务附件）；
+            学生提交附件每份都不同，开启只会白占内存。
+    """
+    if not cache or not filepath:
+        return _extract_attachment_impl(filepath, filename, vision_enabled=vision_enabled)
+
+    key = (
+        filepath,
+        filename or "",
+        bool(vision_enabled),
+        _file_stamp(absolute_path(filepath)),
+        _config_fingerprint(),
+    )
+    payload = _cached_extract(key)
+    # 返回**副本**：缓存对象被多个线程 / 多次调用共享，调用方若就地修改
+    # （例如往 `images` 里 append）会污染后续所有命中。浅拷贝即可 —— 字符串本身不可变。
+    return AttachmentPayload(
+        text=payload.text, images=list(payload.images), note=payload.note
+    )
+
+
+def _extract_attachment_impl(
     filepath: str | None,
     filename: str | None = None,
     *,

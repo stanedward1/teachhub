@@ -117,7 +117,8 @@ def chat_completion(
 
     Returns:
         ``{"content": str, "usage": dict, "elapsed_ms": int, "finish_reason": str | None,
-        "reasoning_tokens": int | None}``
+        "reasoning_tokens": int | None, "cache_hit_tokens": int | None,
+        "cache_miss_tokens": int | None}``
 
     Raises:
         AiClientError: 任一环节失败。
@@ -178,6 +179,15 @@ def chat_completion(
         (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
         or usage.get("reasoning_tokens")
     )
+    # 上游前缀缓存命中量（DeepSeek 等对重复前缀自动缓存，命中部分按 1/10~1/50 计价）。
+    # 用于**验证**「同一批里重复送出的稳定内容（系统提示、任务附件）是否真的走了缓存价」：
+    # 返回 None 表示该端点不回传这两个字段（中转 / 聚合平台常见），
+    # 此时重复内容实际按 cache-miss 原价计费 —— 这一点必须能从日志里看出来，
+    # 否则「附件重复送 40 次」的成本会被误判为已经优化过。
+    cache_hit_tokens = usage.get("prompt_cache_hit_tokens") or usage.get("cache_hit_tokens")
+    cache_miss_tokens = usage.get("prompt_cache_miss_tokens") or usage.get(
+        "cache_miss_tokens"
+    )
     # finish_reason 提前读取，正文为空时也要据此区分「被截断」与「真空」。
     finish_reason = choices[0].get("finish_reason")
     if not content:
@@ -195,6 +205,8 @@ def chat_completion(
         "elapsed_ms": elapsed_ms,
         "finish_reason": finish_reason,
         "reasoning_tokens": reasoning_tokens,
+        "cache_hit_tokens": cache_hit_tokens,
+        "cache_miss_tokens": cache_miss_tokens,
     }
 
 

@@ -335,8 +335,13 @@ def _extract_assignment_materials(
         if len(images) >= max_images:
             notes.append(f"[任务]图片附件超出单次张数上限，未参与批改（{att.filename}）")
             continue
+        # cache=True：同一份任务附件会被这个班的**每一份**提交重复抽到，
+        # 保留缓存避免重复读盘 / 重复解析 docx、pdf（见 ai_attachments 的缓存说明）。
         payload = extract_attachment(
-            att.filepath, att.filename, vision_enabled=vision_enabled
+            att.filepath,
+            att.filename,
+            vision_enabled=vision_enabled,
+            cache=True,
         )
         if payload.note:
             notes.append(f"[任务]{payload.note}")
@@ -725,6 +730,16 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     db.commit()
 
     _maybe_auto_publish(db, result, submission)
+    # 成本可观测：一个班批改时，系统提示与任务附件在**每份**请求里重复出现，
+    # 命中上游前缀缓存的部分按 1/10~1/50 计价。没有这一行，
+    # 「附件重复送了 40 次到底花了多少钱」只能靠猜。缓存命中为 None 表示
+    # 该端点未回传缓存字段（如中转聚合平台），此时重复内容确实按原价计费。
+    logger.info(
+        "AI 批改完成 submission=%s prompt_tokens=%s 缓存命中=%s",
+        submission_id,
+        usage.get("prompt_tokens"),
+        response.get("cache_hit_tokens"),
+    )
     return result
 
 
