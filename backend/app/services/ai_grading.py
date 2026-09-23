@@ -449,7 +449,23 @@ def _maybe_auto_publish(db: Session, result: AiGradingResult, submission: Submis
 
     `selected_by`（NOT NULL）记**开启该配置的超管** —— 配置本身即其授权凭据。
     任何一步不满足都直接返回（退回候选制），**绝不因自动入库失败影响批改结果**。
+
+    本函数被调用时批改结果**已经 commit 成 `success`**（见 `grade_submission` 结尾），
+    所以这里必须**就地吞掉一切异常**：否则异常会冒泡到 `_run_grading` 的兜底分支，
+    把刚写好的 `success` 回写成 `failed`（教师看到「批改任务内部错误」）——
+    一次入库失败就毁掉一次已经成功的批改。**不要删掉这层 try**。
     """
+    try:
+        _publish_excellent(db, result, submission)
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "AI 自动入库失败（已退回候选制，批改结果不受影响） submission=%s", submission.id
+        )
+
+
+def _publish_excellent(db: Session, result: AiGradingResult, submission: Submission) -> None:
+    """自动入库的实际动作；异常由 `_maybe_auto_publish` 统一兜底。"""
     if result.status != "success" or not result.is_excellent_candidate:
         return
     if not is_ai_auto_publish_enabled(db):
@@ -457,6 +473,9 @@ def _maybe_auto_publish(db: Session, result: AiGradingResult, submission: Submis
 
     existing = (
         db.query(ExcellentWork)
+        # submission_id 是**全局唯一键**，行的身份与租户无关；带租户过滤会漏掉归属
+        # 异常（school_id 为空 / 异校）的行 → 重复 INSERT → 1062（同 `_apply_prewrite`）。
+        .execution_options(skip_tenant_filter=True)
         .filter(ExcellentWork.submission_id == submission.id)
         .first()
     )
@@ -758,6 +777,21 @@ def _run_grading(submission_id: int, school_id: int | None) -> None:
         try:
             db.rollback()
             with tenant_scope(school_id):
+                # 兜底只负责把「卡在 pending」的行收敛为 failed。若批改其实**已经成功
+                # 落库**（异常发生在成功 commit 之后的收尾步骤），绝不能把 success
+                # 回写成 failed —— 那会凭空毁掉一次已完成的批改。
+                row = (
+                    db.query(AiGradingResult)
+                    .execution_options(skip_tenant_filter=True)
+                    .filter(AiGradingResult.submission_id == submission_id)
+                    .first()
+                )
+                if row is not None and row.status == "success":
+                    logger.info(
+                        "批改结果已是 success（异常发生在收尾步骤），保留成功结果 submission=%s",
+                        submission_id,
+                    )
+                    return
                 # 显式带归属：租户上下文为 None 时 ORM 自动填充是空操作，
                 # 失败行会落成 school_id=NULL 而对所有租户不可见。
                 _upsert_result(

@@ -1,5 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { isStudent, isTeacher, getToken, getUser } from '../utils/auth'
+import { ElMessage } from 'element-plus'
+import {
+  isStudent,
+  isTeacher,
+  isSchoolAdmin,
+  isPlatformAdmin,
+  getToken,
+  getUser,
+} from '../utils/auth'
+import { routeNeed, normalizeRoutePath } from '../layout/admin/menuConfig.js'
 
 const routes = [
   // ============ 学生端 ============
@@ -248,44 +257,64 @@ const router = createRouter({
 router.beforeEach((to) => {
   const hasToken = !!getToken()
   const user = getUser()
-  const isTeacherArea = to.path.startsWith('/admin') || to.path.startsWith('/m')
-  const isMobileArea = to.path.startsWith('/m')
+  // 统一用**归一化后**的路径做归属判断与门控比对：`to.path` 会原样保留用户输入的大小写
+  // 与尾斜杠，而 vue-router 的匹配是「大小写不敏感 + strict:false」—— 直接拿 `to.path`
+  // 比会被 `/ADMIN/users`、`/admin/users/` 绕过（后者连登录拦截一起跳过）。
+  // 注意：仅用于**比对**；跳转目标与回跳参数仍用 `to.fullPath` 保留原始形态。
+  const path = normalizeRoutePath(to.path)
+  const isTeacherArea = path.startsWith('/admin') || path.startsWith('/m')
+  const isMobileArea = path.startsWith('/m')
 
   // 学生端页面：仅学生可访问（教师/管理员跳后台，不再预览）
   if (to.meta.requiresStudent) {
     if (!hasToken) return { path: '/login', query: { redirect: to.fullPath } }
     if (isTeacher()) return { path: '/admin' }
     // 学生强制改密
-    if (user?.must_change_password && to.path !== '/profile') {
+    if (user?.must_change_password && path !== '/profile') {
       return { path: '/profile' }
     }
     return true
   }
 
   // 管理端 + 移动端访问控制（教师/管理员）
-  if (isTeacherArea && to.path !== '/admin/login' && to.path !== '/m/login') {
+  if (isTeacherArea && path !== '/admin/login' && path !== '/m/login') {
     if (!hasToken || !isTeacher()) {
       const loginPath = isMobileArea ? '/m/login' : '/admin/login'
       return { path: loginPath, query: { redirect: to.fullPath } }
     }
     // 强制改密：未改密的用户只能访问改密页
     const pwdPath = isMobileArea ? '/m/change-password' : '/admin/change-password'
-    if (user?.must_change_password && to.path !== pwdPath) {
+    if (user?.must_change_password && path !== pwdPath) {
       return { path: pwdPath, query: { first: 1 } }
+    }
+    // 角色门控：与侧边栏菜单**同一口径**（由 MENU 的 need 派生，见 menuConfig.routeNeed）。
+    // 菜单隐藏只是「看不见」，手输 URL 依旧可以直达 —— 这里补上真正的可达性拦截：
+    //   need=admin    → 学校管理员及以上（/admin/users、/admin/settings、/admin/audit-logs）
+    //   need=platform → 仅平台超管（/admin/schools、/admin/platform-settings）
+    // 后端各写接口另有 require_school_admin / require_super_admin 门槛，本处是第二道防线。
+    if (!isMobileArea) {
+      const need = routeNeed(path)
+      const denied =
+        (need === 'admin' && !isSchoolAdmin() && !isPlatformAdmin()) ||
+        (need === 'platform' && !isPlatformAdmin())
+      if (denied) {
+        ElMessage.warning('无权访问该页面，已返回数据看板')
+        return { path: '/admin/dashboard' }
+      }
     }
   }
 
   // 已登录访问登录页 → 跳转对应首页/改密页
-  if (to.path === '/admin/login' && hasToken && isTeacher()) {
+  if (path === '/admin/login' && hasToken && isTeacher()) {
     return { path: user?.must_change_password ? '/admin/change-password' : '/admin' }
   }
-  if (to.path === '/m/login' && hasToken && isTeacher()) {
+  if (path === '/m/login' && hasToken && isTeacher()) {
     return { path: user?.must_change_password ? '/m/change-password' : '/m/home' }
   }
-  if (to.path === '/login' && hasToken && isStudent()) {
+  if (path === '/login' && hasToken && isStudent()) {
     return { path: user?.must_change_password ? '/profile' : '/' }
   }
-  if (to.path === '/login' && hasToken && isTeacher()) {
+  if (path === '/login' && hasToken && isTeacher()) {
     return { path: '/admin' }
   }
 

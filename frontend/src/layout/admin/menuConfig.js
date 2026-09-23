@@ -127,6 +127,47 @@ export function filterMenuByRole(menu, { isAdmin = false, isPlatform = false } =
 }
 
 /**
+ * 路由路径 -> 角色门控（由 {@link MENU} 的 `need` 派生）。
+ *
+ * **单一事实来源**：路由守卫按本函数拦截，侧边栏按 `need` 隐藏，二者永不走样。
+ * 历史上二者各写一份，导致「菜单看不见、手输 URL 却能直达」的越权页面
+ * （`/admin/users`、`/admin/schools`、`/admin/platform-settings`、`/admin/settings`、
+ * `/admin/audit-logs`）。新增受控页面只需在 {@link MENU} 里写一次 `need`。
+ *
+ * @param {string} path 目标路由路径。
+ * @returns {'admin'|'platform'|undefined} `'admin'` 需学校管理员及以上；
+ *          `'platform'` 需平台超管；`undefined` 表示不做角色门控。
+ */
+export function routeNeed(path) {
+  const target = normalizeRoutePath(path)
+  for (const group of MENU) {
+    for (const leaf of group.children || []) {
+      if (normalizeRoutePath(leaf.index) === target) return leaf.need
+    }
+  }
+  return undefined
+}
+
+/**
+ * 归一化路由路径：去掉末尾斜杠并转小写。
+ *
+ * 必须归一化才能做「路径 → 门控」比对：vue-router 默认**大小写不敏感**且
+ * `strict: false`，所以 `/admin/users/`、`/ADMIN/users` 都会匹配到同一个页面，
+ * 而 `to.path` 会**原样保留**用户输入的形态。基于原始 `to.path` 做精确比对或前缀
+ * 判断都会被绕开（实测后果）：
+ * - `/admin/users/` → `routeNeed` 拿到带尾斜杠的串，精确匹配失败 → 返回 `undefined`
+ *   → 门控整体放行（5 个受控页面全部可越权进入）；
+ * - `/ADMIN/users` → 连守卫外层的 `startsWith('/admin')` 都失效，整段管理端分支被跳过
+ *   → **连 `!hasToken || !isTeacher()` 登录拦截也一并跳过**。
+ *
+ * @param {string} path 原始路径（通常是 `to.path`）。
+ * @returns {string} 归一化后的路径（至少为 `'/'`）。
+ */
+export function normalizeRoutePath(path) {
+  return (path || '').replace(/\/+$/, '').toLowerCase() || '/'
+}
+
+/**
  * 由当前路由路径推导 el-menu 的激活项。
  *
  * 作业提交审阅等子页面（路径含 `/submissions`）归属「任务列表」。
