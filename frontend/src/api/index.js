@@ -3,12 +3,12 @@ import request from './request'
 // ============ 认证 ============
 export const authApi = {
   login: (data) => request.post('/api/auth/login', data),
-  // 刷新令牌（access token 过期时使用）；失败返回 401
-  refresh: (refreshToken) => request.post('/api/auth/refresh', { refresh_token: refreshToken }),
+  // 注意：刷新令牌（/api/auth/refresh）刻意**不在**本封装内。access token 过期的静默刷新
+  // 由 api/request.js 的 401 拦截器用「裸 axios 实例」直接发起（避免刷新请求自身 401 时递归），
+  // 前端无其他刷新入口（原 authApi.refresh 零调用，已删除）。
   // 退出登录：注销服务端 refresh token
   logout: (refreshToken) => request.post('/api/auth/logout', { refresh_token: refreshToken }),
   register: (data) => request.post('/api/auth/register', data),
-  me: () => request.get('/api/auth/me'),
   changePassword: (data) => request.put('/api/auth/password', data),
   uploadAvatar: (formData) =>
     request.post('/api/auth/avatar', formData, {
@@ -67,7 +67,6 @@ export const homeworkApi = {
 
 // ============ 基础数据 ============
 export const studentApi = {
-  schools: () => request.get('/api/schools'),
   classrooms: (params) => request.get('/api/classrooms', { params }),
   createClassroom: (data) => request.post('/api/classrooms', data),
   updateClassroom: (id, data) => request.put(`/api/classrooms/${id}`, data),

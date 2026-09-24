@@ -5,10 +5,11 @@ import {
   isTeacher,
   isSchoolAdmin,
   isPlatformAdmin,
+  isTeacherHead,
   getToken,
   getUser,
 } from '../utils/auth'
-import { routeNeed, normalizeRoutePath } from '../layout/admin/menuConfig.js'
+import { routeDenied, normalizeRoutePath } from '../layout/admin/menuConfig.js'
 
 const routes = [
   // ============ 学生端 ============
@@ -287,16 +288,21 @@ router.beforeEach((to) => {
     if (user?.must_change_password && path !== pwdPath) {
       return { path: pwdPath, query: { first: 1 } }
     }
-    // 角色门控：与侧边栏菜单**同一口径**（由 MENU 的 need 派生，见 menuConfig.routeNeed）。
+    // 角色门控：与侧边栏菜单**同一口径**（由 MENU 的 need 派生，见 menuConfig）。
     // 菜单隐藏只是「看不见」，手输 URL 依旧可以直达 —— 这里补上真正的可达性拦截：
-    //   need=admin    → 学校管理员及以上（/admin/users、/admin/settings、/admin/audit-logs）
-    //   need=platform → 仅平台超管（/admin/schools、/admin/platform-settings）
+    //   need=admin        → 学校管理员及以上（/admin/users、/admin/settings）
+    //   need=platform     → 仅平台超管（/admin/schools、/admin/platform-settings）
+    //   need=head_teacher → 学校管理员及以上**或**班主任（/admin/audit-logs）
+    //                       后端刻意允许班主任查看本班审计日志（科任老师 403），
+    //                       故此处不能用 isSchoolAdmin 一刀切 —— 那会把班主任的能力封掉。
+    // 判定逻辑放在 menuConfig.routeDenied（纯函数，可单测），避免与菜单过滤各写一份。
     // 后端各写接口另有 require_school_admin / require_super_admin 门槛，本处是第二道防线。
     if (!isMobileArea) {
-      const need = routeNeed(path)
-      const denied =
-        (need === 'admin' && !isSchoolAdmin() && !isPlatformAdmin()) ||
-        (need === 'platform' && !isPlatformAdmin())
+      const denied = routeDenied(path, {
+        isAdmin: isSchoolAdmin() || isPlatformAdmin(),
+        isPlatform: isPlatformAdmin(),
+        isHeadTeacher: isTeacherHead(),
+      })
       if (denied) {
         ElMessage.warning('无权访问该页面，已返回数据看板')
         return { path: '/admin/dashboard' }

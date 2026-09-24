@@ -13,6 +13,7 @@ from app.audit import audit
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
 from app.permissions import (
     ensure_same_school,
+    get_head_class_ids,
     get_teacher_class_ids,
     is_any_admin,
     is_platform_admin,
@@ -42,6 +43,7 @@ from app.models import (
     User,
     WorkLog,
 )
+from app.models.user import compute_username_scope
 from app.security import hash_password, validate_password_strength
 from app.utils import gen_student_no, to_dict, normalize_page
 from app.pagination import paginate
@@ -134,10 +136,13 @@ def _visible_audit_class_ids(db: Session, user: User):
     - admin：返回 None（查看全部）
     - 班主任：返回其班主任班级 id 列表
     - 科任老师（非任何班班主任）：返回空列表（无权查看）
+
+    注意：本函数的「班主任」判定与 `public_user` 暴露给前端的 `head_classes` 同源
+    （都走 `permissions.get_head_class_ids`），保证前端菜单可见性与后端可见范围一致。
     """
     if is_any_admin(user):
         return None
-    return [c.id for c in db.query(Classroom).filter(Classroom.teacher_id == user.id).all()]
+    return get_head_class_ids(db, user.id)
 
 
 def _build_alerts(db: Session, user: User, class_ids: list, student_ids: list) -> dict:
@@ -246,9 +251,32 @@ def list_users(db: Session, role: str = "", keyword: str = "") -> dict:
 
 
 def create_user(db: Session, payload: dict, user: User) -> dict:
-    username = (payload.get("username") or "").strip()
-    password = payload.get("password") or "123456"
-    name = (payload.get("name") or "").strip()
+    # 🔴 入参类型归一化：本路由签名为 `payload: dict`（无 Pydantic 校验），若调用方传入
+    # 非字符串（如 {"username": 123}），`(x or "").strip()` 会抛 AttributeError；非整数的
+    # `class_id` / `school_id` 会让后续 `db.get`/SQL 抛 StatementError ⇒ 落到 main.py 的 500 兜底。
+    # 这里只拦「类型非法」并给明确中文报错；字段缺省/空值仍保持原有语义（下同）。
+    raw_username = payload.get("username")
+    raw_password = payload.get("password")
+    raw_name = payload.get("name")
+    raw_school_id = payload.get("school_id")
+    raw_class_id = payload.get("class_id")
+    if raw_username is not None and not isinstance(raw_username, str):
+        raise HTTPException(status_code=400, detail="用户名格式不正确")
+    if raw_password is not None and not isinstance(raw_password, str):
+        raise HTTPException(status_code=400, detail="密码格式不正确")
+    if raw_name is not None and not isinstance(raw_name, str):
+        raise HTTPException(status_code=400, detail="姓名格式不正确")
+    if raw_school_id is not None and (
+        isinstance(raw_school_id, bool) or not isinstance(raw_school_id, int)
+    ):
+        raise HTTPException(status_code=400, detail="学校编号格式不正确")
+    if raw_class_id is not None and (
+        isinstance(raw_class_id, bool) or not isinstance(raw_class_id, int)
+    ):
+        raise HTTPException(status_code=400, detail="班级编号格式不正确")
+    username = (raw_username or "").strip()
+    password = raw_password or "123456"
+    name = (raw_name or "").strip()
     role = payload.get("role", "teacher")
     if not username or not name:
         raise HTTPException(status_code=400, detail="用户名和姓名不能为空")
@@ -261,10 +289,10 @@ def create_user(db: Session, payload: dict, user: User) -> dict:
     # 少了这一步，学校管理员只要在 body 里塞一个他校 school_id 就能把账号建到他校
     # —— 因为 `tenant.before_flush` 只在**未赋值时**回填，不会纠正显式传入的值。
     # 平台超管不受限（`ensure_same_school` 对其直接放行）。
-    ensure_same_school(user, payload.get("school_id"))
-    if role == "student" and payload.get("class_id"):
+    ensure_same_school(user, raw_school_id)
+    if role == "student" and raw_class_id:
         # 跨校班级会被租户过滤挡成 None ⇒ 400，避免学生建到他校班级下
-        if db.get(Classroom, payload["class_id"]) is None:
+        if db.get(Classroom, raw_class_id) is None:
             raise HTTPException(status_code=400, detail="所选班级不存在")
     # 多租户：用户名唯一性按角色分叉，与数据库约束 uq_user_scope_username
     # （users.username_scope + username）保持同一口径。这里只是「先查后插」的友好提示，
@@ -272,9 +300,18 @@ def create_user(db: Session, payload: dict, user: User) -> dict:
     # （main.py 的 IntegrityError handler 会转成 409 中文提示）。
     # - 学生账号 username=姓名，允许跨班重名，仅约束「同校同班不重复」；
     # - 教师/学校管理员 username=登录名，约束「同校不重复」。
-    target_school_id = payload.get("school_id") or user.school_id
+    target_school_id = raw_school_id or user.school_id
+    # 🔴 归属兜底（跨租户漏洞修复）：平台超管的 `school_id` 为 None，本接口又允许其通过
+    # 「账号管理」创建 teacher/school_admin/student —— 若请求体也未指定学校，新建账号会落
+    # `school_id=NULL` 的作用域（teacher/school_admin 甚至与超管争同一个 `platform` 作用域）。
+    # 而租户中间件对 `school_id=None` 的上下文**既不注入查询过滤、也不回填 school_id**，
+    # 该账号登录后 JWT 的 school_id 即为 None ⇒ 可跨校读写全平台数据。
+    # 因此当目标角色是租户内角色（本接口的角色白名单恒为这三者）而解析出的学校为空时，
+    # 直接拒绝，要求显式指定学校。
+    if target_school_id is None:
+        raise HTTPException(status_code=400, detail="请指定账号所属学校")
     if role == "student":
-        target_class_id = payload.get("class_id")
+        target_class_id = raw_class_id
         if db.query(User).filter(
             User.school_id == target_school_id,
             User.class_id == target_class_id,
@@ -294,8 +331,8 @@ def create_user(db: Session, payload: dict, user: User) -> dict:
         name=name,
         role=role,
         phone=payload.get("phone"),
-        class_id=payload.get("class_id") if role == "student" else None,
-        school_id=payload.get("school_id") or user.school_id,
+        class_id=raw_class_id if role == "student" else None,
+        school_id=target_school_id,
         must_change_password=must_change,
     )
     db.add(u)
@@ -339,21 +376,26 @@ def update_user(db: Session, user_id: int, payload: dict, user: User) -> dict:
     ):
         eff_role = payload["role"] if payload.get("role") is not None else u.role
         eff_class_id = payload["class_id"] if payload.get("class_id") is not None else u.class_id
-        if eff_role == "student":
-            if db.query(User).filter(
-                User.school_id == u.school_id,
-                User.class_id == eff_class_id,
-                User.username == u.username,
-                User.id != u.id,
-            ).first():
-                raise HTTPException(status_code=400, detail="该班级内已存在同名用户名")
-        else:
-            if db.query(User).filter(
-                User.school_id == u.school_id,
-                User.username == u.username,
-                User.id != u.id,
-            ).first():
-                raise HTTPException(status_code=400, detail="该校已存在同名用户名")
+        # 🔴 预检口径必须与数据库唯一索引 uq_user_scope_username **完全一致**：
+        # 直接比较目标 `username_scope`（`compute_username_scope` 按角色分叉 —— 学生
+        # `stu:<school>:<class>`、教师/校管 `staff:<school>`、超管 `platform`）。
+        # 旧写法对非学生分支只过滤 `(school_id, username)` 而未排除学生，于是「把学生改成
+        # 教师」时，若同校他班恰好有同名学生就会被误报 400；而学生与教师的作用域天然不同，
+        # 用 scope 比较即可精确区分，且与唯一索引同源、无需再手工拼 role/class 条件。
+        target_scope = compute_username_scope(eff_role, u.school_id, eff_class_id)
+        if db.query(User).filter(
+            User.username_scope == target_scope,
+            User.username == u.username,
+            User.id != u.id,
+        ).first():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "该班级内已存在同名用户名"
+                    if eff_role == "student"
+                    else "该校已存在同名用户名"
+                ),
+            )
 
     # 🔴 角色白名单：与 `create_user` 保持同一口径。
     # 少了这一步，学校管理员只要 `PUT /api/admin/users/{自己的id}` 传
@@ -362,15 +404,33 @@ def update_user(db: Session, user_id: int, payload: dict, user: User) -> dict:
     # 口径：学校管理员只能设教师/学生，只有平台超管能设学校管理员；
     # 任何角色都**不能**经本接口产生 super_admin（创建超管只能走种子/运维脚本）。
     new_role = payload.get("role")
-    if new_role is not None:
+    # 🔴 判据必须是「目标值 vs 当前值」而非「请求体里有没有该键」：
+    # 前端编辑弹窗对**整行原样提交**（`Users.vue` 的 `adminApi.updateUser(id, form)`，
+    # `v-model="form.role"` 恒带 `role`），若只看「键是否存在」，学校管理员哪怕只改同事
+    # （或自己）的电话，也会被误判为「试图设置 school_admin」而**恒 403**。
+    # 改为仅在**角色真的发生变化**时才做白名单与提权校验；`u` 是库中当前行。
+    if new_role is not None and new_role != u.role:
         if new_role not in ("teacher", "school_admin", "student"):
             raise HTTPException(status_code=400, detail="角色不合法")
+        # 🔴 禁止把平台超管**降级**（目标行是超管 + 角色要变）。
+        # 超管的 `school_id` 恒为 NULL，而本接口的字段白名单是 `name/phone/role/class_id`
+        # —— **不含 `school_id`** ⇒ 降级后会造出「role=school_admin/teacher + school_id=NULL」
+        # 的账号：租户中间件对 `school_id is None` 既不注入过滤也不回填，
+        # 该账号随即变成**跨校读写全平台**，还会因 `compute_username_scope` 落
+        # `PLATFORM_SCOPE` 而与超管抢用户名命名空间（与 create_user 的归属兜底同源）。
+        # 超管账号的增删改一律只走种子 / 运维脚本；`delete_user` 另有「至少留一个超管」守卫。
+        if u.role == "super_admin":
+            raise HTTPException(status_code=403, detail="平台超管账号的角色不可修改")
         if new_role == "school_admin" and not is_platform_admin(user):
             raise HTTPException(status_code=403, detail="只有平台超管可以设置学校管理员")
     # 班级归属校验：跨校班级被租户过滤挡成 None ⇒ 400（与 create_user 同口径）
+    # 类型非法（如 "abc"）会让 db.get 抛 StatementError → 500，先做整数判定再查库。
     new_class_id = payload.get("class_id")
-    if new_class_id is not None and db.get(Classroom, new_class_id) is None:
-        raise HTTPException(status_code=400, detail="所选班级不存在")
+    if new_class_id is not None:
+        if isinstance(new_class_id, bool) or not isinstance(new_class_id, int):
+            raise HTTPException(status_code=400, detail="班级编号格式不正确")
+        if db.get(Classroom, new_class_id) is None:
+            raise HTTPException(status_code=400, detail="所选班级不存在")
 
     for f in ("name", "phone", "role", "class_id"):
         if f in payload and payload[f] is not None:
@@ -389,7 +449,12 @@ def reset_password(db: Session, user_id: int, payload: dict, user: User) -> dict
     # `routers/admin.py` 的 `admin_dep = require_school_admin`（仅 school_admin /
     # super_admin 可进入）调用，`user.role == "teacher"` 恒为 False（死代码，见
     # docs/CHANGELOG.md），已于 2026-09-21 移除。教师拦截点统一在路由依赖层。
-    new_pwd = payload.get("password") or "123456"
+    # 入参类型归一化：非字符串密码（如 {"password": 123456}）会让 validate_password_strength
+    # 的 `len()` 抛 TypeError ⇒ 500。缺省/空值仍回落默认密码 "123456"（原语义不变）。
+    raw_pwd = payload.get("password")
+    if raw_pwd is not None and not isinstance(raw_pwd, str):
+        raise HTTPException(status_code=400, detail="密码格式不正确")
+    new_pwd = raw_pwd or "123456"
     # 重置密码后标记首次登录需改密（除非新密码本身满足强度要求）
     u.must_change_password = validate_password_strength(new_pwd) is not None
     u.password_hash = hash_password(new_pwd)
@@ -444,13 +509,51 @@ def delete_user(db: Session, user_id: int, user: User) -> dict:
     return {"ok": True}
 
 
-def get_settings(db: Session) -> dict:
-    rows = db.query(Setting).all()
+def get_settings(db: Session, user: User) -> dict:
+    """返回当前用户作用域内的系统设置（**不再混返其他学校的行**）。
+
+    - 平台超管（`school_id is None`）：只返回**平台级默认行**（`school_id IS NULL`）。
+      原实现是 `db.query(Setting).all()`，超管上下文下租户事件不会注入过滤 ⇒ 会把
+      所有学校的同名配置行一起返回，页面上无法区分归属。
+    - 校内管理员：本校覆盖行 **+ 平台级默认行兜底**（同 key 时本校行胜出，每键只出一行）。
+      兜底是为了兼容历史数据：早期 `seed.py` 写入的 `school_name` / `semester` 是不带
+      `school_id` 的全局行，校内管理员的过滤条件（`school_id = 自己`）看不到它们 ⇒
+      该校「学校名称」会显示为空。加上兜底后无需数据迁移即可显示默认值，校内管理员
+      保存一次即生成本校自己的覆盖行。
+    """
+    global_rows = (
+        db.query(Setting)
+        .execution_options(skip_tenant_filter=True)
+        .filter(Setting.school_id.is_(None))
+        .all()
+    )
+    if user.school_id is None:
+        rows = global_rows
+    else:
+        # 先铺全局默认，再用本校覆盖行覆盖同 key（Python 侧去重，保证「每键一行」）
+        merged: dict[str, Setting] = {r.key: r for r in global_rows}
+        for r in db.query(Setting).filter(Setting.school_id == user.school_id).all():
+            merged[r.key] = r
+        rows = list(merged.values())
+    # 稳定排序，便于前端展示与测试断言
+    rows.sort(key=lambda s: s.key)
     return {"items": [to_dict(s) for s in rows]}
 
 
 def set_setting(db: Session, key: str, payload: dict, user: User) -> dict:
-    # 校内唯一：按 (school_id, key) 定位，避免跨校同名配置冲突
+    """写入校内设置（按 `(school_id, key)` 定位，避免跨校同名配置冲突）。
+
+    🔴 平台超管在此页**没有**校内作用域：其 `school_id` 为 None，原实现会把行写到
+    `school_id=NULL` 的**全局默认行**上 —— 而全局行对任何校内管理员都不可见
+    （他们的过滤条件是 `school_id = 自己`），等于「超管改了、所有学校都没变」。
+    平台级配置有专用通道（`/admin/platform-settings` + `app/platform_settings.py`
+    的 `set_global_setting`，显式 `school_id IS NULL`），本接口不再兼职写全局行。
+    """
+    if user.school_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="本页维护各校的校内设置，平台级配置请前往「平台设置」修改",
+        )
     s = db.query(Setting).filter(
         Setting.school_id == user.school_id, Setting.key == key
     ).first()
@@ -480,11 +583,20 @@ def upgrade_grade(db: Session, user: User) -> dict:
 
 
 def list_audit_log_actions(db: Session, user: User) -> dict:
-    """返回所有出现过的操作类型（去重，供前端下拉框动态展示）。"""
+    """返回所有出现过的操作类型（去重，供前端下拉框动态展示）。
+
+    过滤口径与 `list_audit_logs` / `audit_log_stats` 保持一致：非平台超管仅本校，
+    班主任额外限定在本班。否则班主任能借下拉框枚举出全校（乃至全平台）的操作类型。
+    """
     class_ids = _visible_audit_class_ids(db, user)
     if class_ids == []:
         raise HTTPException(status_code=403, detail="仅班主任或管理员可查看审计日志")
-    rows = db.query(OperationLog.action).distinct().order_by(OperationLog.action).all()
+    q = db.query(OperationLog.action)
+    if not is_platform_admin(user):
+        q = q.filter(OperationLog.school_id == user.school_id)
+    if class_ids is not None:
+        q = q.filter(OperationLog.class_id.in_(class_ids))
+    rows = q.distinct().order_by(OperationLog.action).all()
     return {"items": [r[0] for r in rows]}
 
 
@@ -612,15 +724,22 @@ def dashboard(db: Session, user: User) -> dict:
     student_count = len(student_ids)
     class_count = len(class_ids)
     # 租户隔离（原实现为全表 count，学校管理员会看到全平台数量，属跨校串数）：
-    # - 作业 / 资源 / 试卷按 school_id 过滤；平台超管 school_id 为空 → 统计全平台。
-    # - 提交按校内学生过滤，与请假 / 沟通口径一致，同时排除毕业班级与退学学生。
+    # - 资源 / 试卷**没有班级归属维度**（模型上只有 school_id），是校级/平台级资产库，
+    #   因此按 school_id 过滤；平台超管 school_id 为空 → 统计全平台。
+    # - 其余计数一律按 `class_ids` / `student_ids` 收敛，口径统一。
     def _tenant_count(model):
         q = db.query(model)
         if user.school_id is not None:
             q = q.filter(model.school_id == user.school_id)
         return q.count()
 
-    assignment_count = _tenant_count(Assignment)
+    # 🔴 「作业任务」原先也走 `_tenant_count(Assignment)`，于是教师看到的是**全校**作业数
+    # 而他同屏的「学生总数 / 提交总数 / 请假记录」都是**本班**口径 —— 一张看板两套口径，
+    # 既误导教师（把全校数当成自己的工作量），又让教师间接得知全校规模。
+    # `Assignment` 有 `class_id`（非空），因此改为按班级收敛，与同屏其余卡片一致：
+    # 教师只看自己带的班，管理员看本校（超管看全部）的**在籍**班级 —— 与看板
+    # 「排除毕业班级」的既有原则统一（副作用：毕业班级的作业不再计入，属修正）。
+    assignment_count = _count(Assignment, Assignment.class_id, class_ids)
     resource_count = _tenant_count(Resource)
     exam_count = _tenant_count(Exam)
     submission_count = _count(Submission, Submission.student_id, student_ids)
@@ -766,9 +885,14 @@ def dashboard(db: Session, user: User) -> dict:
             c[r.status] += 1
     att_total = sum(att_status.values())
     # 遍历所有班级（含无考勤记录的班），确保管理员能看到每个班
+    # 一次查询建 id->Classroom 映射，避免逐班 db.get 的 N+1
+    att_class_map = (
+        {c.id: c for c in db.query(Classroom).filter(Classroom.id.in_(class_ids)).all()}
+        if class_ids else {}
+    )
     att_by_class = []
     for cid in class_ids:
-        cls = db.get(Classroom, cid)
+        cls = att_class_map.get(cid)
         st = att_by_class_map.get(cid, {"出勤": 0, "缺勤": 0, "请假": 0, "迟到": 0})
         total_n = sum(st.values())
         att_by_class.append(

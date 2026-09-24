@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user, require_student, require_teacher
+from app.schemas import SubmissionCommentCreate
 from app.services import homework_service
 
 router = APIRouter(prefix="/api/homework", tags=["作业提交平台"])
@@ -107,12 +108,14 @@ def ai_grade_submission(
 @router.post("/submissions/{submission_id}/comments")
 def add_submission_comment(
     submission_id: int,
-    payload: dict,
+    payload: SubmissionCommentCreate,
     user=Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
     """教师对提交添加点评（含可选评分）。"""
-    return homework_service.add_submission_comment(db, submission_id, payload, user)
+    # 用请求模型做类型校验（score 非数字 → 422），再转 dict 交服务层，
+    # 保持服务层「缺省判空返回 400」的既有语义不变。
+    return homework_service.add_submission_comment(db, submission_id, payload.model_dump(), user)
 
 
 @router.delete("/submissions/{submission_id}/comments/{comment_id}")

@@ -59,8 +59,12 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
 @router.post("/register")
 @limiter.limit("10/minute")
 def register(request: Request, payload: RegisterRequest, db: Session = Depends(get_db)):
-    """学生自助注册（仅允许系统中尚不存在「班级+姓名」的学生）。"""
-    return auth_service.register(db, payload)
+    """学生自助注册（仅允许系统中尚不存在「班级+姓名」的学生）。
+
+    注册即自动登录，与 `/login` 一致签发 access + refresh 令牌（见
+    `auth_service._issue_session`）；`user_agent` 用于在刷新令牌上登记来源，便于审计。
+    """
+    return auth_service.register(db, payload, user_agent=request.headers.get("user-agent"))
 
 
 @router.post("/refresh")
@@ -73,8 +77,13 @@ def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get
 
 
 @router.post("/logout")
-def logout(payload: RefreshRequest, db: Session = Depends(get_db)):
-    """撤销刷新令牌（幂等），无需鉴权。"""
+@limiter.limit("30/minute")
+def logout(request: Request, payload: RefreshRequest, db: Session = Depends(get_db)):
+    """撤销刷新令牌（幂等），无需鉴权。
+
+    与同组的 login(5/min) / register(10/min) / refresh(30/min) 一致挂限流：
+    登出是无成本可刷的端点（每次都按 token_hash 查一次库）。30/min 与 refresh 同档，
+    远高于正常登出频率，不影响正常使用。"""
     return auth_service.logout(db, payload.refresh_token)
 
 

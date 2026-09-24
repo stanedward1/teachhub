@@ -44,8 +44,8 @@ def delete_user(user_id: int, user=Depends(admin_dep), db: Session = Depends(get
 
 
 @router.get("/settings")
-def get_settings(_=Depends(admin_dep), db: Session = Depends(get_db)):
-    return admin_service.get_settings(db=db)
+def get_settings(user=Depends(admin_dep), db: Session = Depends(get_db)):
+    return admin_service.get_settings(db=db, user=user)
 
 
 @router.put("/settings/{key}")

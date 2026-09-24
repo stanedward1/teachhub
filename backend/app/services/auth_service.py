@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.audit import audit
 from app.config import settings
 from app.models import Classroom, RefreshToken, School, Student, User
-from app.permissions import get_student_account
+from app.permissions import get_head_class_ids, get_student_account
 from app.platform_settings import is_registration_allowed
 from app.security import (
     create_access_token,
@@ -36,6 +36,11 @@ from app.utils import gen_student_no, to_dict
 # 登录失败锁定策略（语义不变：连续失败 5 次锁定 15 分钟）
 MAX_FAILED_ATTEMPTS = 5
 LOCK_DURATION_MINUTES = 15
+
+# 等时代价用的哑哈希：账号不存在时也拿它跑一次 `verify_password`，让两条路径的
+# 响应耗时对齐（见 `login` 的防盗枚举说明）。模块导入时生成一次，避免每请求重复计算；
+# 用 `hash_password` 生成，保证 bcrypt cost 与真实口令哈希一致。
+_DUMMY_PASSWORD_HASH = hash_password("teachhub-timing-equalizer-placeholder")
 
 
 def _utcnow() -> datetime:
@@ -127,7 +132,16 @@ def _resolve_login_user(db: Session, payload):
 
 
 def public_user(db: Session, user: User) -> dict:
-    """把用户对象转为公开字典，剥离密码哈希与安全状态字段。"""
+    """把用户对象转为公开字典，剥离密码哈希与安全状态字段。
+
+    额外补充两类**派生**信息，供前端做可见性判断（后端仍各自独立校验，前端判断只是
+    「别把入口摆在那儿」，不构成安全边界）：
+    - `class_name`：所属班级名；
+    - `head_classes`：该教师担任**班主任**的班级 id 列表（非教师角色恒为 `[]`）。
+      前端需要它才能判断「是否展示审计日志入口」—— 后端 `/admin/audit-logs` 刻意允许
+      班主任查看本班日志（科任老师 403），而登录响应此前不含该信息，前端只能把教师
+      一律拦下，导致该能力被前端屏蔽（见 docs/CHANGELOG.md 续 33）。
+    """
     data = to_dict(user)
     # 剥离敏感字段：密码哈希 + 安全状态
     data.pop("password_hash", None)
@@ -138,6 +152,7 @@ def public_user(db: Session, user: User) -> dict:
         cls = db.get(Classroom, user.class_id)
         class_name = cls.name if cls else None
     data["class_name"] = class_name
+    data["head_classes"] = get_head_class_ids(db, user.id) if user.role == "teacher" else []
     return data
 
 
@@ -201,6 +216,34 @@ def invalidate_user_sessions(db: Session, user: User) -> None:
 
 
 # ---------------- 对外业务用例 ----------------
+def _issue_session(db: Session, user: User, user_agent: str | None = None) -> dict:
+    """签发一次完整会话（access + refresh）并提交，返回统一的响应负载。
+
+    `login` 与 `register` **共用本函数**，避免两条「签发令牌」路径再次分叉：此前
+    `register` 只签发 access token、不回传 `refresh_token`，导致注册后自动登录的学生
+    在 access token（默认 24h）过期后**无法静默刷新**（也没有 refresh token 可供
+    `/api/auth/logout` 注销），只能被踢回登录页重新输账号密码。
+
+    Returns:
+        形如 `{"token", "refresh_token", "user", "must_change_password"}` 的字典，
+        字段名与登录接口契约一致（前端两条路径共用同一套消费逻辑）。
+    """
+    refresh_plain, _row = _new_refresh_token(db, user, user_agent=user_agent)
+    db.commit()
+    token = create_access_token(
+        subject=str(user.id),
+        role=user.role,
+        school_id=user.school_id,
+        token_version=user.token_version,
+    )
+    return {
+        "token": token,
+        "refresh_token": refresh_plain,
+        "user": public_user(db, user),
+        "must_change_password": bool(user.must_change_password),
+    }
+
+
 def login(
     db: Session,
     payload,
@@ -211,13 +254,29 @@ def login(
     响应在原有 `token` / `user` / `must_change_password` 基础上**新增** `refresh_token`。
     """
     user, err_msg = _resolve_login_user(db, payload)
-    if not user or not verify_password(payload.password, user.password_hash):
-        if user:
-            _record_failed_login(db, user)
-        raise HTTPException(status_code=401, detail=err_msg)
 
-    # 锁定检查（密码正确也要检查，防止锁定期间绕过）
-    _check_locked(user)
+    # 🔴 锁定检查必须早于密码校验。否则锁定期内的响应会被劈成两半：
+    #   错口令 → 401（失败分支），对口令 → 423（才走到这里）。
+    # 状态码差异即成为「口令是否正确」的 oracle —— 攻击者可无限次试探，
+    # 5 次失败锁定形同虚设。
+    # 注意：`_resolve_login_user` 可能返回 user=None（不存在 / 需先选学校），
+    # 此时不判锁，保持既有「401 + 原 err_msg 文案」的响应不变。
+    if user:
+        _check_locked(user)
+
+    # 🔴 恒定时序（防账号枚举）：账号不存在时也拿哑哈希跑一次 `verify_password`。
+    # `bcrypt.checkpw` 是**故意慢**的，原先 `if not user or not verify_password(...)` 在
+    # user 为 None 时短路跳过 bcrypt ⇒ 「账号存在」比「账号不存在」多一次 bcrypt 的耗时。
+    # 攻击者不必看错误文案，只测响应时长即可枚举账号 —— 对学生登录（班级 + 姓名，
+    # 姓名本身是低熵值）尤其有效。这里堵的是**时序**通道；状态码 oracle
+    # （锁定期内 401 vs 423）是另一条通道，已在上面单独修复。
+    password_ok = verify_password(
+        payload.password, user.password_hash if user else _DUMMY_PASSWORD_HASH
+    )
+    if not user or not password_ok:
+        if user:
+            _record_failed_login(db, user)  # 错口令仍要记失败次数（语义不变）
+        raise HTTPException(status_code=401, detail=err_msg)
 
     # 租户校验：停用学校拒绝登录
     _ensure_school_active(db, user)
@@ -236,21 +295,7 @@ def login(
             raise HTTPException(status_code=403, detail="该学生已退学，无法登录")
 
     _reset_login_state(user)
-    refresh_plain, _row = _new_refresh_token(db, user, user_agent=user_agent)
-    db.commit()
-
-    token = create_access_token(
-        subject=str(user.id),
-        role=user.role,
-        school_id=user.school_id,
-        token_version=user.token_version,
-    )
-    return {
-        "token": token,
-        "refresh_token": refresh_plain,
-        "user": public_user(db, user),
-        "must_change_password": bool(user.must_change_password),
-    }
+    return _issue_session(db, user, user_agent=user_agent)
 
 
 def _ensure_student_profile(db: Session, class_id: int, name: str) -> Student:
@@ -273,8 +318,12 @@ def _ensure_student_profile(db: Session, class_id: int, name: str) -> Student:
     return stu
 
 
-def register(db: Session, payload) -> dict:
-    """学生自助注册（仅允许系统中尚不存在「班级+姓名」的学生）。"""
+def register(db: Session, payload, user_agent: str | None = None) -> dict:
+    """学生自助注册（仅允许系统中尚不存在「班级+姓名」的学生）。
+
+    注册即自动登录，因此与 `login` 一致地签发**完整会话**（access + refresh），
+    见 `_issue_session`；响应额外带一个注册独有的 `user.student_id`。
+    """
     # 平台总开关守卫：关闭时直接拒绝（早于任何参数校验）
     if not is_registration_allowed(db):
         raise HTTPException(status_code=403, detail="当前未开放注册，请联系管理员")
@@ -308,19 +357,18 @@ def register(db: Session, payload) -> dict:
         role="student",
         school_id=cls.school_id,  # 租户归属，缺失会被教师查询的 school_id 过滤掉
         class_id=payload.class_id,
+        # 自助注册同样遵守密码强度口径：弱口令不直接拒绝（保持既有注册体验），
+        # 但强制其登录后修改，与教师建号路径（students_service 里
+        # `must_change_password=validate_password_strength(pwd) is not None`）一致。
+        must_change_password=validate_password_strength(payload.password) is not None,
     )
     db.add(user)
     db.flush()
-    data = public_user(db, user)
-    data["student_id"] = student.id
-    db.commit()
-    token = create_access_token(
-        subject=str(user.id),
-        role=user.role,
-        school_id=user.school_id,
-        token_version=user.token_version,
-    )
-    return {"token": token, "user": data}
+    # 与 login 共用同一条签发路径（access + refresh + must_change_password）。
+    # `student_id` 是注册独有的额外字段，补进 user 快照里。
+    session = _issue_session(db, user, user_agent=user_agent)
+    session["user"]["student_id"] = student.id
+    return session
 
 
 def change_password(db: Session, user: User, payload) -> dict:

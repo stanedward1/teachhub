@@ -234,6 +234,7 @@ import { GridComponent, TooltipComponent, TitleComponent } from 'echarts/compone
 import { CanvasRenderer } from 'echarts/renderers'
 echarts.use([LineChart, PieChart, GridComponent, TooltipComponent, TitleComponent, CanvasRenderer])
 import { adminApi } from '../../api'
+import { isPlatformAdmin } from '../../utils/auth'
 import StateView from '../../components/StateView.vue'
 
 const router = useRouter()
@@ -323,6 +324,10 @@ const statCards = [
 
 const stats = computed(() => {
   const c = data.value.counts || {}
+  // 「教学资源 / 试卷数」在模型上只有 school_id、**没有班级归属**，是校级（超管为全平台）
+  // 资产库，因此它们的层级与同屏的「学生总数 / 提交总数（本班口径）」不同。
+  // 把层级写进文案，避免教师把全校数误当成自己班的数。
+  const assetScope = isPlatformAdmin() ? '全平台' : '全校'
   return statCards.map((s) => ({
     label: {
       student: '学生总数',
@@ -330,8 +335,8 @@ const stats = computed(() => {
       assignment: '作业任务',
       submission: '提交总数',
       leave: '请假记录',
-      resource: '教学资源',
-      exam: '试卷数',
+      resource: `教学资源（${assetScope}）`,
+      exam: `试卷数（${assetScope}）`,
       today_leave: '今日请假',
     }[s.key],
     value: c[s.key] || 0,

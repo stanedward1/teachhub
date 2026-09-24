@@ -10,7 +10,10 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=50, description="学生姓名（作为用户名）")
-    password: str = Field("123456", min_length=6, max_length=50, description="密码，默认 123456")
+    # 去掉「默认 123456」：密码必须显式传入（缺省改为 422，不再静默使用弱口令）。
+    # 强度不在 schema 层拒绝，而由 auth_service.register 复用 validate_password_strength
+    # 判定，弱口令置 must_change_password=True 强制登录后修改（与教师建号口径一致）。
+    password: str = Field(..., min_length=6, max_length=50, description="密码")
     class_id: int | None = Field(None, description="班级 ID")
 
 
@@ -138,6 +141,22 @@ class TalkCreate(BaseModel):
     images: list[str] | None = None
 
 
+class PerformanceCreate(BaseModel):
+    """学生表现登记请求体（`POST /api/performances`）。
+
+    字段全部可选并带**等价默认值**，保持「缺省仍返回 200」的既有语义；
+    仅做**类型**校验：`points` 非数字 → 422（原先会写库时抛 `DataError` → 500）。
+    刻意不在 schema 层加取值范围 —— 默认分值由服务层按类型决定（积极 +1 / 消极 -1），
+    保持原语义不变。
+    """
+
+    student_id: int | None = Field(None, description="学生 ID")
+    ptype: str | None = Field("积极", description="表现类型：积极 / 消极")
+    content: str | None = Field("", description="表现内容")
+    points: int | None = Field(None, description="积分；留空按类型默认（积极 +1 / 消极 -1）")
+    image: str | None = Field(None, description="关联图片路径")
+
+
 # ============ 家校沟通 ============
 class CommunicationCreate(BaseModel):
     student_id: int = Field(..., gt=0, description="学生 ID")
@@ -194,6 +213,19 @@ class AttendanceCheckin(BaseModel):
     class_id: int = Field(..., gt=0)
     date: str = Field(..., min_length=1)
     records: list[AttendanceRecord] = Field(default_factory=list)
+
+
+# ============ 作业提交 ============
+class SubmissionCommentCreate(BaseModel):
+    """教师作业点评请求体（`POST /api/homework/submissions/{id}/comments`）。
+
+    字段可选并带**等价默认值**，保持「缺省仍可提交、由服务层判空返回 400」的语义；
+    仅做**类型**校验：`score` 非数字 → 422（原先服务层 `int()` 抛 `ValueError` → 500）。
+    0-100 范围校验保留在服务层，此处刻意不加 `ge`/`le`，以免把既有的 400 变成 422。
+    """
+
+    content: str | None = Field("", description="点评内容")
+    score: int | None = Field(None, description="可选评分（0-100）")
 
 
 # ============================================================

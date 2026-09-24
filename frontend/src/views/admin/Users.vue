@@ -105,6 +105,15 @@
             <el-option label="学生" value="student" />
           </el-select>
         </el-form-item>
+        <el-form-item
+          v-if="isPlatformUser && form.role !== 'super_admin'"
+          label="所属学校"
+          required
+        >
+          <el-select v-model="form.school_id" placeholder="请选择学校" style="width: 100%">
+            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="电话"><el-input v-model="form.phone" /></el-form-item>
         <el-form-item v-if="form.role === 'student'" label="班级">
           <el-select v-model="form.class_id" clearable style="width: 100%">
@@ -126,10 +135,11 @@ import { useDebouncedRef } from '../../composables/useDebouncedRef'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import StateView from '../../components/StateView.vue'
 import { useCrudList } from '../../composables/useCrudList'
-import { adminApi, studentApi } from '../../api'
-import { getUser } from '../../utils/auth'
+import { adminApi, studentApi, schoolApi } from '../../api'
+import { getUser, isPlatformAdmin } from '../../utils/auth'
 
 const classes = ref([])
+const schools = ref([])
 const role = ref('')
 const keyword = useDebouncedRef('', 300)
 const dialog = ref(false)
@@ -142,6 +152,7 @@ const form = reactive({
   role: 'teacher',
   phone: '',
   class_id: null,
+  school_id: null,
 })
 const { items, loading, error, load, reload, remove } = useCrudList(adminApi.users, {
   removeApi: adminApi.removeUser,
@@ -153,6 +164,8 @@ watch(keyword, reload)
 // 当前登录用户是否为教师（非管理员）
 const currentUser = getUser()
 const isTeacherOnly = currentUser?.role === 'teacher'
+// 平台超管：可跨校建号，新增/编辑表单需显式指定「所属学校」
+const isPlatformUser = isPlatformAdmin()
 
 // 教师不能重置其他教师/管理员的密码
 function canResetPwd(row) {
@@ -186,6 +199,15 @@ const nameDisabled = computed(
 )
 
 onMounted(async () => {
+  // 平台超管需按校建号：预加载学校列表（GET /api/schools 对超管返回全部）
+  if (isPlatformUser) {
+    try {
+      const sres = await schoolApi.list()
+      schools.value = sres.items || []
+    } catch (e) {
+      schools.value = []
+    }
+  }
   const res = await studentApi.classrooms()
   classes.value = res.items
   load()
@@ -209,6 +231,7 @@ function openCreate() {
     role: 'teacher',
     phone: '',
     class_id: null,
+    school_id: null,
   })
   dialog.value = true
 }
@@ -221,16 +244,24 @@ function openEdit(row) {
     role: row.role,
     phone: row.phone,
     class_id: row.class_id,
+    school_id: row.school_id ?? null,
   })
   dialog.value = true
 }
 
 async function save() {
   if (!form.username || !form.name) return ElMessage.warning('请填写用户名和姓名')
+  // 平台超管建号必须指定学校，否则后端会拒绝（跨租户账号防护）
+  if (isPlatformUser && form.role !== 'super_admin' && !form.school_id) {
+    return ElMessage.warning('请选择账号所属学校')
+  }
   saving.value = true
   try {
-    if (editing.value) await adminApi.updateUser(editing.value.id, form)
-    else await adminApi.createUser(form)
+    const payload = { ...form }
+    // 非平台超管不下发 school_id：仍按后端「本校」逻辑回填，避免越权指定他校
+    if (!isPlatformUser) delete payload.school_id
+    if (editing.value) await adminApi.updateUser(editing.value.id, payload)
+    else await adminApi.createUser(payload)
     ElMessage.success('保存成功')
     dialog.value = false
     load()

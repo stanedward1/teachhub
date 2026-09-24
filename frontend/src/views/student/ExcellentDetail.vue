@@ -47,7 +47,9 @@
       <h3>评论互动（{{ item.comments?.length || 0 }}）</h3>
       <div class="comment-input">
         <el-input v-model="comment" placeholder="写下你的评论…" />
-        <el-button type="primary" @click="submit">发表</el-button>
+        <el-button type="primary" :loading="submitting" :disabled="submitting" @click="submit"
+          >发表</el-button
+        >
       </div>
       <div v-if="item.comments?.length" class="comments">
         <div v-for="c in item.comments" :key="c.id" class="c-item">
@@ -74,6 +76,8 @@ import { homeworkApi } from '../../api'
 const route = useRoute()
 const item = ref(null)
 const comment = ref('')
+// 评论提交中标记：防止快速连点「发表」并发提交多条相同评论
+const submitting = ref(false)
 
 onMounted(load)
 
@@ -83,10 +87,16 @@ async function load() {
 
 async function submit() {
   if (!comment.value.trim()) return ElMessage.warning('评论不能为空')
-  await homeworkApi.addComment(route.params.id, { content: comment.value })
-  comment.value = ''
-  ElMessage.success('评论成功')
-  load()
+  if (submitting.value) return
+  submitting.value = true
+  try {
+    await homeworkApi.addComment(route.params.id, { content: comment.value })
+    comment.value = ''
+    ElMessage.success('评论成功')
+    load()
+  } finally {
+    submitting.value = false
+  }
 }
 </script>
 

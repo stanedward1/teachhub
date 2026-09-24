@@ -10,6 +10,7 @@ from app.database import get_db
 from app.deps import require_teacher, get_current_user
 from app.models import ClassPlan, TeacherPlan, User
 from app.schemas import (
+    PerformanceCreate,
     PerformanceOut,
     ReturnRecordCreate,
     ReturnRecordOut,
@@ -147,8 +148,10 @@ def summarize_performances(student_id: int | None = None, class_id: int | None =
 
 
 @router.post("/performances", response_model=PerformanceOut, status_code=201)
-def create_performance(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return classlog_service.create_performance(db, payload, user)
+def create_performance(payload: PerformanceCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # 用请求模型做类型校验（points 非数字 → 422），再转 dict 交服务层，
+    # 保持服务层 `.get(...)` 的既有取值语义不变。
+    return classlog_service.create_performance(db, payload.model_dump(), user)
 
 
 @router.delete("/performances/{performance_id}")

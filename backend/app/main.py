@@ -1,8 +1,9 @@
+import ipaddress
 import logging
 import os
 from logging.handlers import TimedRotatingFileHandler
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -269,12 +270,52 @@ def root():
 
 @app.get("/health")
 def health():
+    """健康检查（公开）。
+
+    被 `start.sh` 的就绪探测与 `docker-compose.yml` 的 healthcheck 依赖，
+    因此**必须保持公开**；且只返回 `{"status": "ok"}`，不含任何敏感信息。
+    """
     return {"status": "ok"}
 
 
+# /metrics 仅允许「内网 / 回环」来源访问。为何不是 require_super_admin：
+# Prometheus 抓取无法方便地携带会过期的 super_admin JWT，加该鉴权会直接打断
+# README/ARCHITECTURE 已记录的 Prometheus 接入；而 Prometheus 通常与本服务同处
+# 内网或本机，用网段白名单既能挡住公网探测，又不破坏既有抓取。
+# ⚠️ 局限：若前面挂了对公网暴露的反向代理，源地址会变成代理 IP（可能落进内网段），
+# 此时应在代理层再限制 /metrics，或改为带鉴权的抓取。
+_METRICS_ALLOWED_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),      # IPv4 回环
+    ipaddress.ip_network("::1/128"),          # IPv6 回环
+    ipaddress.ip_network("10.0.0.0/8"),       # 私有网段
+    ipaddress.ip_network("172.16.0.0/12"),    # 私有网段
+    ipaddress.ip_network("192.168.0.0/16"),   # 私有网段
+    ipaddress.ip_network("fc00::/7"),         # IPv6 唯一本地地址
+    ipaddress.ip_network("fe80::/10"),        # IPv6 链路本地
+)
+
+
+def _is_internal_client(request: Request) -> bool:
+    """判断请求来源是否为内网 / 回环地址（无法解析出 IP 时一律视为非内网）。"""
+    client = request.client
+    if client is None or not client.host:
+        return False
+    try:
+        ip = ipaddress.ip_address(client.host)
+    except ValueError:
+        return False
+    return any(ip in net for net in _METRICS_ALLOWED_NETWORKS)
+
+
 @app.get("/metrics")
-def metrics():
-    """Prometheus 指标端点：供 Prometheus / Grafana 抓取。"""
+def metrics(request: Request):
+    """Prometheus 指标端点：供 Prometheus / Grafana 抓取。
+
+    暴露路径级请求量与状态码分布（潜在信息泄露面），故仅限内网 / 回环来源访问，
+    非内网一律 403（`/health` 保持公开，见上）。
+    """
     from fastapi.responses import PlainTextResponse
 
+    if not _is_internal_client(request):
+        raise HTTPException(status_code=403, detail="仅允许内网访问")
     return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")

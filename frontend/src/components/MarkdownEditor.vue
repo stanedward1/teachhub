@@ -18,6 +18,7 @@
     </div>
     <div class="md-panes">
       <el-input
+        ref="taRef"
         type="textarea"
         :model-value="modelValue"
         :rows="rows"
@@ -32,6 +33,7 @@
 </template>
 
 <script setup>
+import { ref } from 'vue'
 import Markdown from './Markdown.vue'
 import { uploadFile } from '../api'
 
@@ -46,8 +48,14 @@ function onInput(val) {
   emit('update:modelValue', val)
 }
 
+// 组件内的 textarea 引用：ElInput 通过 defineExpose 暴露 `textarea`（type=textarea 时的 DOM 节点）。
+// 必须用组件内 ref 而非 `document.querySelector('.md-editor textarea')`——后者取的是**全文档第一个**
+// 匹配项，同一弹窗内放两个 MarkdownEditor（如 Communications.vue 的 content / feedback）时，
+// 点第二个编辑器的工具栏按钮会把文字插进第一个（§3.5）。
+const taRef = ref(null)
+
 function getTextarea() {
-  return document.querySelector('.md-editor textarea')
+  return taRef.value?.textarea || null
 }
 
 function insert(text) {

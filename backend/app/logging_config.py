@@ -28,11 +28,6 @@ def new_request_id() -> str:
     return uuid.uuid4().hex
 
 
-def get_request_id() -> str:
-    """获取当前请求的 request-id；无值时返回占位符 ``-``。"""
-    return _ctx_request_id.get() or _REQUEST_ID_PLACEHOLDER
-
-
 def set_request_id(request_id: str) -> Token:
     """设置当前上下文的 request-id，返回用于 reset 的 token。"""
     return _ctx_request_id.set(request_id or "")

@@ -26,6 +26,10 @@ export const useAuthStore = defineStore('auth', () => {
   )
   const isPlatformAdmin = computed(() => user.value?.role === 'super_admin')
   const isSchoolAdmin = computed(() => user.value?.role === 'school_admin')
+  // 班主任：教师且至少带一个班主任班（`head_classes` 由登录响应提供）
+  const isHeadTeacher = computed(
+    () => Array.isArray(user.value?.head_classes) && user.value.head_classes.length > 0
+  )
 
   // 当前用户所属学校（平台超管为 null）
   const schoolId = computed(() => user.value?.school_id ?? null)
@@ -56,6 +60,7 @@ export const useAuthStore = defineStore('auth', () => {
     isTeacher,
     isPlatformAdmin,
     isSchoolAdmin,
+    isHeadTeacher,
     schoolId,
     setAuth,
     clearAuth,

@@ -87,9 +87,10 @@
               <el-input
                 v-model="reg.password"
                 type="password"
-                placeholder="密码（默认 123456）"
+                placeholder="密码（至少 6 位）"
                 size="large"
                 show-password
+                @keyup.enter="doRegister"
               />
             </el-form-item>
             <el-button
@@ -115,7 +116,7 @@ import { reactive, ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authApi, metaApi } from '../../api'
-import { getLastSchoolId, setAuth, setLastSchoolId } from '../../utils/auth'
+import { clearRefreshToken, getLastSchoolId, setAuth, setLastSchoolId } from '../../utils/auth'
 
 const router = useRouter()
 const tab = ref('login')
@@ -127,7 +128,7 @@ const schools = ref([])
 const schoolId = ref(getLastSchoolId())
 
 const form = reactive({ class_id: null, username: '', password: '' })
-const reg = reactive({ class_id: null, name: '', password: '123456' })
+const reg = reactive({ class_id: null, name: '', password: '' })
 
 // 班级代码与名称不一致时一并展示（如名称「2026级计算机2班」/ 代码「2622」），
 // 避免只看到名称而误判「下拉框里没有这个班」
@@ -206,15 +207,39 @@ async function doRegister() {
   if (!schoolId.value || !reg.class_id || !reg.name) {
     return ElMessage.warning('请选择学校、班级并填写姓名')
   }
+  // 密码改为必填并做基本校验：后端 RegisterRequest.password 已由「默认 123456」改为必填
+  // （min_length=6）。前端不再用 `|| '123456'` 兜底弱口令（§2.5）。
+  if (!reg.password) {
+    return ElMessage.warning('请设置登录密码')
+  }
+  if (reg.password.length < 6) {
+    return ElMessage.warning('密码至少 6 位')
+  }
   loading.value = true
   try {
     const res = await authApi.register({
       name: reg.name,
       class_id: reg.class_id,
-      password: reg.password || '123456',
+      password: reg.password,
       school_id: schoolId.value,
     })
-    setAuth(res.token, res.user)
+    // 注册即自动登录，是**另一个账号**的新会话。
+    // 后端目前仅在 login 回传 refresh_token，register 不回传 —— 若沿用上一个账号遗留的
+    // refresh_token，access token 过期后会拿旧账号身份去刷新（§3.6）。故：有新 token 就写入，
+    // 没有就显式清除旧值（宁可本次会话无静默刷新，也不能身份串号）。
+    if (res.refresh_token) {
+      setAuth(res.token, res.user, res.refresh_token)
+    } else {
+      setAuth(res.token, res.user)
+      clearRefreshToken()
+    }
+    // 弱口令注册（后端置 must_change_password）需与登录一致地提示并跳转改密，
+    // 否则等于「接受弱口令却不告知」（§2.5）
+    if (res.must_change_password) {
+      ElMessage.warning('注册成功，请先设置新密码')
+      router.push('/profile')
+      return
+    }
     ElMessage.success('注册成功')
     router.push('/')
   } catch (e) {

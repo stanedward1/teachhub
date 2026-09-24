@@ -11,7 +11,9 @@
  * 结构约定：
  * - 叶子项：`{ index, label, icon?, need? }`，`index` 即路由路径，点击后由 el-menu 的 router 模式跳转。
  * - 分组项：`{ key, label, icon, children: [...] }`，`key` 作为 el-sub-menu 的 index。
- * - `need`：角色门控，`'admin'` 需学校管理员及以上，`'platform'` 需平台管理员；缺省表示对所有角色可见。
+ * - `need`：角色门控，`'admin'` 需学校管理员及以上，`'platform'` 需平台管理员，
+ *   `'head_teacher'` 需「学校管理员及以上 **或** 班主任（教师且带班主任班）」；
+ *   缺省表示对所有角色可见。
  *
  * 注意：菜单顺序、文案、图标与原 AdminLayout.vue 逐字保持一致。
  *
@@ -64,7 +66,11 @@ export const MENU = [
       { index: '/admin/users', label: '账号管理', need: 'admin' },
       { index: '/admin/schools', label: '学校管理', need: 'platform' },
       { index: '/admin/platform-settings', label: '平台设置', need: 'platform' },
-      { index: '/admin/audit-logs', label: '审计日志', need: 'admin' },
+      // 审计日志：后端 `/admin/audit-logs` 刻意允许**班主任**查看本班日志
+      // （科任老师 403，见 admin_service._visible_audit_class_ids），因此这里用
+      // `head_teacher` 而不是 `admin` —— 否则班主任的这项能力会被前端菜单/守卫
+      // 一并封掉（此前就是这种「后端给、前端不给」的半开状态）。
+      { index: '/admin/audit-logs', label: '审计日志', need: 'head_teacher' },
       { index: '/admin/settings', label: '系统设置', need: 'admin' },
     ],
   },
@@ -111,15 +117,21 @@ export const PAGE_TITLES = {
  * 恒渲染、仅子项用 v-if 的行为一致）；叶子项无 `need` 时对所有角色可见。
  *
  * @param {Array<object>} menu 原始菜单树（通常为 {@link MENU}）。
- * @param {{ isAdmin?: boolean, isPlatform?: boolean }} roles 当前用户角色标志。
+ * @param {{ isAdmin?: boolean, isPlatform?: boolean, isHeadTeacher?: boolean }} roles 当前用户角色标志。
+ *        `isHeadTeacher` 指「教师且担任至少一个班的班主任」，用于 `need: 'head_teacher'`。
  * @returns {Array<object>} 过滤后的菜单树（不修改入参）。
  */
-export function filterMenuByRole(menu, { isAdmin = false, isPlatform = false } = {}) {
+export function filterMenuByRole(
+  menu,
+  { isAdmin = false, isPlatform = false, isHeadTeacher = false } = {}
+) {
   return menu.map((group) => {
     if (!group.children) return group
     const children = group.children.filter((leaf) => {
       if (leaf.need === 'admin') return isAdmin
       if (leaf.need === 'platform') return isPlatform
+      // 管理员及以上本就包含在「可看审计日志」范围内，故与 isAdmin 取或
+      if (leaf.need === 'head_teacher') return isAdmin || isHeadTeacher
       return true
     })
     return { ...group, children }
@@ -135,8 +147,9 @@ export function filterMenuByRole(menu, { isAdmin = false, isPlatform = false } =
  * `/admin/audit-logs`）。新增受控页面只需在 {@link MENU} 里写一次 `need`。
  *
  * @param {string} path 目标路由路径。
- * @returns {'admin'|'platform'|undefined} `'admin'` 需学校管理员及以上；
- *          `'platform'` 需平台超管；`undefined` 表示不做角色门控。
+ * @returns {'admin'|'platform'|'head_teacher'|undefined} `'admin'` 需学校管理员及以上；
+ *          `'platform'` 需平台超管；`'head_teacher'` 需学校管理员及以上**或**班主任；
+ *          `undefined` 表示不做角色门控。
  */
 export function routeNeed(path) {
   const target = normalizeRoutePath(path)
@@ -165,6 +178,32 @@ export function routeNeed(path) {
  */
 export function normalizeRoutePath(path) {
   return (path || '').replace(/\/+$/, '').toLowerCase() || '/'
+}
+
+/**
+ * 判断某路径对给定角色**是否应被拒绝**（与 {@link routeNeed} 同源，供路由守卫使用）。
+ *
+ * 抽成纯函数的目的：守卫里的多条件与菜单过滤必须永远一致，而内联在 `router/index.js`
+ * 里的条件无法被单独验证。此函数可脱离 vue-router 直接测试（见本轮验证 harness）。
+ *
+ * 角色语义（调用方需按此口径传参）：
+ * - `isAdmin`：学校管理员**或**平台超管（即「管理员及以上」）；
+ * - `isPlatform`：仅平台超管；
+ * - `isHeadTeacher`：教师且担任至少一个班的班主任。
+ *
+ * @param {string} path 目标路由路径（内部会归一化）。
+ * @param {{ isAdmin?: boolean, isPlatform?: boolean, isHeadTeacher?: boolean }} roles 角色标志。
+ * @returns {boolean} `true` 表示无权访问该页面。
+ */
+export function routeDenied(
+  path,
+  { isAdmin = false, isPlatform = false, isHeadTeacher = false } = {}
+) {
+  const need = routeNeed(path)
+  if (need === 'admin') return !isAdmin
+  if (need === 'platform') return !isPlatform
+  if (need === 'head_teacher') return !isAdmin && !isHeadTeacher
+  return false
 }
 
 /**

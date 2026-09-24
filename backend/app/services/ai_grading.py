@@ -37,7 +37,6 @@ from app.models import (
     AiGradingResult,
     AiUsageDaily,
     Assignment,
-    AssignmentAttachment,
     ExcellentWork,
     Submission,
     User,
@@ -65,6 +64,17 @@ _SYSTEM_PROMPT = """你是一位经验丰富的中小学教师，正在批改学
 【评价依据】
 只依据本条消息中的【作业要求】、【任务附件】、【学生提交内容】、【附件内容】，以及随消息附上的图片
 进行评价。不得引入外部知识去臆测提交中并不存在的内容。
+
+【关于「任务单模板」的重要说明】
+上机任务常要求学生在教师下发的任务单文档里直接作答后交回。因此【附件内容】中与【任务附件】
+逐字相同的段落属于**模板原文**，不是学生的成果；这类段落可能已被系统折叠为
+「（此处 N 段为任务单模板原文，已折叠）」标记 —— 这是正常现象，不代表学生没有内容。
+- 请**只评价学生新增、修改、填写的内容**，不要拿模板原文充当学生的完成度；
+- **禁止**仅因附件文字与任务单重合就下结论说「直接提交任务单」「与任务单原文完全一致」；
+  只有整份附件里**找不到任何**学生新增内容时，才可指出「提交的附件与任务单原文完全一致，
+  未见作答痕迹」，此时 strengths/improvements 置为空字符串、score 置为 null；
+- 【任务附件】或【附件内容】若带「已截断」标注，说明你没看全那一段，
+  不得对未看到的部分下判断，也不得据此认定学生「没做」。
 
 【反幻觉要求（必须严格遵守）】
 - 若提交内容为空、截断后已无有效信息，或图片缺失/无法辨认/未附带，必须如实说明
@@ -299,6 +309,96 @@ _ASSIGNMENT_ATTACHMENT_BUDGET_RATIO = 0.25
 # 图片名额**。否则「老师传了 6 张参考图 → 学生交的东西一张都进不去」，批改会彻底失去依据。
 _RESERVED_IMAGE_SLOTS_FOR_SUBMISSION = 1
 
+# 文本预算分配常量（见 `_build_messages` 的分段预算）：
+# 任务附件在极端情况下可保留的**最低**比例 —— 学生附件过大时也留一点批改依据；
+_MIN_ASSIGNMENT_KEEP_RATIO = 0.15
+# 学生附件在极端情况下**至少**保留的字符数：宁可少给任务附件，也不让学生附件归零。
+_MIN_SUBMISSION_KEEP_CHARS = 1000
+# 两段大文本被截断时就地插入的标记（必须让模型看见「自己没看全」）
+_REQ_TRUNCATED_MARK = "\n（任务附件过长，此处已截断）"
+_ATT_TRUNCATED_MARK = "\n（⚠️ 学生附件过长，此处已截断；未显示的部分未参与批改）"
+
+# 学生「在任务单模板上作答」时，提交附件会包含大量与【任务附件】**逐字相同**的模板文字。
+# 原样送模型有两个后果（2026-09-24 线上问题）：
+#   ① 重复的模板段落稀释了学生自己的作答，模型倾向于概括成「附件内容与任务单原文完全一致」，
+#      教师侧看到的是「学生认真做了、却像直接交了任务单」；
+#   ② 白占输入预算，把学生真正的作答挤出上限。
+# 因此把与任务附件逐字相同的**长段落**折叠成一行标记，让学生贡献与模板都看得见。
+_FOLD_MIN_PARAGRAPH_CHARS = 12
+# 折叠标记：供调用方判断「折叠后是否还剩学生自己的内容」（全部折叠时文本里只剩标记，
+# 仅看 `strip()` 会误判成「部分重合」，从而输出「100% 相同…其余为作答内容」这种自相矛盾的话）。
+_TEMPLATE_FOLD_MARK_RE = re.compile(r"（此处 \d+ 段为任务单模板原文，已折叠）")
+
+
+def _norm_segment(seg: str) -> str:
+    """段落归一化：去掉全部空白后比较（容忍缩进 / 换行符差异造成的假不相等）。"""
+    return "".join(seg.split())
+
+
+# 按「中文句末标点 / 换行」切分，**保留分隔符**（`re.split` 的 lookbehind 把标点留在前一段）。
+# 刻意不切英文句点 —— 否则「1.2 节」「v5.4.21」会被拦腰截断。
+_SEGMENT_SPLIT_RE = re.compile(r"(?<=[。！？；!?;\n])")
+
+
+def _split_segments(text: str) -> list[str]:
+    """切分成「句子 / 段落」序列；`"".join(...)` 可**无损重建**原文。
+
+    为什么不用 `splitlines()`：docx / pdf 抽取出的文本未必按段落换行 ——
+    整篇挤成一行时按行比较**一段都匹配不上**，折叠会彻底失效（实测踩到）。
+    """
+    return [seg for seg in _SEGMENT_SPLIT_RE.split(text) if seg]
+
+
+def _fold_duplicate_paragraphs(
+    student_text: str, requirement_text: str
+) -> tuple[str, int, int, int]:
+    """折叠学生附件中与任务附件**逐字相同**的段落。
+
+    只折叠归一化后长度 ≥ `_FOLD_MIN_PARAGRAPH_CHARS` 的段落 —— 短段（「一、」「答：」「1.」）
+    在模板与学生作答里都常见，折叠它们既无意义又容易误伤。
+
+    Returns:
+        `(折叠后的文本, 被折叠段数, 参与比较段数, 折叠掉的字符数)`。
+        折叠处替换为 `（此处 N 段为任务单模板原文，已折叠）`，**连续段落合并为一条标记**。
+    """
+    if not student_text or not requirement_text:
+        return student_text, 0, 0, 0
+
+    template = {
+        _norm_segment(seg)
+        for seg in _split_segments(requirement_text)
+        if len(_norm_segment(seg)) >= _FOLD_MIN_PARAGRAPH_CHARS
+    }
+    if not template:
+        return student_text, 0, 0, 0
+
+    out: list[str] = []
+    pending = 0
+    folded = 0
+    total = 0
+    folded_chars = 0
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if pending:
+            out.append(f"（此处 {pending} 段为任务单模板原文，已折叠）")
+            pending = 0
+
+    for seg in _split_segments(student_text):
+        normalized = _norm_segment(seg)
+        if len(normalized) >= _FOLD_MIN_PARAGRAPH_CHARS:
+            total += 1
+            if normalized in template:
+                folded += 1
+                folded_chars += len(seg)
+                pending += 1
+                continue
+        flush_pending()
+        out.append(seg)
+    flush_pending()
+
+    return "".join(out), folded, total, folded_chars
+
 
 def _extract_assignment_materials(
     assignment: Assignment | None,
@@ -370,6 +470,8 @@ def _build_messages(
     attachment_text: str,
     images: list[str],
     requirement_text: str = "",
+    attachment_note: str = "",
+    budget_notes: list[str] | None = None,
 ) -> list[dict]:
     """构造批改请求消息（作业要求 + 任务附件 + 学生正文 + 学生附件 + 图片）。
 
@@ -380,48 +482,131 @@ def _build_messages(
     ``requirement_text`` 是**教师任务附件**抽取出的文本（见
     `_extract_assignment_materials`）：上机任务常把要求写在附件里、`description`
     留空，缺了它【作业要求】就是空的。
+
+    ``attachment_note`` 是**学生附件**的补充说明（如「与任务附件重合的模板段落已折叠」），
+    渲染在【附件内容】标题下方。
+
+    ``budget_notes``：传入列表时，把「哪一段因输入预算被截断了多少」追加进去，
+    供调用方落进 `attachment_used` 给教师看 —— **截断必须对教师可见**，
+    否则教师会把「内容没送到」误当成「学生没做」。
+
+    🔴 预算分配原则（2026-09-24 修）：**任务附件先让位，学生附件最后才动**。
+    此前是「整体拼完再 `text[:AI_MAX_INPUT_CHARS]` 从尾部砍」，而学生附件恰好排在消息最末；
+    学生又习惯把答案写在任务单模板的**末尾**、模板原文占了绝大部分篇幅 ——
+    于是一刀砍掉的正是学生的作答内容，模型只看到模板原文，判成
+    「附件内容与任务单原文完全一致」（线上被误读为「学生直接交了任务单」）。
     """
-    parts: list[str] = ["【作业要求】"]
+    limit = settings.AI_MAX_INPUT_CHARS
+    body = content_text.strip() if content_text and content_text.strip() else ""
+    has_text_material = bool(
+        assignment is not None
+        and ((assignment.description or "").strip() or (assignment.content or "").strip())
+    )
+
+    head_parts: list[str] = ["【作业要求】"]
     if assignment is not None:
-        parts.append(f"标题：{assignment.title}")
+        head_parts.append(f"标题：{assignment.title}")
         if assignment.description:
-            parts.append(f"说明：{assignment.description}")
+            head_parts.append(f"说明：{assignment.description}")
         if assignment.content:
-            parts.append(f"正文：\n{assignment.content}")
-        if requirement_text:
-            parts.append(f"\n【任务附件】\n{requirement_text}")
-        elif not (assignment.description or "").strip() and not (
-            assignment.content or ""
-        ).strip():
+            head_parts.append(f"正文：\n{assignment.content}")
+    else:
+        head_parts.append("（作业信息缺失）")
+
+    tail_parts: list[str] = []
+    if images:
+        tail_parts.append(
+            f"\n（本条消息另附 {len(images)} 张图片，请结合图片内容评价；"
+            "正文中的【图片N】标记与附图顺序一一对应。）"
+        )
+    else:
+        tail_parts.append("\n（本条消息没有可用的图片，请仅依据上述文字评价，不要臆测图片内容。）")
+    tail_parts.append("\n请按系统提示的 JSON 格式批改这份作业。")
+
+    def render(req_text: str, att_text: str) -> str:
+        parts = list(head_parts)
+        if req_text:
+            parts.append(f"\n【任务附件】\n{req_text}")
+        elif assignment is not None and not has_text_material:
             # 既无文字说明也无可用任务附件：必须显式告知，否则模型会自己编一套评分标准，
             # 而教师看到的是一份「有模有样但无依据」的批改（比报错更危险）。
             parts.append(
                 "\n（⚠️ 本作业既无文字说明、也没有可解析的任务附件，"
                 "无法核对「是否达成任务要求」；请只评价提交内容本身，不要臆测任务要求。）"
             )
-    else:
-        parts.append("（作业信息缺失）")
+        parts.append("\n【学生提交内容】")
+        parts.append(body or "（未填写文字内容）")
+        if att_text or attachment_note:
+            parts.append("\n【附件内容】")
+            if attachment_note:
+                parts.append(f"（{attachment_note}）")
+            parts.append(att_text)
+        parts.extend(tail_parts)
+        return "\n".join(parts)
 
-    parts.append("\n【学生提交内容】")
-    body = content_text.strip() if content_text and content_text.strip() else ""
-    parts.append(body or "（未填写文字内容）")
-    if attachment_text:
-        parts.append("\n【附件内容】")
-        parts.append(attachment_text)
+    # ---------- 分段预算：任务附件先让位，学生附件最后才动 ----------
+    # 以「两段都非空」渲染出的骨架长度作为固定开销（已含附件说明），避免低估；
+    # 再预留两个截断标记的位置。
+    skeleton = len(render("x", "x")) - 2
+    avail = max(0, limit - skeleton - len(_REQ_TRUNCATED_MARK) - len(_ATT_TRUNCATED_MARK))
 
-    if images:
-        parts.append(
-            f"\n（本条消息另附 {len(images)} 张图片，请结合图片内容评价；"
-            "正文中的【图片N】标记与附图顺序一一对应。）"
-        )
-    else:
-        parts.append("\n（本条消息没有可用的图片，请仅依据上述文字评价，不要臆测图片内容。）")
+    req_full = requirement_text or ""
+    att_full = attachment_text or ""
+    req_keep = len(req_full)
+    att_keep = len(att_full)
 
-    parts.append("\n请按系统提示的 JSON 格式批改这份作业。")
+    if req_keep + att_keep > avail:
+        if att_keep <= avail:
+            # 学生附件放得下 ⇒ 任务附件让位到剩余空间（它只是背景资料）
+            req_keep = max(0, avail - att_keep)
+        else:
+            # 学生附件自己也超出上限 ⇒ 保住任务附件的最低依据，其余空间全给学生附件
+            req_keep = min(req_keep, int(limit * _MIN_ASSIGNMENT_KEEP_RATIO))
+            req_keep = min(req_keep, max(0, avail - _MIN_SUBMISSION_KEEP_CHARS))
+            att_keep = max(0, avail - req_keep)
 
-    text = "\n".join(parts)
-    if len(text) > settings.AI_MAX_INPUT_CHARS:
-        text = text[: settings.AI_MAX_INPUT_CHARS] + "\n（内容过长已截断）"
+    req_text = req_full
+    if req_keep < len(req_full):
+        req_text = req_full[:req_keep] + _REQ_TRUNCATED_MARK
+        if budget_notes is not None:
+            budget_notes.append(
+                f"任务附件超出输入预算，已截断 {len(req_full) - req_keep} 字符"
+            )
+
+    att_text = att_full
+    if att_keep < len(att_full):
+        att_text = att_full[:att_keep] + _ATT_TRUNCATED_MARK
+        if budget_notes is not None:
+            budget_notes.append(
+                f"学生附件超出输入预算，已截断 {len(att_full) - att_keep} 字符"
+                "（未显示的部分未参与批改）"
+            )
+
+    text = render(req_text, att_text)
+
+    # 兜底一：正文本身极长时骨架仍可能被突破 —— 继续压缩任务附件，不动学生附件
+    if len(text) > limit and req_text:
+        cut = min(len(text) - limit, len(req_text))
+        req_text = req_text[: len(req_text) - cut]
+        if budget_notes is not None and cut:
+            budget_notes.append(f"任务附件因输入预算不足再截断 {cut} 字符")
+        text = render(req_text, att_text)
+
+    # 兜底二：连学生附件一起压（正文本身就超限的极端情形）
+    if len(text) > limit and att_text:
+        cut = min(len(text) - limit, len(att_text))
+        att_text = att_text[: len(att_text) - cut] + _ATT_TRUNCATED_MARK
+        if budget_notes is not None and cut and not any(
+            "学生附件超出输入预算" in n for n in budget_notes
+        ):
+            budget_notes.append(
+                f"学生附件因正文过长再截断 {cut} 字符（未显示的部分未参与批改）"
+            )
+        text = render(req_text, att_text)
+
+    # 最后手段：以上都无效（如正文单段就超限）时，只能整体截断
+    if len(text) > limit:
+        text = text[:limit] + "\n（内容过长已截断）"
 
     if images:
         content: list[dict] = [{"type": "text", "text": text}]
@@ -627,6 +812,31 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     payload = extract_attachment(
         submission.filepath, submission.filename, vision_enabled=cred.vision_enabled
     )
+    # ②' 学生附件的「模板折叠」：学生常在教师下发的任务单里直接作答后原样交回，
+    # 附件里大量段落与【任务附件】逐字相同。原样送模型会把模板原文当成学生成果、
+    # 并挤占输入预算，模型因此倾向于概括成「附件内容与任务单原文完全一致」
+    # （2026-09-24 线上问题：学生认真做了，却被批成「直接交了任务单」）。
+    # 折叠只动**与任务附件逐字相同**的长段落，学生自己的作答一字不改。
+    student_text, folded, compared, _folded_chars = _fold_duplicate_paragraphs(
+        payload.text, requirement_text
+    )
+    attachment_note = ""
+    if folded and compared:
+        # 用「去掉折叠标记后是否还剩内容」判断，而不是 `student_text.strip()` ——
+        # 全部折叠时文本里只剩折叠标记，strip() 之后仍非空，会误走「部分重合」分支，
+        # 说出「100% 与任务单相同…其余为学生的作答内容」这种自相矛盾的话。
+        meaningful = _TEMPLATE_FOLD_MARK_RE.sub("", student_text).strip()
+        if meaningful:
+            attachment_note = (
+                f"学生附件中有 {folded}/{compared} 段与【任务附件】逐字相同，"
+                f"已折叠为模板标记（约 {round(folded * 100 / compared)}%），"
+                "其余为学生的作答内容"
+            )
+        else:
+            attachment_note = (
+                f"学生附件共 {compared} 段，全部与【任务附件】逐字相同，"
+                "未见学生新增或修改的内容"
+            )
     # ③ 内嵌图片按「剩余预算」抽取：全局合计不超过 AI_MAX_IMAGES（修缺陷 5）。
     # 例如任务附件 + 提交附件已占 2 张，正文内嵌最多再取 AI_MAX_IMAGES - 2 张。
     inline = extract_inline_images(
@@ -653,15 +863,32 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     images = kept_images
 
     note_parts = [*requirement_notes, payload.note, *inline.notes]
+    if attachment_note:
+        note_parts.append(attachment_note)
     if dropped:
         note_parts.append(
             f"图片过多（{dropped} 张因总体积超过 "
             f"{settings.AI_IMAGE_MAX_TOTAL_BYTES // (1024 * 1024)}MB 上限未参与批改）"
         )
     note = "；".join(n for n in note_parts if n)
+    # 输入预算截断的说明由 `_build_messages` 回填 —— 教师必须能看到
+    # 「这次批改依据不全」，否则会把「内容没送到」误当成「学生没做」。
+    budget_notes: list[str] = []
     messages = _build_messages(
-        assignment, inline.text, payload.text, images, requirement_text
+        assignment,
+        inline.text,
+        student_text,
+        images,
+        requirement_text,
+        attachment_note=attachment_note,
+        budget_notes=budget_notes,
     )
+    if budget_notes:
+        note = "；".join(x for x in [note, *budget_notes] if x)
+    # `attachment_used` 列宽 255：说明叠加后可能超长，而 MySQL 严格模式下超长会直接
+    # 报 1406 → **整条批改结果写不进去**。宁可文字略省，也不能让落库失败。
+    if len(note) > 250:
+        note = note[:249] + "…"
 
     # 先落 pending：前端可立即显示「批改中」
     result = _upsert_result(

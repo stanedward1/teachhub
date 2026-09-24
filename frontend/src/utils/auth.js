@@ -48,6 +48,17 @@ export function clearAuth() {
 }
 
 /**
+ * 仅清除持久化的刷新令牌（保留 access token 与用户信息）。
+ *
+ * 用于「新会话已建立、但服务端未回传 refresh_token」的场景（如学生自助注册）：
+ * 此时若不清除，localStorage 会残留上一个账号的 refresh token，access token 过期后
+ * 会拿旧账号身份去刷新（§3.6），必须显式清除以避免身份串号。
+ */
+export function clearRefreshToken() {
+  localStorage.removeItem(REFRESH_TOKEN_KEY)
+}
+
+/**
  * 在写完 localStorage 后同步已激活的 Pinia store 的 ref（若存在），
  * 使组件内的响应式登录态（useAuthStore）与 localStorage 保持一致。
  *
@@ -84,6 +95,19 @@ export function isPlatformAdmin() {
 /** 学校管理员：本校最高管理员 */
 export function isSchoolAdmin() {
   return getUser()?.role === 'school_admin'
+}
+
+/**
+ * 班主任：教师角色且至少担任一个班的班主任。
+ *
+ * 依赖登录响应里的 `head_classes`（由后端 `auth_service.public_user` 提供，
+ * 与 `/admin/audit-logs` 的可见范围同源）。**仅用于前端展示层判断**
+ * （是否展示审计日志菜单/是否放行该路由）；真正的数据边界由后端按班级过滤，
+ * 科任老师直接调接口仍会拿到 403。
+ */
+export function isTeacherHead() {
+  const headClasses = getUser()?.head_classes
+  return Array.isArray(headClasses) && headClasses.length > 0
 }
 
 /** 记住上次选择的学校（登录页用） */

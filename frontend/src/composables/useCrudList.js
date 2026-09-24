@@ -23,6 +23,7 @@
  */
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import axios from 'axios'
 
 export function useCrudList(listApi, options = {}) {
   const {
@@ -49,7 +50,33 @@ export function useCrudList(listApi, options = {}) {
   const loading = ref(false)
   const error = ref(false)
 
+  /**
+   * 「最后一次请求胜出」序号。
+   *
+   * 每次 load() 自增一次并记住自己的序号（my）；响应回来时若 my 已不是当前序号，
+   * 说明期间又发起了更新的请求，则**丢弃本次结果**，不写回 items / total / onLoaded。
+   *
+   * 为什么需要它：`api/request.js` 的同 key 并发去重 key 里**含 params**，
+   * 于是「第 2 页」和「第 3 页」是两个不同的 key、互相不会取消。快速翻页或连续改筛选时，
+   * 先发的慢响应会后到并覆盖新结果（§3.2）。序号保护与取消处理（§3.4）一起保证：
+   * 只有最新一次请求能改动状态。
+   */
+  let seq = 0
+
+  /**
+   * 判断异常是否为「请求被主动取消」（路由切换 abortAllPending / 同 key 去重 abort）。
+   *
+   * @param {*} e 捕获到的异常
+   * @returns {boolean} 是否属于取消
+   */
+  function isCanceled(e) {
+    return (
+      axios.isCancel?.(e) === true || e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError'
+    )
+  }
+
   async function load() {
+    const my = ++seq
     loading.value = true
     error.value = false
     try {
@@ -59,13 +86,21 @@ export function useCrudList(listApi, options = {}) {
         ...(buildParams ? buildParams() : {}),
       }
       const res = await listApi(params)
+      // 已有更新的请求发出：本次结果已过期，直接丢弃（不覆盖新数据）
+      if (my !== seq) return
       items.value = res.items
       total.value = res.total
       if (onLoaded) onLoaded(res)
     } catch (e) {
+      // 主动取消的请求不算错误，不改动 error（§3.4）
+      if (isCanceled(e)) return
+      // 被更新请求淘汰的旧请求失败时，也不得污染最新请求的错误态
+      if (my !== seq) return
       error.value = true
     } finally {
-      loading.value = false
+      // 仅「最新一次」请求才允许结束 loading，避免旧请求的 finally 提前撤掉
+      // 新请求仍在途中的 loading 骨架（§3.4）
+      if (my === seq) loading.value = false
     }
   }
 
@@ -95,6 +130,9 @@ export function useCrudList(listApi, options = {}) {
   /**
    * 删除单条：二次确认 → 调接口 → 提示 → 重新加载。
    * 用户取消确认时静默返回（Element Plus 的 confirm 在取消时会 reject）。
+   *
+   * 删除属于「结果集变小」，必须回到第 1 页（reload）而非停留在当前页（load）：
+   * 在第 N 页删掉最后一条后，重查第 N 页只会得到空列表，用户会误以为整页都被删了（§3.3）。
    */
   async function remove(row) {
     if (!removeApi) {
@@ -107,7 +145,7 @@ export function useCrudList(listApi, options = {}) {
     }
     await removeApi(row.id)
     ElMessage.success(removeSuccessText)
-    load()
+    reload()
   }
 
   if (immediate) {

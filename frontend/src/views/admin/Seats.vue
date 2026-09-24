@@ -9,10 +9,12 @@
       <div class="spacer"></div>
       <el-button @click="sortByNo">按学号排序</el-button>
       <el-button @click="shuffle">随机排座</el-button>
-      <el-button type="primary" @click="save">保存布局</el-button>
+      <el-button type="primary" :loading="saving" :disabled="saving" @click="save"
+        >保存布局</el-button
+      >
     </div>
 
-    <div class="page-card">
+    <div class="page-card" v-loading="loading">
       <div v-if="!classId" class="empty">请先选择班级</div>
       <div v-else-if="seats.length === 0" class="empty">该班级暂无学生</div>
       <div v-else class="seat-grid" :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }">
@@ -44,6 +46,9 @@ const classId = ref(null)
 const columns = ref(6)
 const seats = ref([])
 const selectedIndex = ref(null)
+// 切换班级时加载座位/学生列表的在途标记；保存布局的在途标记（防重复提交）
+const loading = ref(false)
+const saving = ref(false)
 
 onMounted(async () => {
   // 使用 studentApi.classrooms()：管理员看全部，教师只看自己负责的班级
@@ -53,8 +58,14 @@ onMounted(async () => {
 
 async function onClassChange() {
   selectedIndex.value = null
-  // 尝试加载已保存布局
+  // 清空选择时无需请求，直接清空座位，避免用 null 班级去查接口
+  if (!classId.value) {
+    seats.value = []
+    return
+  }
+  loading.value = true
   try {
+    // 尝试加载已保存布局
     const saved = await seatApi.get(classId.value)
     columns.value = saved.columns || 6
     const students = await loadStudents()
@@ -71,7 +82,14 @@ async function onClassChange() {
     for (const s of students) if (!used.has(s.id)) ordered.push(s)
     seats.value = ordered
   } catch (e) {
-    seats.value = await loadStudents()
+    // 无已保存布局（后端返回空 / 404）或加载失败：回退为按学号的学生列表
+    try {
+      seats.value = await loadStudents()
+    } catch (e2) {
+      seats.value = []
+    }
+  } finally {
+    loading.value = false
   }
 }
 
@@ -106,9 +124,19 @@ function sortByNo() {
 }
 
 async function save() {
-  const layout = seats.value.map((s) => s.id)
-  await seatApi.save({ class_id: classId.value, layout: [layout], columns: columns.value })
-  ElMessage.success('座位布局已保存')
+  // 未选班级时不能提交：此前会带着 class_id=null 发请求，后端无法定位座位表
+  if (!classId.value) {
+    return ElMessage.warning('请先选择班级')
+  }
+  if (saving.value) return
+  saving.value = true
+  try {
+    const layout = seats.value.map((s) => s.id)
+    await seatApi.save({ class_id: classId.value, layout: [layout], columns: columns.value })
+    ElMessage.success('座位布局已保存')
+  } finally {
+    saving.value = false
+  }
 }
 </script>
 

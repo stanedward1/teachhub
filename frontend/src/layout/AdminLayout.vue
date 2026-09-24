@@ -70,7 +70,12 @@ const mobileMenuOpen = ref(false)
 const activeMenu = computed(() => resolveActiveMenu(route.path))
 const breadcrumb = computed(() => resolveBreadcrumb(route.path))
 const menuItems = computed(() =>
-  filterMenuByRole(MENU, { isAdmin: isAdmin.value, isPlatform: isPlatform.value })
+  filterMenuByRole(MENU, {
+    isAdmin: isAdmin.value,
+    isPlatform: isPlatform.value,
+    // 审计日志对班主任可见（need: 'head_teacher'），与后端 _visible_audit_class_ids 同源
+    isHeadTeacher: auth.isHeadTeacher,
+  })
 )
 
 function onCommand(cmd) {

@@ -14,19 +14,9 @@ def is_platform_admin(user) -> bool:
     return user.role == "super_admin"
 
 
-def is_school_admin(user) -> bool:
-    """学校管理员（本校）。"""
-    return user.role == "school_admin"
-
-
 def is_any_admin(user) -> bool:
     """平台超管或学校管理员。"""
     return user.role in ("super_admin", "school_admin")
-
-
-def get_user_school_id(user) -> int | None:
-    """返回用户所属学校 ID（super_admin 返回 None，表示不限制）。"""
-    return getattr(user, "school_id", None)
 
 
 def ensure_same_school(user, target_school_id: int | None) -> None:
@@ -85,6 +75,17 @@ def get_teacher_class_ids(db: Session, teacher_id: int) -> List[int]:
         for ct in db.query(ClassTeacher).filter(ClassTeacher.teacher_id == teacher_id).all()
     )
     return sorted(own_ids)
+
+
+def get_head_class_ids(db: Session, teacher_id: int) -> List[int]:
+    """获取教师担任**班主任**的班级 ID 列表（不含科任班级）。
+
+    与 `get_teacher_class_ids` 的区别：后者是「班主任班级 ∪ 科任班级」的并集，回答的是
+    「我能否操作这个班」；本函数只回答「我是不是这个班的班主任」，用于
+    `/admin/audit-logs` 的可见范围（刻意只给班主任）与前端菜单的可见性判断。
+    """
+    rows = db.query(Classroom).filter(Classroom.teacher_id == teacher_id).all()
+    return sorted(c.id for c in rows)
 
 
 def get_student_ids_in_class(db: Session, class_id: int) -> List[int]:
@@ -220,9 +221,3 @@ def get_student_avatar(db: Session, student) -> str | None:
         return None
     u = get_student_account(db, student.class_id, student.name)
     return u.avatar if u else None
-
-
-def ensure_student_access(db: Session, user: User, student_id: int) -> None:
-    """校验当前用户可操作某学生：管理员放行，教师须为该生所属班级的班主任/科任。"""
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
-        raise HTTPException(status_code=403, detail="无权操作该学生")

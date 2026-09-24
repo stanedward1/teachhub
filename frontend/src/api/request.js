@@ -129,6 +129,32 @@ router.beforeEach(() => {
 // 避免并发多次刷新把服务端的 refresh token 轮换打乱。
 let refreshPromise = null
 
+// 「会话过期」的后果（清空登录态 + 弹提示 + 跳登录页）只执行一次。
+// 背景：刷新失败时，N 个并发 401 会共享同一个 refreshPromise，并在同一批微任务里各自进入
+// 失败分支；refreshPromise 只去重了「刷新」这一动作，未去重其后果，于是会弹 N 次提示、
+// 跳 N 次登录页（§3.6）。此处用一个一次性闸门把后果也收敛为「只做一次」。
+let sessionExpiredNotified = false
+
+/**
+ * 会话过期兜底：清空登录态 → 提示 → 跳转对应端登录页。
+ * 同一波并发 401 只执行一次（由 sessionExpiredNotified 闸门保证）。
+ */
+function handleSessionExpired() {
+  if (sessionExpiredNotified) return
+  sessionExpiredNotified = true
+  clearAuth()
+  notifyError('登录已过期，请重新登录')
+  redirectToLogin()
+}
+
+/**
+ * 复位「会话过期」闸门。
+ * 任一请求成功（如重新登录）或刷新成功即代表已回到有效会话，下一次令牌过期仍应正常提示与跳转。
+ */
+function resetSessionExpiredFlag() {
+  sessionExpiredNotified = false
+}
+
 /**
  * 触发一次静默刷新。
  *
@@ -149,6 +175,8 @@ function doSilentRefresh() {
     .then((data) => {
       // 保留既有用户信息，仅替换两个 token；setAuth 内部会同步 Pinia store
       setAuth(data.token, getUser(), data.refresh_token)
+      // 刷新成功 = 已回到有效会话，复位过期闸门
+      resetSessionExpiredFlag()
       return data.token
     })
     .finally(() => {
@@ -161,6 +189,14 @@ function doSilentRefresh() {
 request.interceptors.response.use(
   (response) => {
     removePending(response.config)
+    // 仅当「新会话建立」类请求成功（登录 / 注册）才复位过期闸门：这类响应意味着已用新凭证
+    // 回到有效会话，下一次令牌过期仍应正常提示与跳转。刻意**不**按「任意 2xx」复位，
+    // 以免一波 401 处理途中被无关的成功响应提前解除闸门而重复提示/跳转。
+    // （刷新令牌走 refreshClient 裸实例，不经此处，其复位在上面的 doSilentRefresh 内完成。）
+    const url = response.config?.url || ''
+    if (url.includes('/api/auth/login') || url.includes('/api/auth/register')) {
+      resetSessionExpiredFlag()
+    }
     return response.data
   },
   (error) => {
@@ -196,18 +232,15 @@ request.interceptors.response.use(
             return request(originalConfig)
           },
           () => {
-            // 仅「刷新失败」才清空并跳登录；重放请求自身的错误按原样向上抛，不在此处理
-            clearAuth()
-            notifyError('登录已过期，请重新登录')
-            redirectToLogin()
+            // 仅「刷新失败」才清空并跳登录；重放请求自身的错误按原样向上抛，不在此处理。
+            // 提示与跳转交由 handleSessionExpired 收敛：并发的 401 只弹一次、只跳一次
+            handleSessionExpired()
             return Promise.reject(error)
           }
         )
       } else {
-        // 无 refresh token / 已重试过 = 会话过期，走原有兜底逻辑
-        clearAuth()
-        notifyError('登录已过期，请重新登录')
-        redirectToLogin()
+        // 无 refresh token / 已重试过 = 会话过期；同样收敛为只提示、只跳转一次
+        handleSessionExpired()
       }
     } else if (status === 403) {
       notifyError(normalizeDetail(detail, '无权限执行此操作'), error.config)
