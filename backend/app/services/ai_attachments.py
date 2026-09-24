@@ -134,12 +134,57 @@ def _read_text_file(path: str) -> str:
         return fh.read()
 
 
+def _render_docx_table(table) -> str:
+    """把 Word 表格渲染成紧凑文本（行内用 ` | ` 分隔单元格，行间换行）。
+
+    表格是「填空式任务单 / 实验报告模板」的主要载体，**必须抽**（见 `_extract_docx`）。
+    保留「标签 | 值」的并列关系，模型才看得出哪一格是学生填的。
+    python-docx 对**合并单元格**会在同一行重复返回同一个 cell，这里把**相邻重复**
+    折叠掉：既不刷屏，也不影响「标签 | 值」的语义。
+    """
+    lines: list[str] = []
+    for row in table.rows:
+        cells = [" ".join(cell.text.split()) for cell in row.cells]
+        deduped = [c for i, c in enumerate(cells) if i == 0 or c != cells[i - 1]]
+        if any(deduped):
+            lines.append(" | ".join(deduped))
+    return "\n".join(lines)
+
+
 def _extract_docx(path: str) -> str:
-    """抽取 .docx 段落文本；缺库时抛 ImportError 由上层降级。"""
+    """抽取 .docx 文本（**段落 + 表格**，按文档顺序）；缺库时抛 ImportError 由上层降级。
+
+    🔴 表格必须抽（2026-09-24 线上问题）：任务单 / 实验报告模板大量使用 Word 表格，
+    学生**在表格单元格里填写**。此前只读 `document.paragraphs`，表格内容**整块丢失** ⇒
+    学生填得再多也看不见，反而因为「正文段落与任务单逐字相同」被判成
+    「提交的附件与任务单模板逐字相同，未见任何学生新增或填写的作答内容」。
+
+    ⚠️ 已知局限：正文的**文本框 / 内容控件**（`w:txbxContent`、`w:sdt`）不在 body 直接
+    子级，结构化遍历取不到；此时退化为「取 body 下全部文本节点」，宁可丢结构也不丢内容。
+    """
     import docx  # 延迟导入
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
     document = docx.Document(path)
-    return "\n".join(p.text for p in document.paragraphs if p.text and p.text.strip())
+    blocks: list[str] = []
+    for child in document.element.body.iterchildren():
+        tag = child.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            text = Paragraph(child, document).text.strip()
+            if text:
+                blocks.append(text)
+        elif tag == "tbl":
+            rendered = _render_docx_table(Table(child, document))
+            if rendered:
+                blocks.append(rendered)
+
+    text = "\n".join(blocks)
+    if text.strip():
+        return text
+    # 兜底：结构化遍历一无所获（内容全在文本框 / 内容控件里）时，退化为取 body 下
+    # 所有文本节点 —— 宁可丢结构，也不能让学生的作答凭空消失。
+    return "\n".join(t for t in document.element.body.itertext() if t and t.strip())
 
 
 def _extract_pdf(path: str) -> str:
