@@ -31,6 +31,7 @@ from functools import lru_cache
 
 from app.config import settings
 from app.services.ai_image import prepare_data_url
+from app.uploads import resolve_upload_path
 
 logger = logging.getLogger("teachhub.ai")
 
@@ -114,12 +115,20 @@ class InlineImagePayload:
 
 
 def absolute_path(filepath: str) -> str:
-    """把提交里的相对 filepath 还原成磁盘绝对路径。
+    """把提交里的相对 filepath 还原成磁盘绝对路径（**强制约束在上传目录内**）。
 
-    与 `homework_service._remove_upload_files` 同一口径：
-    `submissions.filepath` 相对 `settings.UPLOAD_DIR`，前端以 `/uploads/<filepath>` 访问。
+    委托 `uploads.resolve_upload_path` —— 全项目**唯一**的安全解析实现。
+    历史上本函数与 `homework_service._remove_upload_files` 各写了一份
+    `os.path.join(UPLOAD_DIR, p.lstrip("/")...)`，`lstrip("/")` 只挡前导斜杠、对 `..`
+    毫无防护 ⇒ 请求体或正文 Markdown 里的穿越路径能让「附件抽取读盘」读到上传目录
+    **之外**的任意文件，并随批改 prompt 送进模型（见
+    `docs/REVIEW-2026-09-25-code-audit.md` P0-A）。
+
+    Raises:
+        ValueError: 路径逃出上传目录。本模块的抽取管线**必须捕获**它并转成说明文案
+            —— `_extract_attachment_impl` 对外承诺「不抛异常」。
     """
-    return os.path.join(settings.UPLOAD_DIR, filepath.lstrip("/").replace("/", os.sep))
+    return resolve_upload_path(filepath)
 
 
 def _read_text_file(path: str) -> str:
@@ -303,7 +312,13 @@ def extract_inline_images(
             continue
 
         ext = os.path.splitext(rel)[1].lower()
-        path = absolute_path(rel)
+        try:
+            path = absolute_path(rel)
+        except ValueError:
+            # 正文 Markdown 里的 `/uploads/../../x` 也算穿越：给说明，绝不读盘
+            notes.append(f"内嵌图片未参与批改：文件路径非法（{rel}）")
+            rebuilt.append("【图片未参与批改】")
+            continue
         if ext in UNSUPPORTED_IMAGE_EXTS:
             # 命中明确不支持的格式：精确说明、绝不送入模型（否则学生传 BMP 会让整份批改 400）
             notes.append(f"内嵌图片未参与批改：{_unsupported_image_reason(ext)}（{rel}）")
@@ -408,11 +423,17 @@ def extract_attachment(
     if not cache or not filepath:
         return _extract_attachment_impl(filepath, filename, vision_enabled=vision_enabled)
 
+    try:
+        stamp = _file_stamp(absolute_path(filepath))
+    except ValueError:
+        # 非法路径（穿越）：不进缓存，直接交给 impl 生成说明文案，保持「不抛异常」语义
+        return _extract_attachment_impl(filepath, filename, vision_enabled=vision_enabled)
+
     key = (
         filepath,
         filename or "",
         bool(vision_enabled),
-        _file_stamp(absolute_path(filepath)),
+        stamp,
         _config_fingerprint(),
     )
     payload = _cached_extract(key)
@@ -446,7 +467,11 @@ def _extract_attachment_impl(
 
     display = filename or os.path.basename(filepath)
     ext = os.path.splitext(filename or filepath)[1].lower()
-    path = absolute_path(filepath)
+    try:
+        path = absolute_path(filepath)
+    except ValueError:
+        # 承诺「不抛异常」：穿越路径一律转成说明文案，绝不读盘
+        return AttachmentPayload(note=f"附件未参与批改：文件路径非法（{display}）")
 
     if not os.path.exists(path):
         return AttachmentPayload(note=f"附件未参与批改：文件不存在（{display}）")

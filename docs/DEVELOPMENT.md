@@ -33,7 +33,7 @@ npm install
 npm run dev                   # 启动，默认 :5173，代理 /api → :8080
 ```
 
-### 1.4 Docker（推荐）
+### 1.4 Docker（可选）
 
 ```bash
 cd teachhub
@@ -41,6 +41,11 @@ docker compose up -d --build  # 构建并启动前后端
 docker compose logs -f backend
 docker compose down           # 停止
 ```
+
+> ⚠️ **本仓库线上形态是「无 Docker、无 Nginx」**：后端 `python run.py`（:8080）+ 前端
+> `npm run dev -- --host 0.0.0.0`（**Vite 开发服务器**，:5173），由仓库根 `start.sh` 拉起。
+> 上方 compose 命令**仅供本地或可选部署**，且 `frontend/nginx.conf` 已删除（若改用容器内 Nginx 需自备）。
+> 线上实际形态说明见 `README.md`「生产环境部署」章首。
 
 ### 1.5 测试
 
@@ -138,7 +143,7 @@ python -m pytest tests/ -v
 ### 3.5 工具函数与辅助
 
 - 公共工具统一放 `app/utils.py`：`to_dict` / `safe_filename` / `gen_student_no`（生成学号）/ `normalize_page`（分页边界规范化，所有分页列表接口须调用）。
-- 权限/租户辅助统一放 `app/permissions.py`：`is_any_admin` / `is_platform_admin` / `get_teacher_class_ids` / `get_student_account`（按班级+姓名查学生账号）/ `ensure_student_access` 等，**不得**在各 router 重复实现。
+- 权限/租户辅助统一放 `app/permissions.py`：`is_any_admin` / `is_platform_admin` / `get_teacher_class_ids` / `get_student_account`（按班级+姓名查学生账号）等，**不得**在各 router 重复实现。
 - 分页参数必须调用 `normalize_page(page, page_size)`（防负数/超大 page_size），删除类接口记录不存在时统一返回 `404`。
 
 ### 3.6 文件上传
@@ -161,7 +166,7 @@ python -m pytest tests/ -v
 ### 3.8 可观测性
 
 - **访问日志**：`app/observability.py` 的中间件为每个请求记录 `方法 + 路径 + 状态码 + 耗时`，耗时 ≥ 1s 标 `[SLOW]`。
-- **请求链路 ID（`X-Request-ID`）**：中间件读入站 `X-Request-ID` 请求头（缺失则生成 `uuid4`）并写回响应头；日志行统一带 `[rid=...]`，用于跨日志串联同一请求。实现见 `app/logging_config.py`（`ctx_request_id` / `get_request_id` / `set_request_id` / `reset_request_id` / `new_request_id`）。
+- **请求链路 ID（`X-Request-ID`）**：中间件读入站 `X-Request-ID` 请求头（缺失则生成 `uuid4`）并写回响应头；日志行统一带 `[rid=...]`，用于跨日志串联同一请求。实现见 `app/logging_config.py`（`new_request_id` / `set_request_id` / `reset_request_id`，请求期上下文存于模块内 `_ctx_request_id` ContextVar）。
 - **结构化日志**：`app/logging_config.py` 的 `RequestIdFilter` 把当前 request-id 注入日志记录，`StructuredFormatter` 统一输出格式，`setup_logging()` 取代 `logging.basicConfig` 统一初始化 handler。
 - **日志落盘**：`main.py` 的 `_setup_file_logging()` 将访问日志与业务日志写入 `backend/logs/teachhub.log`（`TimedRotatingFileHandler` 按天滚动、保留 30 天）。
   - ⚠️ 该函数**必须在 `run_migrations()` 之后调用**（Alembic 会重置 root logger 的 handler）。
@@ -208,6 +213,28 @@ python -m pytest tests/ -v
   （设置不报错，但也不会生效）。
 - ⚠️ 连通性自检（`ai_client.test_connection`）也必须下发同样的思考设置，否则对推理模型会
   **误报连接失败**（旧实现用 `max_tokens=8`，思考一开必然吃空正文）。
+- **🔴 输入拼装的铁律一：别从尾部整体截断**（2026-09-24 线上问题，`CHANGELOG` 续 34）。
+  旧实现把【学生附件】排在消息**最末**，收尾又 `text[:AI_MAX_INPUT_CHARS]` —— 而「学生下载任务单 →
+  就地作答 → 原样交回」的作业，**答案恰好落在末尾**，于是被整段砍掉，模型只看到模板原文，
+  便（正确地）描述为「附件内容与任务单原文完全一致」。正确做法是**按业务优先级分段分配预算**：
+  预算不足时**任务附件先让位**、学生内容最后才动，截断要**就地标注**（哪一段被截了多少），
+  并把 `budget_notes` 回传到 `ai_grading_results.attachment_used`（教师必须能看出「这次依据不全」）。
+- **🔴 输入拼装的铁律二：重复的模板要折叠，不要原样送**。
+  与【任务附件】**逐字相同**的长段落折成标记（`_fold_duplicate_paragraphs`：按 `。！？；!?\n` 切分、
+  ≥12 字才折；🔴 **别用 `splitlines()`** —— docx/pdf 抽取的文本可能整篇挤成一行，那样一段都匹配不上），
+  并配套在提示词里说明「模板重合属正常、**禁止**据此断言『直接交了任务单』」。
+- **🔴 附件抽取必须覆盖「用户真正填写的那一层结构」**（2026-09-24 线上问题，`CHANGELOG` 续 35）。
+  python-docx 的 `document.paragraphs` **不含表格内容**，而任务单 / 实验报告模板的作答格
+  **几乎全在 `document.tables` 里** ⇒ 只读段落会让「学生交回的文档」与「教师空白模板」的
+  抽取结果**完全相同**，学生被误判成「什么都没写」。现实现按 `body.iterchildren()` 遍历 `p` / `tbl`
+  （**保持文档顺序**；表格渲染为 `标签 | 值`，合并单元格会被重复返回、需折叠），结构化遍历
+  一无所获时**兜底取全部文本节点**（文本框 / 内容控件不在 body 直接子级）。
+  **新增任何格式支持前，先确认「用户填的内容在哪一层」**，并补一条「填了就看得见」的用例。
+- ⚠️ **诊断口诀**：*「折叠 / 重合比例异常高（100%）」= 抽取结果与参考文档一致 = 抽取坏了*，
+  不是折叠算错了；报障文案里出现折叠标记，说明预算 / 折叠**已生效**，该往**抽取**方向查。
+- 🔴 **说明文案的落库列很窄**：折叠 / 截断说明最终写进 `ai_grading_results.attachment_used`，
+  该列**仅 `VARCHAR(255)`** —— 拼接后必须做长度保护（如 `note[:249] + "…"`），
+  否则 MySQL 严格模式下 1406 会让**整条批改结果都写不进去**。
 
 ## 4. 前端代码规范
 

@@ -99,3 +99,70 @@ def save_upload(
         "filename": original,
         "size": size,
     }
+
+
+# ---------------- 相对路径解析（唯一安全口径） ----------------
+def resolve_upload_path(rel: str) -> str:
+    """把「上传目录内的相对路径」解析成磁盘绝对路径，并**强制约束在上传目录内**。
+
+    这是全项目**唯一**的「相对 filepath → 磁盘路径」实现。历史上
+    `homework_service._remove_upload_files` 与 `ai_attachments.absolute_path` 各写了一份
+    `os.path.join(settings.UPLOAD_DIR, p.lstrip("/")...)` —— `lstrip("/")` 只挡前导斜杠，
+    对 `..` 毫无防护，于是请求体里的 `../../x` 会让删除/读取**逃出上传目录**
+    （学生即可删/读服务器任意文件，见 `docs/REVIEW-2026-09-25-code-audit.md` P0-A）。
+    两份拷贝只修一处必漏，故收口到这里。
+
+    实现要点（缺一不可）：
+    - `os.path.join(base, "/abs")` 会**直接顶掉** base，Windows 下 `C:x` 同理 ⇒ 先拒绝；
+    - `os.path.realpath` 归一化 `..`；
+    - 前缀比较必须用 `base + os.sep`，否则 `/uploads_evil` 会被误判为在 `/uploads` 内；
+    - 🔴 **不能只靠 realpath 防符号链接**：实测（Windows + 本机文件系统）`os.path.realpath`
+      对链接**不解除**，`os.symlink` 甚至可能造出非重解析点。故再显式遍历路径链，
+      任一环节是 symlink 即拒绝 —— 链接可以把「上传目录内的名字」指向目录之外。
+
+    Args:
+        rel: 相对路径，如 ``a.txt``、``uploads/a.txt``、``not/exist/missing.pdf``。
+
+    Returns:
+        磁盘绝对路径（可能指向尚不存在的文件，由调用方判存在）。
+
+    Raises:
+        ValueError: 路径为空、含 NUL、绝对路径 / 带盘符、或解析后逃出上传目录。
+    """
+    raw = "" if rel is None else str(rel)
+    if not raw.strip():
+        raise ValueError("文件路径不能为空")
+    raw = raw.strip()
+    if "\x00" in raw:
+        raise ValueError("文件路径非法")
+    base = os.path.realpath(settings.UPLOAD_DIR)
+    # 统一分隔符后再判绝对路径，避免 `..\x` 或 `/x` 在 Windows 上漏判
+    candidate = raw.replace("\\", os.sep).replace("/", os.sep)
+    if os.path.isabs(candidate) or os.path.splitdrive(candidate)[0]:
+        raise ValueError("文件路径非法")
+    full = os.path.realpath(os.path.join(base, candidate))
+    if full != base and not full.startswith(base + os.sep):
+        raise ValueError("文件路径非法")
+    # 显式 symlink 检查（见 docstring：realpath 在部分平台不解链接）
+    cur = base
+    for part in os.path.relpath(full, base).split(os.sep):
+        if part in ("", "."):
+            continue
+        cur = os.path.join(cur, part)
+        if os.path.islink(cur):
+            raise ValueError("文件路径非法")
+    return full
+
+
+def ensure_upload_path(rel: str) -> str:
+    """`resolve_upload_path` 的 HTTP 版本：非法路径 → **400**。
+
+    供「请求体里带 filepath」的写接口在服务层直接调用，避免把穿越路径落库。
+    """
+    try:
+        return resolve_upload_path(rel)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="文件路径非法：只能引用上传目录内的文件"
+        )
+

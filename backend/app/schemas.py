@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -216,6 +216,39 @@ class AttendanceCheckin(BaseModel):
 
 
 # ============ 作业提交 ============
+class SubmissionCreate(BaseModel):
+    """学生提交作业请求体（`POST /api/homework/assignments/{id}/submissions`）。
+
+    原先路由用裸 `payload: dict`，带来两个问题（见
+    `docs/REVIEW-2026-09-25-code-audit.md` P0-A，均已探针实证）：
+    ① `filepath` 未做**路径安全**校验，穿越路径会一路带到「重交时删旧附件」与
+       「附件抽取读盘」，学生即可删除/读取上传目录之外的任意文件；
+    ② `content` 传非字符串时 `(x or "").strip()` 抛 AttributeError → 500。
+
+    本模型只做**类型**校验 + **路径安全**校验：
+    - 字段全部可选并带**等价默认值**，保持「缺省仍 200」的既有语义；
+    - `filepath` 允许上传目录内的相对路径（含 `not/exist/missing.pdf` 这类子目录形态，
+      以保证「附件缺失」仍走 200 + 说明文案），**只拒绝逃出上传目录**的路径（→ 422）。
+    """
+
+    content: str | None = Field("", description="作业正文")
+    filename: str | None = Field(None, description="附件原始文件名")
+    filepath: str | None = Field(None, description="附件相对路径（必须位于上传目录内）")
+
+    @field_validator("filepath")
+    @classmethod
+    def _validate_filepath(cls, v):
+        if v is None or not str(v).strip():
+            return v
+        from app.uploads import resolve_upload_path
+
+        try:
+            resolve_upload_path(v)
+        except ValueError as exc:
+            raise ValueError("文件路径非法：只能引用上传目录内的文件") from exc
+        return v
+
+
 class SubmissionCommentCreate(BaseModel):
     """教师作业点评请求体（`POST /api/homework/submissions/{id}/comments`）。
 

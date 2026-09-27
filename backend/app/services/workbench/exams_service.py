@@ -5,11 +5,10 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.models import Exam
 from app.schemas import ExamUpdate
 from app.services.workbench._common import audit, to_dict
-from app.uploads import save_upload
+from app.uploads import resolve_upload_path, save_upload
 
 # 试卷允许的文档格式
 _EXAM_EXTS = {".pdf", ".doc", ".docx"}
@@ -71,12 +70,23 @@ def update_exam(db: Session, user, exam_id: int, payload: ExamUpdate) -> dict:
 
 
 def download_exam(db: Session, exam_id: int) -> FileResponse:
-    """下载试卷文件。"""
+    """下载试卷文件。
+
+    🔴 `filepath` 必须经 `uploads.resolve_upload_path` 归一化并**约束在上传目录内**。
+    该值来自上传接口（服务端生成），当前**没有**客户端注入入口，但历史上这里是
+    `os.path.join(settings.UPLOAD_DIR, x.filepath)` —— 与出事的 P0-A 是**同一个危险模式**，
+    一旦将来某个写接口能改到 `Exam.filepath`（或库中已有异常行），就会退化成任意文件读取。
+    按「同一模式统一收口」的原则，这里一并改用唯一的安全实现
+    （见 docs/REVIEW-2026-09-25-code-audit.md P2-A）。
+    """
     x = db.get(Exam, exam_id)
     if not x or not x.filepath:
         raise HTTPException(status_code=404, detail="文件不存在")
-    file_path = os.path.join(settings.UPLOAD_DIR, x.filepath)
-    if not os.path.exists(file_path):
+    try:
+        file_path = resolve_upload_path(x.filepath)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="文件不存在")
     return FileResponse(file_path, filename=x.filename or x.filepath, media_type="application/octet-stream")
 
@@ -87,8 +97,12 @@ def delete_exam(db: Session, user, exam_id: int) -> dict:
     if not x:
         raise HTTPException(status_code=404, detail="记录不存在")
     if x.filepath:
-        fp = os.path.join(settings.UPLOAD_DIR, x.filepath)
-        if os.path.exists(fp):
+        # 同上：删除是**破坏性**操作，非法路径一律跳过（宁可留下垃圾文件，不可删错）
+        try:
+            fp = resolve_upload_path(x.filepath)
+        except ValueError:
+            fp = None
+        if fp and os.path.isfile(fp):
             os.remove(fp)
     db.delete(x)
     audit(db, user, "delete_exam", target=f"试卷#{exam_id}")

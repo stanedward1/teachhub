@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user, require_student, require_teacher
-from app.schemas import SubmissionCommentCreate
+from app.schemas import SubmissionCommentCreate, SubmissionCreate
 from app.services import homework_service
 
 router = APIRouter(prefix="/api/homework", tags=["作业提交平台"])
@@ -132,11 +132,11 @@ def delete_submission_comment(
 @router.post("/assignments/{assignment_id}/submissions")
 def submit(
     assignment_id: int,
-    payload: dict,
+    payload: SubmissionCreate,
     user=Depends(require_student),
     db: Session = Depends(get_db),
 ):
-    return homework_service.submit(db, assignment_id, payload, user)
+    return homework_service.submit(db, assignment_id, payload.model_dump(), user)
 
 
 @router.get("/my-submissions")

@@ -1,6 +1,6 @@
 # TeachHub 架构设计文档
 
-> 版本：2.9 ｜ 更新：2026-09-23 ｜ 适用对象：后端 / 前端 / 测试 / 运维
+> 版本：2.10 ｜ 更新：2026-09-25 ｜ 适用对象：后端 / 前端 / 测试 / 运维
 
 ## 1. 项目定位
 
@@ -92,7 +92,7 @@ teachhub/
 │   │   ├── services/          # 业务服务层（B1 分层）：router 只做路由/依赖/参数解析/调用/返回
 │   │   │   ├── auth_service.py / students_service.py / classlog_service.py / homework_service.py / admin_service.py
 │   │   │   ├── mobile_service.py / meta_service.py / attendance_service.py / uploads_service.py
-│   │   │   ├── ai_client.py / ai_attachments.py / ai_grading.py / ai_admin_service.py  # AI 批改：模型客户端 / 附件解析 / 批改调度与降级 / 超管凭证与开关
+│   │   │   ├── ai_client.py / ai_attachments.py / ai_image.py / ai_grading.py / ai_admin_service.py  # AI 批改：模型客户端 / 附件解析 / 图片管线（内容嗅探·缩放·EXIF）/ 批改调度与降级 / 超管凭证与开关
 │   │   │   └── workbench/     #   工作台子包：_common.py + scores/leaves/communications/resources/exams/seats/imports/profile/reports_service.py
 │   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
 │   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 30 个 revision，head a9b8c7d6e5f4）

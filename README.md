@@ -9,7 +9,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | 文档 | 说明 |
 | ---- | ---- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、可观测性、设计决策 |
-| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（**145 条业务接口 + 8 条运维端点**，方法 + 路径 + 权限 + 约定） |
+| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（**145 条业务接口 + 7 条非 `/api` 路由**，方法 + 路径 + 权限 + 约定） |
 | [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 **37 张表**、外键删除策略分层、软关联说明 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、权限与多租户隔离规范、Git 规范、测试规范、发布流程 |
 
@@ -170,7 +170,7 @@ teachhub/
 │   │   │   ├── auth_service.py / students_service.py / classlog_service.py
 │   │   │   ├── homework_service.py / admin_service.py / mobile_service.py
 │   │   │   ├── meta_service.py / attendance_service.py / uploads_service.py
-│   │   │   ├── ai_client.py / ai_attachments.py / ai_grading.py / ai_admin_service.py  # AI 批改：模型客户端 / 附件解析 / 批改调度与降级 / 超管凭证与开关
+│   │   │   ├── ai_client.py / ai_attachments.py / ai_image.py / ai_grading.py / ai_admin_service.py  # AI 批改：模型客户端 / 附件解析 / 图片管线（内容嗅探·缩放·EXIF）/ 批改调度与降级 / 超管凭证与开关
 │   │   │   └── workbench/      #   教师工作台子域（_common + scores/leaves/communications/resources/exams/seats/imports/profile/reports）
 │   │   └── routers/            # API 路由（按业务域分组，均为薄壳）
 │   │       ├── auth.py         #   登录/注册/注册开关状态/密码/头像上传/学校下拉/令牌刷新/登出（含登录限流）
@@ -227,9 +227,13 @@ teachhub/
 
 ## 开发环境快速开始
 
-### 🐳 Docker 启动（最简，推荐）
+### 🐳 Docker 启动（最简，可选）
 
 无需本地安装 Python / Node / 数据库，一条命令拉起前后端：
+
+> ⚠️ **本项目线上形态是「无 Docker、无 Nginx」**（后端 `run.py` :8080 + 前端 Vite dev :5173）。
+> 本节命令仅在**本地已安装 Docker** 时可用；不依赖 Docker 的手动启动方式见下一节，
+> 线上实际形态与可选的 Nginx 部署见「生产环境部署」章首说明。
 
 ```bash
 cd teachhub
@@ -599,7 +603,7 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-测试覆盖：登录认证、权限隔离、作业流程、优秀作品评选、CRUD 操作、越权场景、**AI 批改**（凭证/开关超管专属、**提交零外呼**、手动触发的批量与单份语义、学生与跨班教师触发 403、关闭/未配凭证/超限 400、模型报错与附件失败降级、重交作废旧结果、推荐来源标记、**任务附件纳入批改**、**推理模型思考开关与截断重试**、**上游错误文案归一化**、**附件按批抽取缓存**）；当前全量 **171 passed**。
+测试覆盖：登录认证、权限隔离、作业流程、优秀作品评选、CRUD 操作、越权场景、**AI 批改**（凭证/开关超管专属、**提交零外呼**、手动触发的批量与单份语义、学生与跨班教师触发 403、关闭/未配凭证/超限 400、模型报错与附件失败降级、重交作废旧结果、推荐来源标记、**任务附件纳入批改**、**推理模型思考开关与截断重试**、**上游错误文案归一化**、**附件按批抽取缓存**、**AI 输入构造（分段预算分配 + 任务单模板段落折叠）**、**docx 表格抽取**）、**上传路径穿越防护**（逃逸必拒 / 目录内路径不误伤）、**跨租户科任关联删除**、**学生建号归属**、**审计日志可见口径**（下拉框与列表同源）、**看板口径与班级聚合非 N+1**；当前全量 **321 passed + 1 skipped**（1 skipped = 软链用例在当前文件系统下无法构造真链接，显式跳过）。
 
 ## 配置参考
 

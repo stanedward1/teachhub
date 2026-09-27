@@ -21,7 +21,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.audit import batch_student_avatar_map, batch_student_map, audit
-from app.config import settings
 from app.pagination import paginate
 from app.models import (
     AiGradingResult,
@@ -45,6 +44,7 @@ from app.permissions import (
     is_teacher_class_owner,
 )
 from app.utils import normalize_page, to_dict
+from app.uploads import ensure_upload_path, resolve_upload_path
 from app.services import ai_grading
 
 logger = logging.getLogger("teachhub.homework")
@@ -78,31 +78,53 @@ def _attachments_out(a: Assignment) -> list:
 
 
 def _remove_upload_files(paths) -> None:
-    """删除上传目录下的文件（失败静默，不阻断主流程）。"""
+    """删除上传目录内的文件（失败静默，不阻断主流程）。
+
+    🔴 路径一律经 `uploads.resolve_upload_path` 归一化并**约束在上传目录内**。
+    历史实现直接 `os.path.join(settings.UPLOAD_DIR, p.lstrip("/").replace("/", os.sep))`：
+    `lstrip("/")` 只挡前导斜杠、对 `..` 毫无防护，而这里的入参来自
+    `submissions.filepath` / `attachments[].filepath`（**请求体可控**）⇒ 学生提交
+    `../../x` 再重交换路径，就能删掉上传目录之外的任意文件
+    （见 `docs/REVIEW-2026-09-25-code-audit.md` P0-A，已用探针实证）。
+
+    另：用 `os.path.isfile` 而非 `os.path.exists` —— 目录永不进入 `os.remove`。
+    """
     for p in paths or []:
         if not p:
             continue
-        full = os.path.join(settings.UPLOAD_DIR, p.lstrip("/").replace("/", os.sep))
         try:
-            if os.path.exists(full):
+            full = resolve_upload_path(p)
+        except ValueError:
+            logger.warning("跳过非法的附件路径，不删除：%r", p)
+            continue
+        try:
+            if os.path.isfile(full):
                 os.remove(full)
         except OSError:
             pass
 
 
 def _sync_attachments(a: Assignment, attachments) -> None:
-    """同步作业附件（传入 [{filename, filepath}, ...]，整体替换旧附件），并清理被移除的附件文件。"""
-    new_paths = {
-        att.get("filepath") for att in (attachments or [])
-        if isinstance(att, dict) and att.get("filepath")
-    }
+    """同步作业附件（传入 [{filename, filepath}, ...]，整体替换旧附件），并清理被移除的附件文件。
+
+    🔴 每个 `filepath` 都要先过 `ensure_upload_path`（非法 ⇒ **400**）：附件路径同样来自
+    请求体，落库后会成为 `delete_assignment` / `_sync_attachments` 的删除目标
+    （与 P0-A 同一条攻击链的另一个入口）。
+    """
+    items = [
+        att
+        for att in (attachments or [])
+        if isinstance(att, dict) and att.get("filename") and att.get("filepath")
+    ]
+    for att in items:
+        ensure_upload_path(att["filepath"])
+    new_paths = {att["filepath"] for att in items}
     removed = [att.filepath for att in a.attachments if att.filepath and att.filepath not in new_paths]
     a.attachments.clear()
-    for att in attachments or []:
-        if isinstance(att, dict) and att.get("filename") and att.get("filepath"):
-            a.attachments.append(
-                AssignmentAttachment(filename=att["filename"], filepath=att["filepath"])
-            )
+    for att in items:
+        a.attachments.append(
+            AssignmentAttachment(filename=att["filename"], filepath=att["filepath"])
+        )
     _remove_upload_files(removed)
 
 
@@ -587,7 +609,16 @@ def add_submission_comment(db: Session, submission_id: int, payload: dict, user:
         raise HTTPException(status_code=400, detail="点评内容不能为空")
     score = payload.get("score")
     if score is not None:
-        score = int(score)
+        # 类型防线：路由层已由 `SubmissionCommentCreate.score: int | None` 收成 422，
+        # 这里再挡一次是因为本函数可被内部直接调用 —— 历史上 `int("abc")` 抛 ValueError
+        # 未捕获 ⇒ 500（见 docs/REVIEW-2026-09-25-code-audit.md P2-C）。
+        # 注意 `bool` 是 `int` 的子类，必须显式排除，否则 True 会被当成 1 分写库。
+        if isinstance(score, bool):
+            raise HTTPException(status_code=400, detail="评分需为 0-100 的整数")
+        try:
+            score = int(score)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="评分需为 0-100 的整数")
         if not 0 <= score <= 100:
             raise HTTPException(status_code=400, detail="评分需在 0-100 之间")
     c = SubmissionComment(
@@ -642,6 +673,10 @@ def submit(db: Session, assignment_id: int, payload: dict, user: User) -> dict:
     content = (payload.get("content") or "").strip()
     filepath = payload.get("filepath")
     filename = payload.get("filename")
+    if filepath:
+        # 第二道防线：路由层已由 `SubmissionCreate` 校验（422），这里兜住内部直调，
+        # 保证非法路径**永不落库**（落库即成为重交时的删除目标，见 P0-A）。
+        ensure_upload_path(filepath)
     if not content and not filepath:
         raise HTTPException(status_code=400, detail="请填写作业内容或上传文件")
 

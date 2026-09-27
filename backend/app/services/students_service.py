@@ -393,6 +393,16 @@ def remove_class_teacher(db: Session, user: User, class_id: int, teacher_id: int
     """移除科任老师（仅管理员）。"""
     if not is_any_admin(user):
         raise HTTPException(status_code=403, detail="只有管理员可以配置科任老师")
+    # 🔴 必须先做**班级归属校验**：`class_teachers` 表**没有 `school_id` 列**，因此不在
+    # `tenant.py:_tenant_models()` 里 —— 下面那条 ClassTeacher 查询**没有任何租户过滤**。
+    # 少了这一句，学校管理员只要猜到 `class_id`/`teacher_id`（自增整数，可枚举）就能
+    # **删除他校班级的科任关联**，且 404/200 的差异还是个存在性 oracle
+    # （2026-09-26 已用探针实证：学校1管理员删学校2关联恒 200 且行数 1→0，
+    # 见 docs/REVIEW-2026-09-25-code-audit.md P1-A）。
+    # `Classroom` 含 `school_id` ⇒ `db.get` 走 `do_orm_execute` 注入，跨校直接 404。
+    # 口径与同文件 `add_class_teacher` 一致。
+    if db.get(Classroom, class_id) is None:
+        raise HTTPException(status_code=404, detail="班级不存在")
     ct = db.query(ClassTeacher).filter(
         ClassTeacher.class_id == class_id, ClassTeacher.teacher_id == teacher_id
     ).first()
@@ -478,6 +488,12 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
         school_id = _cls.school_id if _cls else None
     if not school_id:
         school_id = user.school_id
+    if not school_id:
+        # 平台超管的 school_id 为 None，无法从班级/账号推导归属：宁可 400，也不建出
+        # 「无归属」数据 —— `Student` 落 NULL 会对所有租户不可见，而下面自动创建的登录
+        # 账号落 NULL 更会变成**跨校账号**（见 docs/REVIEW-2026-09-25-code-audit.md P1-B）。
+        # 口径与 `create_classroom` 一致。
+        raise HTTPException(status_code=400, detail="请指定所属学校")
     s = Student(
         school_id=school_id,
         class_id=class_id,
@@ -502,6 +518,13 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
                 password_hash=hash_password("123456"),
                 name=name,
                 role="student",
+                # 🔴 必须显式归属：`before_flush` 只在**租户上下文非 None** 时回填，平台超管
+                # 上下文为 None ⇒ 不填 ⇒ 落 NULL；而 `school_id=NULL` 的账号在 `tenant.py`
+                # 里**既不过滤也不回填** ⇒ 等于一个**跨校读写全平台**的账号
+                # （2026-09-26 已实证：超管建学生后 `User.school_id=None` 而
+                # `Student.school_id=1`，见 docs/REVIEW-2026-09-25-code-audit.md P1-B）。
+                # 同文件 `reset_student_password` 一直是显式传 `s.school_id`，此处对齐。
+                school_id=school_id,
                 class_id=class_id,
             )
         )
