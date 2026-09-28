@@ -20,6 +20,25 @@
         </el-form-item>
       </el-form>
 
+      <!-- ============ 学生单设备在线 ============ -->
+      <div class="section-label section-gap">学生登录</div>
+      <el-form label-width="140px" v-loading="deviceLoading">
+        <el-form-item label="单设备在线">
+          <el-switch
+            v-model="singleDevice"
+            :loading="deviceSaving"
+            :disabled="deviceLoading"
+            active-text="仅一台设备"
+            inactive-text="允许多台"
+            @change="onDeviceChange"
+          />
+          <div class="hint">
+            开启后，同一学生账号同一时间只能在一台设备登录；后登录的设备会把先登录的挤下线
+            （旧设备需重新登录）。<strong>仅约束学生</strong>，教师与管理员不受影响。
+          </div>
+        </el-form-item>
+      </el-form>
+
       <!-- ============ AI 批改总开关 ============ -->
       <div class="section-label section-gap">AI 批改</div>
       <el-form label-width="140px" v-loading="aiLoading">
@@ -159,6 +178,52 @@ async function onChange(val) {
     console.error('[PlatformSettings] 保存注册开关失败:', e)
   } finally {
     saving.value = false
+  }
+}
+
+// ---------------- 学生单设备在线（平台级，缺省开启） ----------------
+const singleDevice = ref(false)
+const deviceLoading = ref(false)
+const deviceSaving = ref(false)
+
+async function loadDevice() {
+  deviceLoading.value = true
+  try {
+    const res = await adminApi.platformStudentDevice()
+    singleDevice.value = !!res.student_single_device
+  } catch (e) {
+    console.error('[PlatformSettings] 加载学生单设备在线开关失败:', e)
+  } finally {
+    deviceLoading.value = false
+  }
+}
+
+async function onDeviceChange(val) {
+  // 关闭属于「放宽限制」，会让账号可在多端同时在线，二次确认后再提交
+  if (!val) {
+    try {
+      await ElMessageBox.confirm(
+        '关闭后，同一个学生账号可在多台设备同时在线（后登录不再挤掉先登录）。确定关闭吗？',
+        '重要提示',
+        { type: 'warning', confirmButtonText: '确认关闭', cancelButtonText: '取消' }
+      )
+    } catch {
+      // 用户取消：回滚开关（el-switch 的 v-model 已先行变更）
+      singleDevice.value = true
+      return
+    }
+  }
+  deviceSaving.value = true
+  try {
+    await adminApi.setPlatformStudentDevice({ student_single_device: val })
+    ElMessage.success(val ? '已开启学生单设备在线' : '已关闭学生单设备在线')
+  } catch (e) {
+    // 保存失败：回滚开关状态，避免界面与后端不一致
+    singleDevice.value = !val
+    ElMessage.error('设置失败，请稍后重试')
+    console.error('[PlatformSettings] 保存学生单设备在线开关失败:', e)
+  } finally {
+    deviceSaving.value = false
   }
 }
 
@@ -345,6 +410,7 @@ async function testCredential() {
 
 onMounted(() => {
   load()
+  loadDevice()
   loadAi()
   loadCredential()
 })

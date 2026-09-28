@@ -20,10 +20,12 @@ from app.permissions import (
 )
 from app.platform_settings import (
     ALLOW_REGISTRATION_KEY,
+    STUDENT_SINGLE_DEVICE_KEY,
     is_registration_allowed,
+    is_student_single_device_enabled,
     set_global_setting,
 )
-from app.schemas import RegistrationSetting
+from app.schemas import RegistrationSetting, StudentDeviceSetting
 from app.services.auth_service import invalidate_user_sessions
 from app.models import (
     Assignment,
@@ -1017,3 +1019,32 @@ def set_platform_registration(db: Session, payload: RegistrationSetting, user: U
     audit(db, user, "toggle_registration", target=ALLOW_REGISTRATION_KEY, detail=f"{state_text}学生自助注册")
     db.commit()
     return {"allow_registration": payload.allow_registration}
+
+
+def platform_student_device(db: Session, user: User) -> dict:
+    """平台超管：查询「学生单设备在线」开关（全局作用域 school_id=None）。
+
+    缺省开启（产品要求「后登录挤掉先登录」），因此新库 / 未初始化时也返回 True。
+    """
+    return {"student_single_device": is_student_single_device_enabled(db)}
+
+
+def set_platform_student_device(db: Session, payload: StudentDeviceSetting, user: User) -> dict:
+    """平台超管：开启/关闭「学生单设备在线」总开关。
+
+    全局作用域（school_id=None），跨校生效：开启后学生每次登录都会作废该账号此前的
+    全部会话；关闭后退回历史的多设备并存行为（运维联调退路）。写配置与审计日志在
+    同一事务内提交。
+    """
+    value = "1" if payload.student_single_device else "0"
+    set_global_setting(db, STUDENT_SINGLE_DEVICE_KEY, value)
+    state_text = "开启" if payload.student_single_device else "关闭"
+    audit(
+        db,
+        user,
+        "toggle_student_single_device",
+        target=STUDENT_SINGLE_DEVICE_KEY,
+        detail=f"{state_text}学生单设备在线",
+    )
+    db.commit()
+    return {"student_single_device": payload.student_single_device}

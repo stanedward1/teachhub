@@ -81,6 +81,7 @@ export const studentApi = {
   remove: (id) => request.delete(`/api/students/${id}`),
   export: (params) => request.get('/api/students/export', { params, responseType: 'blob' }),
   resetPassword: (id, data) => request.put(`/api/students/${id}/password`, data),
+  batchResetPassword: (data) => request.put('/api/students/password/batch', data),
   boardTypeStats: (params) => request.get('/api/students/board-type-stats', { params }),
   template: () => request.get('/api/students/template', { responseType: 'blob' }),
   import: (formData) =>
@@ -230,6 +231,9 @@ export const adminApi = {
   platformOverview: () => request.get('/api/admin/platform/overview'),
   platformRegistration: () => request.get('/api/admin/platform/registration'),
   setPlatformRegistration: (data) => request.put('/api/admin/platform/registration', data),
+  // 学生单设备在线（平台级，缺省开启）：开启后学生登录会把先登录的设备挤下线
+  platformStudentDevice: () => request.get('/api/admin/platform/student-device'),
+  setPlatformStudentDevice: (data) => request.put('/api/admin/platform/student-device', data),
   // AI 批改（平台超管专属）：凭证只写不回显，读接口仅返回掩码
   aiCredential: () => request.get('/api/admin/platform/ai-credential'),
   setAiCredential: (data) => request.put('/api/admin/platform/ai-credential', data),

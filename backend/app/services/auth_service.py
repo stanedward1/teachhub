@@ -22,7 +22,7 @@ from app.audit import audit
 from app.config import settings
 from app.models import Classroom, RefreshToken, School, Student, User
 from app.permissions import get_head_class_ids, get_student_account
-from app.platform_settings import is_registration_allowed
+from app.platform_settings import is_registration_allowed, is_student_single_device_enabled
 from app.security import (
     create_access_token,
     create_refresh_token,
@@ -215,6 +215,32 @@ def invalidate_user_sessions(db: Session, user: User) -> None:
     )
 
 
+def _enforce_student_single_device(db: Session, user: User) -> None:
+    """学生「单设备在线」：作废该账号此前的**全部**会话（登录前调用，不提交）。
+
+    产品语义是「同一时间学生只能一台设备在线，后登录的会把先登录的挤下去」。实现上
+    直接复用 `invalidate_user_sessions`（改密用的同一把闸），因此两件事一次做到：
+
+    1. `token_version += 1` ⇒ 旧设备的 access token 在 `app/deps.py` 版本比对处立刻 401；
+    2. 撤销该账号所有未撤销的 refresh token ⇒ 旧设备也无法用刷新令牌「续命」
+       （只做第 1 步的话，旧设备能刷到一枚带新版本号的 token，挤下线被完全绕过）。
+
+    ⚠️ 必须在**签发新会话之前**调用：`_issue_session` 会新建一条 refresh token 行，
+    若顺序反了，新登录自己会被刚执行的批量撤销带走。
+
+    ⚠️ 仅对 `role == "student"` 生效。教师 / 学校管理员 / 平台超管不受限 —— 他们本就
+    需要多设备（办公室电脑 + 手机）；把管理员也一并踢下线会误伤正常运维。
+
+    ⚠️ 开关为平台级 `student_single_device`（缺省开启，见 `app/platform_settings.py`）。
+    关闭时不执行任何撤销，退回到「多设备并存」的历史行为。
+    """
+    if user.role != "student":
+        return
+    if not is_student_single_device_enabled(db):
+        return
+    invalidate_user_sessions(db, user)
+
+
 # ---------------- 对外业务用例 ----------------
 def _issue_session(db: Session, user: User, user_agent: str | None = None) -> dict:
     """签发一次完整会话（access + refresh）并提交，返回统一的响应负载。
@@ -252,6 +278,10 @@ def login(
     """账号登录：校验凭证 / 锁定 / 租户 / 学籍，签发 access + refresh 令牌。
 
     响应在原有 `token` / `user` / `must_change_password` 基础上**新增** `refresh_token`。
+
+    副作用：**学生**登录会作废该账号此前的全部会话（单设备在线，后登录挤掉先登录），
+    由平台级开关 `student_single_device` 控制（缺省开启）；教师 / 学校管理员 / 平台超管
+    不受影响。详见 `_enforce_student_single_device`。
     """
     user, err_msg = _resolve_login_user(db, payload)
 
@@ -295,6 +325,10 @@ def login(
             raise HTTPException(status_code=403, detail="该学生已退学，无法登录")
 
     _reset_login_state(user)
+
+    # 学生「单设备在线」：先作废旧会话，再签发新会话 —— 顺序不可颠倒（见函数注释）。
+    _enforce_student_single_device(db, user)
+
     return _issue_session(db, user, user_agent=user_agent)
 
 

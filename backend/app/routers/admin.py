@@ -10,7 +10,7 @@ from app.deps import (
     require_teacher,
 )
 from app.models import User
-from app.schemas import AiCredentialSetting, AiGradingSetting, RegistrationSetting
+from app.schemas import AiCredentialSetting, AiGradingSetting, RegistrationSetting, StudentDeviceSetting
 from app.services import admin_service, ai_admin_service
 
 router = APIRouter(prefix="/api", tags=["系统管理"])
@@ -110,6 +110,22 @@ def set_platform_registration(
     db: Session = Depends(get_db),
 ):
     return admin_service.set_platform_registration(db=db, payload=payload, user=user)
+
+
+@router.get("/admin/platform/student-device")
+def platform_student_device(user=Depends(require_super_admin), db: Session = Depends(get_db)):
+    """读取「学生单设备在线」开关（平台级，缺省开启）。"""
+    return admin_service.platform_student_device(db=db, user=user)
+
+
+@router.put("/admin/platform/student-device")
+def set_platform_student_device(
+    payload: StudentDeviceSetting,
+    user=Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """开启/关闭「学生单设备在线」：开启后学生登录会把先登录的设备挤下线。"""
+    return admin_service.set_platform_student_device(db=db, payload=payload, user=user)
 
 
 # ---------------- AI 批改（平台超管专属） ----------------

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user, require_teacher
 from app.models import User
-from app.schemas import StudentCreate, StudentUpdate
+from app.schemas import StudentBatchPassword, StudentCreate, StudentUpdate
 from app.services import students_service
 
 router = APIRouter(prefix="/api", tags=["基础数据"])
@@ -127,6 +127,24 @@ def delete_student(student_id: int, user: User = Depends(get_current_user), db: 
 def reset_student_password(student_id: int, payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """教师重置/修改学生密码（默认 123456）。"""
     return students_service.reset_student_password(db, student_id, payload, user)
+
+
+@router.put("/students/password/batch")
+def batch_reset_student_passwords(
+    payload: StudentBatchPassword,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """批量重置/修改学生密码（默认 123456）。
+
+    ⚠️ 路由路径必须与 `/students/{student_id}/password` **不冲突**：本路径是
+    `password/batch`，而单条路径的第二段是数字 id —— FastAPI 按声明顺序匹配，
+    数字段不会命中 `batch`，因此两者可安全共存。这里把它放在单条之后，语义更清晰。
+
+    `student_ids` 里不存在 / 无权限 / 已退学的学生会被**跳过**并计入响应的 `failed`，
+    不中断整批；返回 `{"ok": True, "updated": n, "failed": [...]}`。
+    """
+    return students_service.batch_reset_student_passwords(db, payload, user)
 
 
 @router.post("/students/{student_id}/avatar")

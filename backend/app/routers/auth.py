@@ -26,8 +26,13 @@ from app.services import auth_service
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
-# 登录接口限流：按客户端 IP 维度限制登录尝试频率，配合应用层的账号锁定策略，
-# 防止攻击者绕过账号锁定、用分布式 IP 对同一账号进行暴力破解。
+# 认证接口限流：按客户端 IP 维度限制请求频率。阈值集中配置在 `app/config.py`
+# 的 `AUTH_*_RATE_LIMIT`（默认登录 30/min、注册 30/min、刷新 120/min、登出 60/min），
+# 便于按部署规模调整而无需改代码。
+# ⚠️ 阈值刻意**放得比较宽**：校园网 / 机房 / 企业出口是 NAT 共享 IP，几十上百人从同一
+#    IP 登录会互相挤占配额；阈值过小会让后登录的人无辜收到 429「操作过于频繁」。
+#    防爆破的主力是**账号维度**的失败锁定（5 次错口令锁 15 分钟），IP 限流只兜底
+#    「同一出口高频轮询 / 分布式 IP 撞同一个账号」的场景。
 # 注意：limiter 实例在 main.py 中创建并挂到 app.state，这里复用同一个实例
 # （slowapi 要求所有路由共享同一个 Limiter 实例才能正确累计计数）。
 def _client_key(request: Request) -> str:
@@ -51,13 +56,13 @@ public_user = auth_service.public_user
 
 
 @router.post("/login")
-@limiter.limit("5/minute")
+@limiter.limit(settings.AUTH_LOGIN_RATE_LIMIT)
 def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     return auth_service.login(db, payload, user_agent=request.headers.get("user-agent"))
 
 
 @router.post("/register")
-@limiter.limit("10/minute")
+@limiter.limit(settings.AUTH_REGISTER_RATE_LIMIT)
 def register(request: Request, payload: RegisterRequest, db: Session = Depends(get_db)):
     """学生自助注册（仅允许系统中尚不存在「班级+姓名」的学生）。
 
@@ -68,7 +73,7 @@ def register(request: Request, payload: RegisterRequest, db: Session = Depends(g
 
 
 @router.post("/refresh")
-@limiter.limit("30/minute")
+@limiter.limit(settings.AUTH_REFRESH_RATE_LIMIT)
 def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get_db)):
     """用刷新令牌换取新的令牌对（一次性轮换），无需鉴权。"""
     return auth_service.refresh(
@@ -77,13 +82,13 @@ def refresh(request: Request, payload: RefreshRequest, db: Session = Depends(get
 
 
 @router.post("/logout")
-@limiter.limit("30/minute")
+@limiter.limit(settings.AUTH_LOGOUT_RATE_LIMIT)
 def logout(request: Request, payload: RefreshRequest, db: Session = Depends(get_db)):
     """撤销刷新令牌（幂等），无需鉴权。
 
-    与同组的 login(5/min) / register(10/min) / refresh(30/min) 一致挂限流：
-    登出是无成本可刷的端点（每次都按 token_hash 查一次库）。30/min 与 refresh 同档，
-    远高于正常登出频率，不影响正常使用。"""
+    与同组的 login / register / refresh 一致挂限流（阈值见 `app/config.py` 的
+    `AUTH_*_RATE_LIMIT`）；登出是无成本可刷的端点（每次都按 token_hash 查一次库），
+    但阈值远高于正常登出频率，不影响正常使用。"""
     return auth_service.logout(db, payload.refresh_token)
 
 

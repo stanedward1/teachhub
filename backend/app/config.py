@@ -136,6 +136,18 @@ class Settings(BaseSettings):
     # 且代理会重写该头时才可开启，否则攻击者可伪造 IP 绕过 / 干扰限流计数。
     TRUST_PROXY_HEADERS: bool = False
 
+    # ---------------- 认证接口限流（slowapi） ----------------
+    # 限流是**按客户端 IP 计数**的。校园网 / 机房 / 企业出口普遍是 NAT 共享 IP，
+    # 几十上百名师生从同一 IP 登录会互相挤占配额 —— 阈值定得太小，第六个登录的人
+    # 就会收到 429「操作过于频繁」。因此这里把阈值放宽到「一个人一天正常操作也远远
+    # 用不完」的量级；防爆破的主力仍是**账号维度**的失败锁定（5 次错口令锁 15 分钟，
+    # 见 auth_service.MAX_FAILED_ATTEMPTS），IP 限流只兜底「同一出口高频轮询」。
+    # 这些值均可通过环境变量覆盖，部署到不同规模的环境时无需改代码。
+    AUTH_LOGIN_RATE_LIMIT: str = "30/minute"       # 登录
+    AUTH_REGISTER_RATE_LIMIT: str = "30/minute"    # 学生自助注册
+    AUTH_REFRESH_RATE_LIMIT: str = "120/minute"    # 刷新令牌（前端静默续期，调用最频繁）
+    AUTH_LOGOUT_RATE_LIMIT: str = "60/minute"      # 登出
+
     @field_validator("SECRET_KEY", mode="before")
     @classmethod
     def _fill_default_secret_key(cls, value):

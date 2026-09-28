@@ -28,6 +28,12 @@
       <div class="spacer"></div>
       <el-button @click="downloadTemplate">下载模板</el-button>
       <el-button type="success" @click="openImport">批量导入</el-button>
+      <el-button
+        type="warning"
+        :disabled="!selected.length"
+        @click="openBatchPassword"
+        >批量改密{{ selected.length ? ` (${selected.length})` : '' }}</el-button
+      >
       <el-button @click="exportExcel">导出花名册</el-button>
       <el-button type="primary" @click="openCreate">添加学生</el-button>
     </div>
@@ -48,7 +54,8 @@
           <el-button type="primary" @click="openCreate">添加学生</el-button>
           <el-button @click="openImport">批量导入</el-button>
         </template>
-        <el-table :data="items" v-loading="loading" style="width: 100%">
+        <el-table :data="items" v-loading="loading" style="width: 100%" @selection-change="onSelectionChange">
+          <el-table-column type="selection" width="46" :selectable="isRowSelectable" />
           <el-table-column prop="student_no" label="学号" width="120" />
           <el-table-column label="头像" width="70">
             <template #default="{ row }">
@@ -124,6 +131,12 @@
 
     <StudentPasswordDialog v-model="pwdDialog" :student="pwdTarget" />
 
+    <StudentBatchPasswordDialog
+      v-model="batchPwdDialog"
+      :students="selected"
+      @saved="onBatchSaved"
+    />
+
     <BoardHistoryDialog v-model="boardDialog" :student="boardStudent" />
 
     <ImportDialog
@@ -163,6 +176,7 @@ import { downloadExcel } from '../../composables/useDownload'
 import { studentApi } from '../../api'
 import StudentFormDialog from './students/StudentFormDialog.vue'
 import StudentPasswordDialog from './students/StudentPasswordDialog.vue'
+import StudentBatchPasswordDialog from './students/StudentBatchPasswordDialog.vue'
 import BoardHistoryDialog from './students/BoardHistoryDialog.vue'
 import BoardTypeChart from './students/BoardTypeChart.vue'
 import StudentAvatarCell from './students/StudentAvatarCell.vue'
@@ -211,6 +225,10 @@ const formStudent = ref(null)
 const pwdDialog = ref(false)
 const pwdTarget = ref(null)
 
+// 批量改密：表格多选 + 批量弹窗
+const batchPwdDialog = ref(false)
+const selected = ref([])
+
 // 寄宿/通学状态动态展示弹窗
 const boardDialog = ref(false)
 const boardStudent = ref(null)
@@ -248,6 +266,28 @@ async function exportExcel() {
 function openPassword(row) {
   pwdTarget.value = row
   pwdDialog.value = true
+}
+
+// ---------------- 批量改密 ----------------
+// 表格多选回调
+function onSelectionChange(rows) {
+  selected.value = rows
+}
+
+// 已退学学生不可被批量操作（与「编辑 / 密码 / 删除」按钮的 disabled 判据一致）
+function isRowSelectable(row) {
+  return !row.is_dropped_out
+}
+
+function openBatchPassword() {
+  if (!selected.value.length) return
+  batchPwdDialog.value = true
+}
+
+// 批量改密成功后：清空多选并刷新列表（重新拉取可同步 must_change_password 等状态展示）
+function onBatchSaved() {
+  selected.value = []
+  load()
 }
 
 // 寄宿/通学状态动态展示：打开弹窗（数据由弹窗自行加载）

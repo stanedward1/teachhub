@@ -32,6 +32,32 @@ class RegistrationSetting(BaseModel):
     allow_registration: bool = Field(..., description="是否开放学生自助注册")
 
 
+class StudentDeviceSetting(BaseModel):
+    """平台级「学生单设备在线」开关请求体（平台超管）。
+
+    student_single_device=True 时，学生每次登录都会作废该账号此前的全部会话
+    （同一时间只能一台设备在线，后登录的挤掉先登录）；False 则恢复多设备并存。
+    仅约束学生，教师 / 学校管理员 / 平台超管不受影响。
+    """
+
+    student_single_device: bool = Field(..., description="是否限制学生单设备在线")
+
+
+class StudentBatchPassword(BaseModel):
+    """学生批量改密请求体。
+
+    与单个改密（`PUT /api/students/{id}/password`）语义一致：
+    - `password` 缺省 / 空 ⇒ 重置为默认口令 `123456`；
+    - 弱口令（不满足强度要求）会把 `must_change_password` 置 True，强制下次登录修改。
+
+    `student_ids` 用 `max_length=500` 限幅，避免一次请求携带过多目标导致事务过长；
+    前端多选跨页累计也远达不到这个量级。
+    """
+
+    student_ids: list[int] = Field(..., min_length=1, max_length=500, description="目标学生档案 ID 列表")
+    password: str | None = Field(None, max_length=50, description="新密码；留空则重置为 123456")
+
+
 class AiCredentialSetting(BaseModel):
     """平台级 AI 服务凭证请求体（平台超管）。
 

@@ -28,6 +28,8 @@ AI 批改开关与平台超管接口复用；校内配置请勿使用本模块�
 「配置项从未被设置过」两种情形下行为可预期。默认值取向按功能分别约定：
 
 - 学生自助注册开关 `allow_registration` 缺省视为 **True**（保持引入开关之前的历史行为，向后兼容）；
+- 学生「单设备在线」开关 `student_single_device` 缺省视为 **True**（产品要求「后登录挤掉先登录」，
+  开启才符合预期行为；关闭是为了留运维退路，例如联调时需同时保留多个学生会话）；
 - AI 批改相关开关缺省一律 **False**（新功能默认不产生费用、不改动既有流程）。
 """
 from sqlalchemy.orm import Session
@@ -37,6 +39,10 @@ from app.models import Setting
 
 # 学生自助注册总开关的全局配置键（school_id IS NULL）
 ALLOW_REGISTRATION_KEY = "allow_registration"
+
+# 学生「单设备在线」开关的全局配置键（school_id IS NULL）
+# 开启时：学生每次登录都会作废该账号此前的全部会话（后登录挤掉先登录）。
+STUDENT_SINGLE_DEVICE_KEY = "student_single_device"
 
 # ---------------- AI 批改相关全局配置键 ----------------
 # 平台级总开关：关闭时不产生任何外呼（缺省关闭）
@@ -154,6 +160,27 @@ def is_registration_allowed(db: Session) -> bool:
     if value is None:
         return True
     return _is_truthy(value)
+
+
+def is_student_single_device_enabled(db: Session) -> bool:
+    """学生「单设备在线」是否开启（平台级，缺省**开启**）。
+
+    开启时，学生每次登录都会作废该账号此前的**全部**会话（access + refresh），即
+    「同一时间只能一台设备在线，后登录的会把先登录的挤下去」。教师 / 学校管理员 /
+    平台超管**不受**该开关约束（可与学生在多设备同时在线）。
+
+    与 `is_registration_allowed` 的关键差异：那里是「配置缺失 ⇒ True」的**向后兼容**
+    特例，这里走通用的 `to_bool(default=True)`，因此**显式写入的假值集**
+    （`0 / false / no / off`）同样能关闭它 —— 运维需要的是「一键关掉」退路，
+    不能被「缺省 True」的实现细节吃掉。
+
+    Args:
+        db: 数据库会话。
+
+    Returns:
+        是否启用学生单设备在线限制。
+    """
+    return to_bool(get_global_setting(db, STUDENT_SINGLE_DEVICE_KEY), default=True)
 
 
 def is_ai_grading_enabled(db: Session) -> bool:

@@ -22,10 +22,10 @@
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| POST | `/api/auth/login` | 公开 | 登录（限流 5 次/分钟，锁定 5 次/15 分钟）；返回 `{token, refresh_token, user, must_change_password}` |
-| POST | `/api/auth/refresh` | 公开 | 用 `refresh_token` 换取新令牌对，返回 `{token, refresh_token, token_type}`（限流 30 次/分钟；失败返回 401） |
-| POST | `/api/auth/logout` | 公开 | 撤销刷新令牌，返回 `{ok: true}`（幂等：重复调用仍返回成功；凭令牌本身即可调用，无需鉴权） |
-| POST | `/api/auth/register` | 公开 | 学生自助注册（限流 10 次/分钟；平台关闭注册时返回 403） |
+| POST | `/api/auth/login` | 公开 | 登录（限流 **30 次/分钟**，账号锁定 5 次/15 分钟）；返回 `{token, refresh_token, user, must_change_password}` |
+| POST | `/api/auth/refresh` | 公开 | 用 `refresh_token` 换取新令牌对，返回 `{token, refresh_token, token_type}`（限流 120 次/分钟；失败返回 401） |
+| POST | `/api/auth/logout` | 公开 | 撤销刷新令牌，返回 `{ok: true}`（幂等：重复调用仍返回成功；凭令牌本身即可调用，无需鉴权；限流 60 次/分钟） |
+| POST | `/api/auth/register` | 公开 | 学生自助注册（限流 30 次/分钟；平台关闭注册时返回 403） |
 | GET | `/api/auth/schools` | 公开 | 启用中学校下拉 |
 | GET | `/api/auth/registration-status` | 公开 | 学生自助注册开关（返回 `{allow_registration: bool}`） |
 | GET | `/api/auth/me` | 登录 | 当前用户信息 |
@@ -104,6 +104,7 @@
 | PUT | `/api/students/{id}` | 登录 | 修改学生 |
 | DELETE | `/api/students/{id}` | 登录 | 删除学生（级联清理） |
 | PUT | `/api/students/{id}/password` | 登录 | 重置学生密码；成功后**吊销该学生全部会话**（同 `/api/auth/password` 的 `token_version` 机制） |
+| PUT | `/api/students/password/batch` | 登录 | **批量**重置/修改学生密码（body `{student_ids:[int], password?:str}`，留空=默认 123456）；不存在/无权限/已退学的目标**跳过**并计入 `failed`，返回 `{ok, updated, failed:[{id,reason}]}` |
 | POST | `/api/students/{id}/avatar` | 登录 | 上传学生头像 |
 | GET | `/api/students/{id}/profile` | 登录 | 学生画像（四维雷达） |
 | POST | `/api/students/{id}/tags` | 登录 | 添加标签 |
@@ -191,6 +192,8 @@
 | GET | `/platform/overview` | 超管 | 平台概览 |
 | GET | `/platform/registration` | 超管 | 查询学生自助注册开关 |
 | PUT | `/platform/registration` | 超管 | 设置学生自助注册开关（`{allow_registration: bool}`） |
+| GET | `/platform/student-device` | 超管 | 查询学生「单设备在线」开关（缺省 **开启**） |
+| PUT | `/platform/student-device` | 超管 | 设置学生「单设备在线」开关（`{student_single_device: bool}`）；开启后学生登录会作废该账号此前的**全部**会话 —— 后登录挤掉先登录 |
 | GET | `/platform/ai-credential` | 超管 | 查询 AI 服务凭证（只回掩码 `api_key_masked`，**绝不回明文密钥**） |
 | PUT | `/platform/ai-credential` | 超管 | 保存 AI 服务凭证（`provider`/`base_url`/`model`/`api_key`/`vision_enabled`/`enabled`；`api_key` 留空＝保持原密钥，非空则 Fernet 加密覆盖） |
 | POST | `/platform/ai-credential/test` | 超管 | AI 凭证连通性测试（发一次最小请求，允许「先测后存」；`api_key` 留空则回退已存密钥） |
@@ -233,12 +236,14 @@
 | 作用域 | 判定 | 示例键 | 读写接口 |
 | --- | --- | --- | --- |
 | 校内配置 | `school_id = 本校 id` | `school_name`、`semester`、`grade`、`max_upload_size` | `GET /api/settings`、`PUT /api/settings/{key}`（学校管理员及以上） |
-| 平台全局配置 | `school_id IS NULL` | `allow_registration` | `GET/PUT /api/admin/platform/registration`（仅平台超管） |
+| 平台全局配置 | `school_id IS NULL` | `allow_registration`、`student_single_device` | `GET/PUT /api/admin/platform/registration`、`GET/PUT /api/admin/platform/student-device`（仅平台超管）；`student_single_device` 缺省 **开**：学生每次登录都会作废该账号此前的全部会话（`token_version` 自增 + 撤销未撤销的 refresh token），仅约束 `role=student` |
 | 平台全局配置 | `school_id IS NULL` | `ai_grading_enabled`、`ai_auto_publish_excellent`、`ai_auto_publish_owner`、`ai_daily_call_limit`、`ai_max_tokens` | `GET/PUT /api/admin/platform/ai-grading`（仅平台超管）；凭证存 `ai_credentials` 表，走 `/api/admin/platform/ai-credential` |
 
 > 读取统一走 `app/platform_settings.py`（`get_global_setting` / `set_global_setting` / `is_registration_allowed` / `is_ai_grading_enabled` 等）；该模块**所有查询显式 `skip_tenant_filter`**，因为全局配置行的 `school_id` 就是 `NULL`，在带租户上下文的请求里（如教师在带班级上下文中触发 AI 批改时读总开关与额度）不加此开关会**永远查不到**并静默落回默认值。
 >
-> **缺省值取向按功能分别约定**：学生自助注册 `allow_registration` 缺省 **开**（兼容引入开关之前的既有安装）；AI 批改相关开关缺省**一律关**（新功能默认不产生费用、不改动既有流程）。
+> **缺省值取向按功能分别约定**：学生自助注册 `allow_registration` 缺省 **开**（兼容引入开关之前的既有安装）；学生「单设备在线」`student_single_device` 缺省 **开**（产品要求「后登录挤掉先登录」，关闭只为留运维退路，例如联调需同时保留多个学生会话）；AI 批改相关开关缺省**一律关**（新功能默认不产生费用、不改动既有流程）。
+>
+> ⚠️ `student_single_device` 走通用 `to_bool(default=True)`（**不是** `is_registration_allowed` 那种「配置缺失 ⇒ True」的特例），因此显式写入的假值集（`0/false/no/off`）同样能关闭它 —— 「一键关掉」的退路不会被「缺省 True」的实现细节吃掉。
 >
 > AI 批改相关键：`ai_grading_enabled`（平台级总开关，缺省关，关闭时**零外呼**且**触发接口返回 400**）、`ai_auto_publish_excellent`（优秀作品自动入库，缺省关＝推荐仅作候选待教师确认）、`ai_auto_publish_owner`（开启自动入库的超管 id，自动入库时计入 `excellent_works.selected_by`）、`ai_daily_call_limit`（每日调用上限，**平台级唯一成本刹车**，缺省 200）、`ai_max_tokens`（单次 max_tokens，缺省 **2048**）。⚠️ **推理模型的思考 token 与正文共用这份预算**：`deepseek-flash` 等推理模型思考模式默认打开，预算偏小时会返回「`finish_reason=length` 且正文为空」；故批改侧显式下发`thinking.type=disabled`（配置项 `AI_THINKING_MODE`），并带一次截断重试（`min(max_tokens×3, AI_MAX_TOKENS_CEILING)`）。另：上表「配置默认值」只在 `settings` 表无对应行时生效 —— **DB 行优先**，改 `config.py` 不会影响已存 `ai_max_tokens` 的部署。
 >

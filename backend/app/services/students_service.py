@@ -645,6 +645,86 @@ def reset_student_password(db: Session, student_id: int, payload: dict, user: Us
     return {"ok": True}
 
 
+def batch_reset_student_passwords(db: Session, payload, user: User) -> dict:
+    """教师 / 管理员**批量**重置或修改学生密码（默认 123456）。
+
+    与单个改密（`reset_student_password`）语义逐条对齐，只是把「定位 + 权限 + 退学
+    校验 + 写库」放进一个循环，最后统一提交：
+
+    - 权限：管理员（校级 / 平台）可改本校（ORM 自动限定）任意学生；普通教师仅限
+      **自己负责的班级**的学生，越权 → 403；
+    - 退学 / 已毕业：跳过该生（记入 `failed`），不中断整批 —— 部分成功比整批回滚更
+      符合「勾选一堆学生统一改密」的预期；
+    - 不存在的学生：跳过并记入 `failed`；
+    - 弱口令 ⇒ `must_change_password=True`（与单个改密一致）；
+    - 返回 `{"ok": True, "updated": n, "failed": [{"id":.., "reason":".."}]}`，
+      前端据此提示「成功 n 人 / 失败 m 人」。
+
+    ⚠️ 批量操作有上限（schema 层 `max_length=500`），避免一次事务过大。
+    ⚠️ 与单个改密不同，这里**不**主动踢出学生会话 —— 与现有单个改密行为保持一致
+    （`reset_student_password` 也不调 `invalidate_user_sessions`）；改密本身已把口令
+    哈希换掉，旧会话虽仍可访问，但下次凭证校验即失败。若日后要求「改密即踢出」，
+    应在两处一起改，而不是只改批量这一个入口。
+    """
+    new_pwd = (getattr(payload, "password", None) or "").strip() or "123456"
+    must_change = validate_password_strength(new_pwd) is not None
+
+    updated = 0
+    failed: list[dict] = []
+    seen: set[int] = set()
+
+    for sid in payload.student_ids:
+        # 去重：前端跨页勾选 / 重复提交可能带重复 id，同一学生只处理一次
+        if sid in seen:
+            continue
+        seen.add(sid)
+
+        s = db.get(Student, sid)
+        if not s:
+            failed.append({"id": sid, "reason": "学生不存在"})
+            continue
+
+        # 权限：与单个改密同一判据
+        if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, sid):
+            failed.append({"id": sid, "reason": "无权修改该学生密码"})
+            continue
+
+        # 退学 / 班级已毕业：沿用统一护栏（抛 403，这里降级为「跳过」）
+        try:
+            ensure_student_operable(db, sid)
+        except HTTPException as e:
+            failed.append({"id": sid, "reason": e.detail})
+            continue
+
+        u = get_student_account(db, s.class_id, s.name)
+        if not u:
+            u = User(
+                username=s.name,
+                password_hash=hash_password(new_pwd),
+                name=s.name,
+                role="student",
+                school_id=s.school_id,
+                class_id=s.class_id,
+                must_change_password=must_change,
+            )
+            db.add(u)
+        else:
+            u.password_hash = hash_password(new_pwd)
+            u.must_change_password = must_change
+
+        audit(
+            db,
+            user,
+            "reset_student_password",
+            target=f"{s.name} ({s.student_no})",
+            student_id=sid,
+        )
+        updated += 1
+
+    db.commit()
+    return {"ok": True, "updated": updated, "failed": failed}
+
+
 def upload_student_avatar(db: Session, user: User, student_id: int, file) -> dict:
     """教师为学生上传头像。"""
     s = db.get(Student, student_id)
