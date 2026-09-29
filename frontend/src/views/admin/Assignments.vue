@@ -154,11 +154,39 @@
         <el-button @click="unsubmittedDialog = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- AI 批改进度：触发批量批改后弹出，每 2 秒轮询到无在跑任务（finished）为止 -->
+    <el-dialog
+      v-model="progressDialog"
+      :title="progressRow ? 'AI 批改进度 - ' + progressRow.title : 'AI 批改进度'"
+      width="520px"
+      @close="stopProgressPolling"
+    >
+      <div v-if="!progress" v-loading="true" style="min-height: 90px"></div>
+      <el-empty v-else-if="progress.total === 0" description="该任务暂无提交" :image-size="60" />
+      <template v-else>
+        <el-progress
+          :percentage="progressPercent"
+          :status="progress.finished ? 'success' : ''"
+          :stroke-width="16"
+        />
+        <p class="progress-detail">
+          已批改 {{ progress.done }} / {{ progress.total }}（成功 {{ progress.success }}，失败
+          {{ progress.failed }}，进行中 {{ progress.pending }}，未批改 {{ progress.ungraded }}）
+        </p>
+        <p v-if="progress.finished" class="progress-done">批改已结束</p>
+        <p v-else class="progress-running">AI 正在后台批改，可关闭本窗口，不影响批改进度</p>
+        <p v-if="progressFailed" class="progress-retry">进度获取失败，正在重试</p>
+      </template>
+      <template #footer>
+        <el-button type="primary" @click="progressDialog = false">后台运行</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import StateView from '../../components/StateView.vue'
@@ -191,6 +219,56 @@ onMounted(async () => {
 // AI 批改：纯手动触发（学生提交不会自动批改），只批该作业下尚未批改的提交
 const aiGradingId = ref(null)
 
+// ---- AI 批改进度：弹窗 + 轮询到「无在跑任务」为止 ----
+const progressDialog = ref(false)
+const progressRow = ref(null) // 正在查看进度的作业（用于标题）
+const progress = ref(null) // 后端进度对象，null 表示尚未拿到首帧
+const progressFailed = ref(false) // 本轮轮询是否失败（弹窗内提示用）
+let progressTimer = null // 轮询定时器（关闭弹窗 / 卸载时必须清理）
+let progressId = null // 当前轮询的作业 id
+
+// 进度条百分比：分子用 done（成功+失败），分母用 total。
+// 额度截断时 done/total 可能永远 <100%，此时仍是普通态，仅在 finished 时置成功态。
+const progressPercent = computed(() => {
+  const p = progress.value
+  if (!p || !p.total) return 0
+  return Math.round((p.done / p.total) * 100)
+})
+
+function stopProgressPolling() {
+  if (progressTimer) {
+    clearInterval(progressTimer)
+    progressTimer = null
+  }
+  progressId = null
+}
+
+// 拉取一次进度；失败只静默跳过本轮（不弹错误 toast），下一轮继续
+async function fetchProgress() {
+  if (progressId == null) return
+  try {
+    const res = await homeworkApi.aiGradeProgress(progressId)
+    progress.value = res
+    progressFailed.value = false
+    // pending==0 表示没有在跑的任务了 —— 立即停止轮询（额度截断时也适用）
+    if (res.finished) stopProgressPolling()
+  } catch (e) {
+    progressFailed.value = true
+    console.error('获取 AI 批改进度失败', e)
+  }
+}
+
+function openProgress(row) {
+  stopProgressPolling()
+  progressRow.value = row
+  progress.value = null
+  progressFailed.value = false
+  progressId = row.id
+  progressDialog.value = true
+  fetchProgress()
+  progressTimer = setInterval(fetchProgress, 2000)
+}
+
 async function aiGrade(row) {
   if (!row.submission_count) return ElMessage.warning('该任务暂无提交')
   await ElMessageBox.confirm(
@@ -205,6 +283,8 @@ async function aiGrade(row) {
     if (res.already_graded) parts.push(`跳过 ${res.already_graded} 份已批改`)
     if (res.skipped && res.skipped > res.already_graded) parts.push(`额度不足跳过其余`)
     ElMessage.success(parts.join('，'))
+    // 有实际投递才开进度弹窗；无投递（全部已批改等）维持原提示即可
+    if (res.queued > 0) openProgress(row)
   } catch (e) {
     // 失败原因（总开关未开启 / 未配凭证 / 额度耗尽）由全局拦截器提示
   } finally {
@@ -360,6 +440,7 @@ async function remove(row) {
 
 onBeforeUnmount(() => {
   stopRolling()
+  stopProgressPolling()
 })
 </script>
 
@@ -432,5 +513,30 @@ onBeforeUnmount(() => {
 .ok-text {
   color: #67c23a;
   font-weight: 600;
+}
+
+.progress-detail {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: #606266;
+}
+
+.progress-running {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #909399;
+}
+
+.progress-done {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #67c23a;
+}
+
+.progress-retry {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #e6a23c;
 }
 </style>

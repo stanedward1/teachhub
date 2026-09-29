@@ -1,13 +1,13 @@
 # TeachHub API 接口文档
 
-> 更新：2026-09-23 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
+> 更新：2026-09-29 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
 >
 > 认证方式：请求头 `Authorization: Bearer <token>`（登录/注册/注册开关状态/学校下拉/班级下拉/刷新令牌/登出/编程练习无需认证）。
 > 令牌双轨：登录返回的访问令牌字段名为 `token`（短期有效，用于鉴权），另有 `refresh_token`（长期有效，用于换取新令牌对，详见「一、认证」末段）。
 >
 > 链路追踪：所有响应均带 `X-Request-ID` 响应头（请求头传入则透传，否则服务端生成 `uuid4`）；服务端日志每行带 `[rid=...]`，可用该 ID 串联同一请求的全部日志。
 >
-> 规模：**业务接口 145 条**（`/api/**`）+ 8 条非业务路由（端点 `/`、`/health`、`/metrics`、`/docs`、`/docs/oauth2-redirect`、`/redoc`、`/openapi.json` + `/uploads` 静态挂载），合计 153 条已注册路由（以 `len(app.routes)` 为准）
+> 规模（2026-09-29 实测）：**业务接口 149 条**（`/api/**`）+ **7 条非业务路由**（`/openapi.json`、`/docs`、`/docs/oauth2-redirect`、`/redoc`、`/`、`/health`、`/metrics`），合计 **156 条带方法的已注册路由**。本文件所有计数均以 `len(app.routes)=157` 为分母核对：157 = 156 条带方法路由 + 1 个 `/uploads` 静态目录**挂载**（挂载不是路由，不并入接口计数）。
 
 ## 角色权限说明
 
@@ -59,6 +59,7 @@
 | GET | `/assignments/{id}/submissions` | 登录 | 提交列表（教师侧附 `ai_grading_status` / `ai_score` / `ai_excellent_candidate`，用于「AI 批改」按钮的结果反馈） |
 | GET | `/assignments/{id}/unsubmitted` | 教师+ | 未交名单（应交 = 班级在籍学生，未交 = 应交 − 已交） |
 | POST | `/assignments/{id}/ai-grade` | 教师+ | **触发 AI 批改（教师手动，批量）**：批改该作业下**尚未成功批改**的提交；已批改的跳过，剩余额度不足时按额度截断。返回 `{queued, skipped, already_graded, reason}`。非阻塞（仅入队）。开关关 / 无凭证 / 额度耗尽 → 400 |
+| GET | `/assignments/{id}/ai-grade/progress` | 教师+ | **查询某作业批量 AI 批改进度**（前端轮询用）。返回 `{total, success, failed, pending, ungraded, done, finished}`：`done = success + failed`，`ungraded = total − success − failed − pending`。终止字段 `finished = (pending == 0)`（表示「没有在跑的任务了」，**不是** `done == total`——额度截断时会出现 `ungraded > 0` 但 `pending == 0`，此时即应停止轮询并如实展示「还有 N 份未批改」）。纯聚合、无写操作、无外呼。作业不存在 → 404，非本班教师 → 403 |
 | POST | `/assignments/{id}/submissions` | 学生 | 提交作业（**不触发任何 AI 调用**） |
 | GET | `/submissions/{id}` | 登录 | 提交详情（含 `assignment_title` + 点评 + 评优信息 excellent_id/excellent_note + AI 批改 `ai_grading`）。AI 结果**仅本人可见**（学生读他人提交 403）；学生侧**不含** `error`（失败原因只给教师） |
 | POST | `/submissions/{id}/ai-grade` | 教师+ | **触发 AI 批改（教师手动，单份）**：已有结果则重跑覆盖（用于补批失败件或重交后重批）。返回 `{queued, skipped, reason}`。开关关 / 无凭证 / 额度耗尽 → 400 |
@@ -227,6 +228,8 @@
 | GET | `/redoc` | 公开 | ReDoc |
 | GET | `/openapi.json` | 公开 | OpenAPI schema |
 
+> **接口对账口径**：`backend/_api_diff.py` 以 **`/api` 业务接口**为基准（取 `app.routes` 中路径以 `/api` 开头、且带方法者）。因此本节 6 条非 `/api` 端点（`/`、`/health`、`/metrics`、`/docs`、`/redoc`、`/openapi.json`）会被脚本列为「API.md 有、代码无」——这是**预期正确现象**（它们本就不在 `/api` 前缀内，只是脚本的比对维度不覆盖），**无需修改**。对账结论：`/api` 业务接口**漏列 = 0**（2026-09-29 实测）。
+>
 > 访问日志：所有请求经 `app/observability.py` 的中间件记录 `方法 + 路径 + 状态码 + 耗时`，写入 `backend/logs/teachhub.log`（按天滚动、保留 30 天）；耗时 ≥ 1s 的请求标记 `[SLOW]` 并提升到 WARN 级别。
 
 ## 十、平台级全局配置（`settings` 表）

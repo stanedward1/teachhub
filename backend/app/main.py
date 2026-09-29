@@ -272,7 +272,7 @@ def root():
 def health():
     """健康检查（公开）。
 
-    被 `start.sh` 的就绪探测与 `docker-compose.yml` 的 healthcheck 依赖，
+    被 `start.sh` 的就绪探测依赖，
     因此**必须保持公开**；且只返回 `{"status": "ok"}`，不含任何敏感信息。
     """
     return {"status": "ok"}

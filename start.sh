@@ -7,8 +7,8 @@
 #   DB_ENGINE=mysql bash start.sh # 使用 MySQL（需先填写下方连接信息）
 #   bash start.sh --install-only  # 只装依赖，不启动服务
 #
-# 数据库默认 SQLite（零配置，与项目/Docker 默认一致）。
-# 生产环境建议改用 `docker compose up -d`（见 README）。
+# 数据库默认 SQLite（零配置，与项目默认一致）。
+# 生产环境见 README「生产环境部署」（进程化运行 + 可选反向代理）。
 # ============================================================
 
 # 必须用 bash 运行（脚本使用了 bash 数组等特性）

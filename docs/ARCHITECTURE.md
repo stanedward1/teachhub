@@ -34,7 +34,7 @@ TeachHub 是一套面向中职学校的「教学 + 班主任一体化工作平�
 | AI 批改 | httpx + cryptography + python-docx / pypdf | — | OpenAI 兼容 Chat Completions；凭证 Fernet 加密；附件文本解析 |
 | 代码规范 | ESLint + Prettier | 10 / 3 | flat config + 格式化 |
 | 测试 | pytest | — | 后端自动化测试 |
-| 部署 | 一键脚本（`start.sh` / `stop.sh`） | — | **线上形态**：后端 `run.py` :8080 + 前端 Vite :5173（无 Docker / Nginx）；仓库另附 Docker / Nginx 可选方案 |
+| 部署 | 一键脚本（`start.sh` / `stop.sh`） | — | **线上形态**：后端 `run.py` :8080 + 前端 Vite :5173（无 Docker / Nginx）；仓库不附带容器化方案 |
 
 ## 3. 目录结构
 
@@ -106,8 +106,6 @@ teachhub/
 │   ├── requirements.txt       # 运行时依赖
 │   ├── requirements-dev.txt   # 开发/测试依赖
 │   ├── run.py                 # uvicorn 启动入口
-│   ├── Dockerfile             # 后端镜像
-│   ├── docker-entrypoint.py   # 容器入口（迁移 + 首次 seed + 启动）
 │   └── .env.example
 ├── frontend/
 │   ├── src/
@@ -128,11 +126,9 @@ teachhub/
 │   │       └── scores/        #   Scores 子件：成绩分析 / 录入弹窗
 │   ├── vite.config.js         # dev 代理 /api、/uploads → 8080
 │   ├── eslint.config.js       # ESLint 10（flat config）
-│   ├── Dockerfile             # 前端镜像（Node 构建 + Nginx 托管；**线上未采用该形态**）
 │   └── package.json
 ├── docs/                      # 本文档集（架构 / 接口 / ER / 规范 / 需求与技术方案 / 变更日志）
 ├── scripts/                   # 运维与造数脚本（班主任一致性诊断 / 作业与班级假数据）
-├── docker-compose.yml         # 一键编排后端 + 前端（可选方案，线上未采用）
 ├── start.sh / stop.sh         # 一键启动 / 停止（后端 :8080 + 前端 Vite :5173）
 ├── commitlint.config.cjs      # 提交信息规范；.lintstagedrc.json 暂存文件校验规则
 └── README.md
@@ -288,20 +284,8 @@ teachhub/
 浏览器 → Vite 开发服务器(:5173，server.proxy 转发 /api、/uploads) ──▶ FastAPI(:8080) ──▶ MySQL(teachhub)
 ```
 - 由仓库根 `start.sh` 拉起：后端 `python run.py`（:8080）+ 前端 `npm run dev -- --host 0.0.0.0`（:5173）
-- **无 Docker、无 Nginx**；`frontend/nginx.conf` 已删除
+- **无 Docker、无 Nginx**；仓库不附带容器化方案（`docker-compose.yml` / 各级 `Dockerfile` / `.dockerignore` / `docker-entrypoint.py` 均已移除，`frontend/nginx.conf` 早于 2026-09-20 删除）
 - 因不再记录客户端 IP，`vite.config.js` 的 `server.proxy` **刻意未开 `xfwd`**；若日后需要还原客户端 IP，改回该处即可
-
-### Docker 部署（仓库自带可选方案，线上未采用）
-```
-docker compose up -d --build
-浏览器 → Nginx(:80，frontend 容器)
-         ├── /            → 前端静态产物(dist/)
-         └── /api、/uploads → backend 容器(FastAPI :8080) ──▶ SQLite(数据卷) / MySQL
-```
-- `frontend` 容器：多阶段构建（Node 打包 → Nginx 托管），反代 `/api`、`/uploads` 到 `backend` 服务
-- `backend` 容器：`docker-entrypoint.py` 启动时先 `alembic upgrade head` 迁移，再按需 seed，最后起 uvicorn
-- SQLite 持久化在 `teachhub-data` 卷，上传文件持久化在 `teachhub-uploads` 卷
-- 切换 MySQL/PostgreSQL 只需改 `DATABASE_URL` 环境变量
 
 ### 生产环境（裸机，可选）
 ```
@@ -317,7 +301,6 @@ docker compose up -d --build
 
 - **Alembic 为 schema 唯一来源**：`alembic upgrade head` 一次性完成建表/加列/加索引
 - 本地启动 `main.py` 时执行 `run_migrations()`（`alembic upgrade head`，失败即抛错 fail-fast）；**不再**用 `create_all` 兜底建表，避免与 Alembic 交叉导致版本号/表结构不一致
-- Docker 启动由 `docker-entrypoint.py` 显式先跑 `alembic upgrade head`，再按需 seed
 - 模型变更必须配套新增 Alembic revision（`backend/alembic/versions/`），保证「迁移链 = 模型 schema」
 - 新增字段/表后，用 `alembic revision --autogenerate` 生成迁移脚本并人工核对
 

@@ -33,21 +33,7 @@ npm install
 npm run dev                   # 启动，默认 :5173，代理 /api → :8080
 ```
 
-### 1.4 Docker（可选）
-
-```bash
-cd teachhub
-docker compose up -d --build  # 构建并启动前后端
-docker compose logs -f backend
-docker compose down           # 停止
-```
-
-> ⚠️ **本仓库线上形态是「无 Docker、无 Nginx」**：后端 `python run.py`（:8080）+ 前端
-> `npm run dev -- --host 0.0.0.0`（**Vite 开发服务器**，:5173），由仓库根 `start.sh` 拉起。
-> 上方 compose 命令**仅供本地或可选部署**，且 `frontend/nginx.conf` 已删除（若改用容器内 Nginx 需自备）。
-> 线上实际形态说明见 `README.md`「生产环境部署」章首。
-
-### 1.5 测试
+### 1.4 测试
 
 ```bash
 cd backend
@@ -133,7 +119,7 @@ python -m pytest tests/ -v
 
 - 新增字段/表：修改模型定义后，必须配套新增 Alembic migration（`backend/alembic/versions/`）
 - 生成迁移脚本：`cd backend && alembic revision --autogenerate -m "描述"`，人工核对后提交
-- 应用到本地库：`alembic upgrade head`（本地启动或 Docker 启动会自动执行）
+- 应用到本地库：`alembic upgrade head`（本地启动会自动执行）
 - 确保「迁移链」与「模型 schema」保持一致，避免依赖 `create_all` 兜底而遗漏加列
 - **多租户约束调整**：改唯一约束（如 `settings.key` 全局唯一 → `(school_id, key)` 校内唯一）时，SQLite 不支持 `DROP CONSTRAINT`，需在迁移中**重建表**（新建→拷贝→删除→重命名），参考 `f1a2b3c4d5e6_settings_school_key_unique.py`；MySQL/PostgreSQL 可直接 `drop_constraint` + `create_unique_constraint`。
 - **手动改库须同步 `alembic_version`**：`main.py` 启动自动 `upgrade head`，若先用 SQL 手动改了库再触发迁移会重复执行报错（如 DROP INDEX 1091）。手动改库后需 `UPDATE alembic_version SET version_num='<rev>'` 到对应 revision。
@@ -349,7 +335,7 @@ docs: 补充架构设计文档
 2. `cd frontend && npm run build` 构建成功
 3. 生产 `.env` 覆盖 `SECRET_KEY`、`DATABASE_URL`，并设置 `ENV=production`
 4. 数据库迁移：`cd backend && alembic upgrade head`
-5. Docker 部署：`docker compose up -d --build`，验证 `/health` 与登录链路
+5. 部署：`./start.sh` 拉起前后端（后端 `run.py` :8080 + 前端 Vite :5173），验证 `/health` 与登录链路
 6. 打 tag：`git tag v1.0.0 && git push --tags`
 
 ## 8. 文档维护

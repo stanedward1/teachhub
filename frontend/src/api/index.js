@@ -49,6 +49,8 @@ export const homeworkApi = {
   submissionDetail: (id) => request.get(`/api/homework/submissions/${id}`),
   // AI 批改（教师手动触发）：整份作业批量批改 / 单份提交批改
   aiGradeAssignment: (id) => request.post(`/api/homework/assignments/${id}/ai-grade`),
+  // AI 批改进度（轮询用）：返回 {total,success,failed,pending,ungraded,done,finished}
+  aiGradeProgress: (id) => request.get(`/api/homework/assignments/${id}/ai-grade/progress`),
   aiGradeSubmission: (id) => request.post(`/api/homework/submissions/${id}/ai-grade`),
   addSubmissionComment: (id, data) =>
     request.post(`/api/homework/submissions/${id}/comments`, data),

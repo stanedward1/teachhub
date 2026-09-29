@@ -291,6 +291,38 @@ def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
     }
 
 
+def ai_grade_progress(db: Session, assignment_id: int, user: User) -> dict:
+    """查询**整份作业**的 AI 批改进度（前端轮询用）。
+
+    与批量触发 `ai_grade_assignment` 复用**同一套权限判据**
+    （`_check_teacher_assignment_access`：仅本班教师 / 管理员可读），不另写一套。
+    纯聚合、无写操作、无外呼，可安全被前端每 2 秒轮询一次。
+
+    `finished` 的语义是「**没有在跑的任务了**」（`pending == 0`），而**不是**
+    「全部批改完」（`done == total`）：额度不足时只有部分提交被投递，其余会永远停在
+    `ungraded`；若按 `done == total` 判断，进度条将永远到不了 100%，教师会误以为卡住。
+    因此这里如实展示「还有 N 份未批改」，并在 `pending == 0` 时让前端停止轮询。
+
+    Raises:
+        HTTPException: 作业不存在 404；非本班教师 403。
+    """
+    a = db.get(Assignment, assignment_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    _check_teacher_assignment_access(db, user, a)
+
+    submission_ids = [
+        sid
+        for (sid,) in db.query(Submission.id)
+        .filter(Submission.assignment_id == assignment_id)
+        .order_by(Submission.id)
+        .all()
+    ]
+    progress = ai_grading.progress_for_submissions(db, submission_ids)
+    progress["finished"] = progress["pending"] == 0
+    return progress
+
+
 # ---------------- 作业任务 ----------------
 def list_assignments(db: Session, class_id: int | None, user: User) -> dict:
     # 学生角色：预取学生档案，用于判断是否已提交

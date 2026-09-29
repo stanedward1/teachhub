@@ -85,6 +85,19 @@ def ai_grade_assignment(
     return homework_service.ai_grade_assignment(db, assignment_id, user)
 
 
+@router.get("/assignments/{assignment_id}/ai-grade/progress")
+def ai_grade_progress(
+    assignment_id: int,
+    user=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """查询整份作业的 AI 批改进度（前端轮询用）。
+
+    纯聚合、无写操作、无外呼；返回体的终止字段 `finished` 表示「没有在跑的任务了」。
+    """
+    return homework_service.ai_grade_progress(db, assignment_id, user)
+
+
 @router.get("/submissions/{submission_id}")
 def get_submission(
     submission_id: int,

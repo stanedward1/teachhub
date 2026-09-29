@@ -1123,6 +1123,60 @@ def request_grading(
     return {"queued": len(queued), "skipped": len(submission_ids) - len(queued), "reason": ""}
 
 
+def progress_for_submissions(db: Session, submission_ids: list[int]) -> dict:
+    """统计一批提交的 AI 批改状态分布（作业维度进度聚合）。
+
+    进度全部**从数据库状态推导**（`ai_grading_results.status`），不依赖任何内存
+    计数器 —— 因此刷新页面、切换标签页后重新查询依然正确，也不会因进程重启丢失。
+
+    用**一次 GROUP BY 聚合**取三种状态计数，不做 N+1，也不把结果行拉回内存统计。
+    租户隔离由 ORM 事件自动完成，这里**不手写** `school_id` 条件（语义即「当前
+    租户内的这批提交」）。`submission_ids` 为空时直接返回全 0，不发 SQL。
+
+    Args:
+        db: 数据库会话。
+        submission_ids: 待统计的提交 id 列表。
+
+    Returns:
+        ``{total, success, failed, pending, ungraded, done}``：
+        `total` 为提交数；`success` / `failed` / `pending` 为已落库结果行的状态计数；
+        `ungraded` 为尚无结果行的提交数（负数兜 0）；`done` = success + failed。
+    """
+    total = len(submission_ids)
+    if total == 0:
+        return {
+            "total": 0,
+            "success": 0,
+            "failed": 0,
+            "pending": 0,
+            "ungraded": 0,
+            "done": 0,
+        }
+
+    rows = (
+        db.query(AiGradingResult.status, func.count(AiGradingResult.id))
+        .filter(AiGradingResult.submission_id.in_(submission_ids))
+        .group_by(AiGradingResult.status)
+        .all()
+    )
+    counts = {status: count for status, count in rows}
+    success = int(counts.get("success", 0))
+    failed = int(counts.get("failed", 0))
+    pending = int(counts.get("pending", 0))
+    done = success + failed
+    ungraded = total - success - failed - pending
+    if ungraded < 0:
+        ungraded = 0
+    return {
+        "total": total,
+        "success": success,
+        "failed": failed,
+        "pending": pending,
+        "ungraded": ungraded,
+        "done": done,
+    }
+
+
 # ---------------- 启动兜底：清理中断的 pending ----------------
 def _parse_db_datetime(value) -> datetime | None:
     """把数据库时钟归一化成 `datetime`。

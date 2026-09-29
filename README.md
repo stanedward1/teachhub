@@ -9,7 +9,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | 文档 | 说明 |
 | ---- | ---- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计：技术栈、目录结构、权限模型、数据模型、多租户隔离、部署架构、可观测性、设计决策 |
-| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（**147 条业务接口 + 7 条非 `/api` 路由**，方法 + 路径 + 权限 + 约定） |
+| [docs/API.md](docs/API.md) | 接口文档：全量后端接口清单（**149 条业务接口 + 7 条非 `/api` 路由**，方法 + 路径 + 权限 + 约定） |
 | [docs/ER-DIAGRAM.md](docs/ER-DIAGRAM.md) | 数据库 ER 图：全量 **37 张表**、外键删除策略分层、软关联说明 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 开发规范：环境搭建、代码规范、权限与多租户隔离规范、Git 规范、测试规范、发布流程 |
 
@@ -133,7 +133,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | Excel 处理 | openpyxl | 3.1 |
 | AI 批改 | httpx（OpenAI 兼容接口）+ cryptography（Fernet）+ python-docx / pypdf（附件解析） | — |
 | 测试 | pytest + FastAPI TestClient | — |
-| 部署 | 一键脚本 `start.sh` / `stop.sh`（后端 `run.py` :8080 + 前端 Vite :5173）；仓库另附 Docker / Nginx 可选方案 | — |
+| 部署 | 一键脚本 `start.sh` / `stop.sh`（后端 `run.py` :8080 + 前端 Vite :5173）；**不依赖 Docker / nginx**（仓库不附带容器化方案） | — |
 
 ## 项目结构
 
@@ -195,8 +195,6 @@ teachhub/
 │   ├── requirements.txt        # 运行时依赖
 │   ├── requirements-dev.txt    # 开发/测试依赖（pytest、httpx）
 │   ├── run.py                  # 启动脚本（端口 8080）
-│   ├── Dockerfile              # 后端镜像
-│   ├── docker-entrypoint.py    # 容器入口（迁移 + 首次 seed + 启动）
 │   └── .env.example            # 环境变量模板
 ├── frontend/                   # Vue 3 前端
 │   ├── src/
@@ -211,14 +209,12 @@ teachhub/
 │   │   └── views/              # 页面（student/ 9 个 + admin/ 29 个，含学校管理、平台设置；Students/Scores 页内子组件见 admin/students/、admin/scores/）
 │   ├── vite.config.js          # /api 与 /uploads 代理 + 构建优化
 │   ├── eslint.config.js        # ESLint 10（flat config）
-│   ├── Dockerfile              # 前端镜像（Node 构建 + Nginx 托管；**线上未采用该形态**，见「生产环境部署」）
 │   └── package.json
 ├── docs/                       # 架构设计 / 接口 / ER 图 / 开发规范
 ├── scripts/                    # 运维与数据脚本（fix_head_teacher_class 班主任一致性诊断 / seed_homework、seed_liao_class 造数）
 ├── commitlint.config.cjs       # 提交信息规范（Conventional Commits；type 限 feat/fix/refactor/docs/chore/test/perf/build/ci，scope 限 backend/frontend/docs/deps）
 ├── .lintstagedrc.json          # 暂存文件 lint/格式化规则（frontend/src 下 js/vue 跑 eslint --fix + prettier --write）
 ├── .gitattributes              # 换行符约定
-├── docker-compose.yml          # 一键编排后端 + 前端（可选方案，线上未采用）
 ├── start.sh                    # 一键启动脚本（Linux/macOS 本机，后端 :8080 + 前端 Vite :5173）
 ├── stop.sh                     # 一键停止脚本（跨平台：按 PID/端口清理前后端进程）
 └── README.md
@@ -227,52 +223,6 @@ teachhub/
 ---
 
 ## 开发环境快速开始
-
-### 🐳 Docker 启动（最简，可选）
-
-无需本地安装 Python / Node / 数据库，一条命令拉起前后端：
-
-> ⚠️ **本项目线上形态是「无 Docker、无 Nginx」**（后端 `run.py` :8080 + 前端 Vite dev :5173）。
-> 本节命令仅在**本地已安装 Docker** 时可用；不依赖 Docker 的手动启动方式见下一节，
-> 线上实际形态与可选的 Nginx 部署见「生产环境部署」章首说明。
-
-```bash
-cd teachhub
-docker compose up -d --build
-```
-
-启动后：
-
-- 前端：http://localhost （默认 `80` 端口，可用 `FRONTEND_PORT` 覆盖）
-- 后端 API 文档：http://localhost:8080/docs
-- 数据库：默认 SQLite，持久化在 `teachhub-data` 数据卷；上传文件持久化在 `teachhub-uploads`
-
-**自定义配置**（可选，通过环境变量或根目录 `.env` 覆盖）：
-
-| 变量 | 默认值 | 说明 |
-| ---- | ---- | ---- |
-| `FRONTEND_PORT` | `80` | 前端对外端口 |
-| `DATABASE_URL` | `sqlite:////app/data/teachhub.db` | 数据库连接串，可切换 MySQL/PostgreSQL |
-| `SECRET_KEY` | `teachhub-dev-secret-key` | JWT 密钥（生产必改） |
-| `ENV` | `development` | `development` / `production` |
-| `CORS_ORIGINS` | `http://localhost,http://127.0.0.1` | 允许跨域来源 |
-
-> 首次启动自动执行数据库迁移，并在空库时生成演示数据（52 名学生、4 个班级等）。
-> **生产环境务必设置 `ENV=production` 与强随机 `SECRET_KEY`**，否则后端会拒绝启动。
-
-**切换 MySQL**（可选）：`docker-compose.yml` 中已内置注释掉的 `mysql` 服务与连接串示例，按注释说明三步即可切换：
-1. 取消末尾 `mysql` 服务整段注释（自动创建 `teachhub` 库）
-2. 将 `backend` 的 `DATABASE_URL` 改为 `mysql+pymysql://teachhub:teachhub123456@mysql:3306/teachhub?charset=utf8mb4`
-3. 取消 `backend` 的 `depends_on: mysql` 注释，让后端等待 MySQL 就绪
-
-常用命令：
-
-```bash
-docker compose up -d --build   # 构建并后台启动
-docker compose logs -f backend # 查看后端日志
-docker compose down            # 停止（数据卷保留）
-docker compose down -v         # 停止并删除数据卷（清空数据）
-```
 
 ### 🚀 一键启动（Linux 本机）
 
@@ -370,12 +320,12 @@ npm run dev
 
 ## 生产环境部署
 
-> ℹ️ **本项目当前线上形态（重要）**：**无 Docker、无 Nginx** ——
+> ℹ️ **本项目当前形态（重要）**：**无 Docker、无 Nginx** ——
 > 后端 `python run.py`（:8080），前端 `npm run dev -- --host 0.0.0.0`（**Vite 开发服务器**，:5173），
-> 由仓库根 `start.sh` 一键拉起（见 `start.sh` 前端启动段）。
-> 下方 Docker / Nginx 章节是仓库附带的**可选部署方案**（`docker-compose.yml`、`backend/Dockerfile`、`frontend/Dockerfile` 均在仓库内），
-> 若改用该方案需一并调整；**两套形态不可混用**。
-> 另：`frontend/nginx.conf` 曾存在、现已删除，改用容器内 Nginx 时需自行编写。
+> 由仓库根 `start.sh` 一键拉起。
+> 仓库**不附带容器化方案**：`docker-compose.yml`、各级 `Dockerfile` / `.dockerignore`、`docker-entrypoint.py` 均已移除；
+> `frontend/nginx.conf` 亦早于 2026-09-20 删除。下方为**进程化（裸机）部署**指南；
+> 如需前置反向代理（Nginx 等），属可选的、由你自行管理的运维步骤，**非仓库自带方案**。
 
 > **警告**：生产环境必须修改默认密钥和密码，否则存在严重安全风险。
 
@@ -466,7 +416,7 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8080 app.main:app
 - `-k uvicorn.workers.UvicornWorker`：使用 Uvicorn ASGI worker
 - `-b 0.0.0.0:8080`：监听所有网卡的 8080 端口
 
-### 6. 配置 Nginx 反向代理
+### 6. 配置 Nginx 反向代理（可选，用户自行管理）
 
 创建 `/etc/nginx/sites-available/teachhub`：
 
@@ -604,7 +554,7 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-测试覆盖：登录认证、权限隔离、作业流程、优秀作品评选、CRUD 操作、越权场景、**AI 批改**（凭证/开关超管专属、**提交零外呼**、手动触发的批量与单份语义、学生与跨班教师触发 403、关闭/未配凭证/超限 400、模型报错与附件失败降级、重交作废旧结果、推荐来源标记、**任务附件纳入批改**、**推理模型思考开关与截断重试**、**上游错误文案归一化**、**附件按批抽取缓存**、**AI 输入构造（分段预算分配 + 任务单模板段落折叠）**、**docx 表格抽取**）、**上传路径穿越防护**（逃逸必拒 / 目录内路径不误伤）、**跨租户科任关联删除**、**学生建号归属**、**审计日志可见口径**（下拉框与列表同源）、**看板口径与班级聚合非 N+1**；当前全量 **321 passed + 1 skipped**（1 skipped = 软链用例在当前文件系统下无法构造真链接，显式跳过）。
+测试覆盖：登录认证、权限隔离、作业流程、优秀作品评选、CRUD 操作、越权场景、**AI 批改**（凭证/开关超管专属、**提交零外呼**、手动触发的批量与单份语义、学生与跨班教师触发 403、关闭/未配凭证/超限 400、模型报错与附件失败降级、重交作废旧结果、推荐来源标记、**任务附件纳入批改**、**推理模型思考开关与截断重试**、**上游错误文案归一化**、**附件按批抽取缓存**、**AI 输入构造（分段预算分配 + 任务单模板段落折叠）**、**docx 表格抽取**）、**上传路径穿越防护**（逃逸必拒 / 目录内路径不误伤）、**跨租户科任关联删除**、**学生建号归属**、**审计日志可见口径**（下拉框与列表同源）、**看板口径与班级聚合非 N+1**；当前全量 **349 collected（348 passed + 1 skipped）**（1 skipped = `test_upload_path_traversal` 的软链分支，Windows 下构造不出真软链，显式跳过）。
 
 ## 配置参考
 
