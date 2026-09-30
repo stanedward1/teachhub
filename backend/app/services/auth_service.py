@@ -34,7 +34,8 @@ from app.security import (
 from app.utils import gen_student_no, to_dict
 
 # 登录失败锁定策略（语义不变：连续失败 5 次锁定 15 分钟）
-MAX_FAILED_ATTEMPTS = 5
+# 提示文案刻意中性：不出现「已锁定」字样，也不区分「账号是否存在」——避免变相成为账号枚举 oracle
+MAX_FAILED_ATTEMPTS = 15
 LOCK_DURATION_MINUTES = 15
 
 # 等时代价用的哑哈希：账号不存在时也拿它跑一次 `verify_password`，让两条路径的
@@ -58,7 +59,7 @@ def _check_locked(user: User) -> None:
             lock_until = lock_until.replace(tzinfo=timezone.utc)
         if now < lock_until:
             remain = int((lock_until - now).total_seconds() // 60) + 1
-            raise HTTPException(status_code=423, detail=f"账号已锁定，请 {remain} 分钟后再试")
+            raise HTTPException(status_code=423, detail=f"登录尝试过于频繁，请 {remain} 分钟后再试")
         # 锁定已过期，重置
         user.locked_until = None
         user.failed_attempts = 0
