@@ -125,6 +125,32 @@ class Settings(BaseSettings):
     # auto 当前等价 original。置空字符串则不带该字段。
     AI_IMAGE_DETAIL: str = "original"
 
+    # ---------------- AI 学伴（docs/DESIGN-AI学伴.md） ----------------
+    # 单次模型调用超时（秒）。学伴是**同步阻塞**调用（学生当场等回答），与批改的
+    # 后台线程范式不同：必须明显小于前端 axios 的 30000ms（``frontend/src/api/request.js``），
+    # 否则会出现「后端刚好返回、前端已断连」的最坏状态 —— 后端算成功、额度已扣、
+    # 消息已落库，而前端报超时、学生重试 ⇒ 双扣 + 双落库。
+    # 压到 25s 即预留 5s 给网络与序列化（连接、TLS、服务端排队、DB、附件抽取）。
+    # ⚠️ 因此本值**必须** < 30（前端超时毫秒数换算为秒）；调大前须同步调整前端该接口超时。
+    AI_COMPANION_TIMEOUT: int = 25
+    # 学伴每日调用次数上限缺省值（**平台池**，与批改的 AI_DEFAULT_DAILY_LIMIT=200 相互独立）。
+    # 额度单位不同：批改额度单位是「份提交」（教师一点即 N 份，突发大额、可预估）；
+    # 学伴额度单位是「次提问」（学生个体、小额、高频）。学伴使用独立计数表
+    # ``ai_usage_daily_companion``，与批改的 ``ai_usage_daily`` 互不挤占（各自的成本刹车）。
+    # ⚠️ 本值是**全平台**一天的总次数（成本刹车，跨所有学生），与下方
+    # ``AI_COMPANION_DEFAULT_PER_STUDENT_DAILY_LIMIT``（**单个学生**的上限）叠加生效。
+    # 6000 ≈ 支撑约 300 个满额学生（6000 / 20），由平台超管在 ``ai_companion_daily_limit``
+    # 配置项中按真实用量校准（**保守工程估算起点，非实测最优值**）。
+    AI_COMPANION_DEFAULT_DAILY_LIMIT: int = 6000
+    # 每个学生的 AI 学伴每日次数上限缺省值（docs/DESIGN-AI学伴配额.md D3）。
+    # 与平台池 ``AI_COMPANION_DEFAULT_DAILY_LIMIT`` **语义/单位/量级都不同**：
+    # 平台池 = 全平台成本刹车；本值 = 单个学生的公平性上限。二者**叠加生效（双闸门）**。
+    # 20 为保守工程估算（非实测）：一次正常作业求助约 3–8 次问答即足够，20 给足 2–3 轮
+    # 卡壳余量，同时挡住「把学伴当搜索引擎刷」的滥用。由超管在
+    # ``ai_companion_per_student_daily_limit`` 配置项按用量校准。
+    # ⚠️ 需与平台池保持量级协调：平台池缺省 / 本值 ≈ 可满额使用的学生数（6000 / 20 ≈ 300）。
+    AI_COMPANION_DEFAULT_PER_STUDENT_DAILY_LIMIT: int = 20
+
     # CORS：默认放行本地开发端口，生产通过环境变量收敛（逗号分隔或 JSON 列表）
     CORS_ORIGINS: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",

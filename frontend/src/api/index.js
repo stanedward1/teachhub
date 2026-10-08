@@ -65,6 +65,20 @@ export const homeworkApi = {
   excellent: () => request.get('/api/homework/excellent'),
   excellentDetail: (id) => request.get(`/api/homework/excellent/${id}`),
   addComment: (id, data) => request.post(`/api/homework/excellent/${id}/comments`, data),
+  // ============ AI 学伴（设计 §4.2）============
+  // 学生侧（可写）：提问 / 取历史 / 清空本会话。依赖 require_student，教师不可调用。
+  // 注意：ask 无幂等性，重试会再扣 1 次额度（设计 §2.2.2 方案 A）。
+  companionAsk: (id, data) =>
+    request.post(`/api/homework/assignments/${id}/companion/ask`, data),
+  companionHistory: (id) => request.get(`/api/homework/assignments/${id}/companion/history`),
+  // 每生独立配额：查询本生今日剩余次数（只读；同学伴开关由后端统一判定）
+  companionQuota: (id) => request.get(`/api/homework/assignments/${id}/companion/quota`),
+  clearCompanion: (id) => request.delete(`/api/homework/assignments/${id}/companion`),
+  // 教师侧（只读，设计 §14.2）：本班学生的学伴会话列表 / 单会话完整消息。
+  companionConversations: (id, params) =>
+    request.get(`/api/homework/assignments/${id}/companion/conversations`, { params }),
+  companionConversationDetail: (conversationId) =>
+    request.get(`/api/homework/companion/conversations/${conversationId}`),
 }
 
 // ============ 基础数据 ============
@@ -242,6 +256,10 @@ export const adminApi = {
   testAiCredential: (data) => request.post('/api/admin/platform/ai-credential/test', data),
   aiGrading: () => request.get('/api/admin/platform/ai-grading'),
   setAiGrading: (data) => request.put('/api/admin/platform/ai-grading', data),
+  // 校级 AI 能力配置（超管专用，docs/DESIGN-AI校级能力.md §3 D5）
+  schoolAiSettings: (schoolId) => request.get(`/api/admin/schools/${schoolId}/ai-settings`),
+  setSchoolAiSettings: (schoolId, data) =>
+    request.put(`/api/admin/schools/${schoolId}/ai-settings`, data),
 }
 
 // ============ 文件上传 ============

@@ -51,6 +51,27 @@
               <span v-else class="muted">未批改</span>
             </template>
           </el-table-column>
+          <!-- 学伴：展示轮数 / 是否有拒答，点击打开只读会话面板（设计 §14.6） -->
+          <el-table-column label="学伴" width="130">
+            <template #default="{ row }">
+              <el-button
+                v-if="companionOf(row)"
+                link
+                type="primary"
+                @click="openCompanion(companionOf(row))"
+              >
+                {{ companionOf(row).turn_count }} 轮
+                <el-tag
+                  v-if="companionOf(row).has_refused"
+                  size="small"
+                  type="warning"
+                  style="margin-left: 4px"
+                  >拒答</el-tag
+                >
+              </el-button>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="状态" width="110">
             <template #default="{ row }">
               <el-tag :type="row.is_excellent ? 'success' : 'info'" size="small">
@@ -96,6 +117,9 @@
         <el-button type="primary" :loading="saving" @click="confirmMark">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 学伴会话（教师只读，设计 §14.6）：与学生侧组件完全分离，无任何写入口 -->
+    <CompanionConversationPanel v-model="companionOpen" :conversation-id="activeConversationId" />
   </div>
 </template>
 
@@ -105,6 +129,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import StateView from '../../components/StateView.vue'
+import CompanionConversationPanel from '../../components/CompanionConversationPanel.vue'
 import { useCrudList } from '../../composables/useCrudList'
 import { homeworkApi } from '../../api'
 
@@ -116,17 +141,48 @@ const note = ref('')
 const target = ref(null)
 const saving = ref(false) // 评选优秀提交中（防重复提交）
 const unmarkingId = ref(null) // 正在取消优秀的提交 id
+// 学伴：该作业下本班学生的会话列表（按 student_id 索引），与提交列表按学生对齐
+const companionMap = ref({})
+const companionOpen = ref(false)
+const activeConversationId = ref(null)
 
 // 作业提交审阅：单个作业的「作业详情 + 全部提交」一次取回。非标准分页 CRUD，用 wrapper
 // 把两路请求收敛进 useCrudList，去掉手写 loading/error/items 样板（不改后端）。
+// 学伴会话列表为附加信息：拉取失败时降级为空（学伴列为空），不阻断提交列表展示。
 const { items, loading, error, load } = useCrudList(async (_params) => {
   const [a, s] = await Promise.all([
     homeworkApi.assignment(route.params.id),
     homeworkApi.submissions(route.params.id),
   ])
   assignment.value = a
+  await loadCompanions()
   return { items: s.items, total: s.items.length }
 })
+
+/** 拉取本作业的学伴会话列表（教师只读，设计 §14.2），失败降级为空对象 */
+async function loadCompanions() {
+  try {
+    const res = await homeworkApi.companionConversations(route.params.id, { page: 1, page_size: 200 })
+    const map = {}
+    for (const c of res?.items || []) {
+      map[c.student_id] = c
+    }
+    companionMap.value = map
+  } catch (e) {
+    companionMap.value = {}
+  }
+}
+
+/** 提交行 ⇒ 对应学生的学伴会话（无则返回 null） */
+function companionOf(row) {
+  return companionMap.value[row.student_id] || null
+}
+
+function openCompanion(conv) {
+  if (!conv?.conversation_id) return
+  activeConversationId.value = conv.conversation_id
+  companionOpen.value = true
+}
 
 onMounted(load)
 

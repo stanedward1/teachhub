@@ -1,6 +1,6 @@
 # TeachHub 数据库 ER 图
 
-> 更新：2026-09-23 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：37 张 ｜ 外键：73 个（模型定义口径）｜ 迁移：30 个 revision（线性单链，head `a9b8c7d6e5f4`）
+> 更新：2026-10-01 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：43 张 ｜ 外键：83 个（模型定义口径，实测：CASCADE 22 / SET NULL 2 / 未显式设置（默认 RESTRICT 语义）59）｜ 迁移：34 个 revision（线性单链，head `f8a9b0c1d2e3`）
 
 ## 一、实体关系总览（Mermaid）
 
@@ -63,11 +63,25 @@ erDiagram
     SUBMISSIONS ||--o| AI_GRADING_RESULTS : "AI 批改(submission_id, UNIQUE, CASCADE)"
     SCHOOLS o|--o{ AI_GRADING_RESULTS : "租户归属(school_id)"
 
+    %% ============ AI 学伴（新，2026-09-30） ============
+    STUDENTS ||--o{ AI_COMPANION_CONVERSATIONS : "学伴会话(student_id, CASCADE)"
+    ASSIGNMENTS ||--o{ AI_COMPANION_CONVERSATIONS : "会话所属作业(assignment_id, CASCADE)"
+    SCHOOLS o|--o{ AI_COMPANION_CONVERSATIONS : "租户归属(school_id)"
+    AI_COMPANION_CONVERSATIONS ||--o{ AI_COMPANION_MESSAGES : "会话消息(conversation_id, CASCADE)"
+    SCHOOLS o|--o{ AI_COMPANION_MESSAGES : "租户归属(school_id)"
+    %% AI_USAGE_DAILY_COMPANION 为平台级计数表（无 school_id、无外键），故不出现在关系图
+
+    %% ============ AI 校级能力（2026-10-01，平台闸 × 学校闸 + 双维度额度池） ============
+    SCHOOLS ||--o{ AI_USAGE_DAILY_SCHOOL : "批改校池(school_id, 默认RESTRICT)"
+    SCHOOLS ||--o{ AI_USAGE_DAILY_COMPANION_SCHOOL : "学伴校池(school_id, 默认RESTRICT)"
+    USERS o|--o| STUDENTS : "硬关联(student_id, SET NULL)"
+    STUDENTS ||--o{ AI_COMPANION_USAGE_DAILY_STUDENT : "每生配额(student_id, CASCADE)"
+
     %% ============ 审计 ============
     USERS ||--o{ OPERATION_LOGS : "操作人"
 ```
 
-## 二、表清单（按域分组，37 张）
+## 二、表清单（按域分组，43 张）
 
 | 域 | 表名 | 关键字段 | 说明 |
 | --- | --- | --- | --- |
@@ -75,7 +89,7 @@ erDiagram
 | | `classrooms` | school_id、teacher_id、is_graduated | 班级（班主任 + 毕业标记） |
 | | `class_teachers` | class_id + teacher_id（联合唯一） | 班级-教师多对多（科任） |
 | | `students` | class_id、student_no(唯一)、is_dropped_out | 学生档案（通学/寄宿） |
-| 认证 | `users` | username、role、school_id、class_id | 登录账号（4 角色 + 安全字段） |
+| 认证 | `users` | username、role、school_id、class_id、student_id | 登录账号（4 角色 + 安全字段）；`student_id` 为学生档案硬关联外键（可空，SET NULL：档案删除后回退「班级+姓名」软关联） |
 | | `refresh_tokens` | user_id、school_id、token_hash(唯一) | 刷新令牌（F3）：仅存 sha256 摘要，`expires_at` 过期 / `revoked_at` 撤销 / `replaced_by` 轮换链；`user_id` 级联删、`school_id` 置空删。**不含 `ip` 列**——客户端 IP 记录已下线，该列由迁移 `e2f3a4b5c6d7` 删除 |
 | 作业 | `assignments` | class_id、created_by、deadline | 作业任务 |
 | | `assignment_attachments` | assignment_id | 作业附件（一对多） |
@@ -107,13 +121,19 @@ erDiagram
 | AI 批改 | `ai_credentials` | provider、base_url、model、api_key_encrypted、updated_by | 平台级 AI 服务凭证（**刻意不含 `school_id` 列**：平台资产，跨校共用一套；密钥为 Fernet 密文，读接口只回掩码） |
 | | `ai_grading_results` | submission_id(唯一)、school_id、status、score、is_excellent_candidate | AI 批改结果（一提交一条，重跑覆盖）；`status` = `pending`/`success`/`failed`，与教师评语**并列存储、互不覆盖** |
 | | `ai_usage_daily` | day(唯一)、call_count | 平台级 AI 日调用计数（**无 `school_id` 列**：跨校共用一道额度刹车）；与 `ai_grading_results` 行生命周期解耦，投递前原子预留（`FOR UPDATE` + 唯一键兜底） |
+| | `ai_usage_daily_school` | day、school_id(NOT NULL)、call_count | **批改校级池**（2026-10-01）：唯一约束 `uq_ai_usage_daily_school_day_school = (day, school_id)`；`school_id` → `schools.id`（`ondelete` 未显式设置 = 默认 RESTRICT 语义，写入显式赋值）；校池为**可选叠加层**（未配置校池 = 不写本表），与平台池 `ai_usage_daily` 双闸门叠加，任一不足即拒 |
+| AI 学伴 | `ai_companion_conversations` | school_id、student_id、assignment_id、turn_count | 学伴会话（一学生×一作业一行）；唯一约束 `uq_ai_companion_conv_scope = (school_id, student_id, assignment_id)`；**含 `school_id`**，受 ORM 租户隔离；`student_id`/`assignment_id` 级联删 |
+| | `ai_companion_messages` | conversation_id、school_id、role、content、refused | 学伴消息（`role` = `user`/`assistant`）；含 `refused` 拒答标记 + `finish_reason` + token 计数；**冗余 `school_id`**（由 ORM `before_flush` 自动回填），`conversation_id` 级联删 |
+| | `ai_usage_daily_companion` | day(唯一)、call_count | **学伴独立额度计数（平台池）**（**无 `school_id` 列**：平台级成本刹车）；🔴 与批改的 `ai_usage_daily` **互不挤占**、两把行锁互不阻塞；`reserve_companion_quota()` 原子预留，只增不减 |
+| | `ai_usage_daily_companion_school` | day、school_id(NOT NULL)、call_count | **学伴校级池**（2026-10-01）：唯一约束 `uq_ai_usage_daily_companion_school_day_school = (day, school_id)`；`school_id` → `schools.id`（`ondelete` 未显式设置 = 默认 RESTRICT 语义，写入显式赋值）；与批改校池 `ai_usage_daily_school` 同构（「每池一表一把锁」）；学伴闸门顺序：每生 → 学校 → 平台 |
+| | `ai_companion_usage_daily_student` | day、student_id、school_id、call_count | **学伴每生独立配额计数**（docs/DESIGN-AI学伴配额.md D2）：唯一约束 `uq_ai_companion_usage_daily_student = (day, student_id)`；**含 `school_id`**（写入显式取 `student.school_id`，受 ORM 租户隔离）；与平台池表**正交叠加（双闸门）**；`reserve_per_student_quota()` 原子预留，只增不减；`student_id` 级联删 |
 | 审计 | `operation_logs` | user_id、action、class_id | 操作审计日志 |
 
 ## 三、外键删除策略分层
 
 MySQL InnoDB 强制外键约束，删除策略已按「关系语义」分层：
 
-### 1. CASCADE（18 个，纯从属关系）
+### 1. CASCADE（22 个，纯从属关系）
 
 从属数据随父记录删除自动级联：
 
@@ -136,28 +156,32 @@ MySQL InnoDB 强制外键约束，删除策略已按「关系语义」分层：
 | `student_board_history` | student_id | students |
 | `refresh_tokens` | user_id | users |
 | `ai_grading_results` | submission_id | submissions |
+| `ai_companion_conversations` | student_id / assignment_id | students / assignments |
+| `ai_companion_messages` | conversation_id | ai_companion_conversations |
+| `ai_companion_usage_daily_student` | student_id | students |
 
 ### 2. RESTRICT（默认，归属/操作人关系）
 
-以下外键**保持 RESTRICT**（不级联、不置空），删教师/班级/学校时需由代码显式处理，以保留业务数据语义：
+以下外键在模型中**未显式声明 `ondelete`**（InnoDB 默认行为等价 RESTRICT：不级联、不置空），删教师/班级/学校时需由代码显式处理，以保留业务数据语义：
 
 - `users.school_id` / `users.class_id` → 账号归属
 - `classrooms.teacher_id` / `classrooms.school_id` → 班级归属
 - `students.school_id` / `students.class_id` → 学生归属
 - `assignments.created_by` / `class_id` → 作业归属
 - `excellent_works.selected_by`、`submission_comments.teacher_id`、`work_comments.user_id` → 操作人
-- `ai_credentials.updated_by`（凭证最后修改的超管）→ 操作人；`ai_grading_results.school_id` → AI 结果租户归属（与其它业务表 `school_id` 同约定，均无 `ondelete`）
+- `ai_credentials.updated_by`（凭证最后修改的超管）→ 操作人；`ai_grading_results.school_id`、`ai_companion_conversations.school_id`、`ai_companion_messages.school_id`、`ai_companion_usage_daily_student.school_id`、`ai_usage_daily_school.school_id`、`ai_usage_daily_companion_school.school_id` → 租户归属（与其它业务表 `school_id` 同约定，均无 `ondelete`）
 - `talks.teacher_id`、`work_logs.teacher_id`、`class_plans.teacher_id` 等 → 教师归属
 - `weekly_reports.created_by`、`import_history.user_id` → 创建人
 - `schools.created_by` → 学校创建人
 
 > 代码双保险：`cleanup.py` 的 `purge_student_data()` / `purge_user_data()` 在删除学生/账号时按「叶子 → 根」拓扑显式级联清理，与 DB CASCADE 兼容（先删子表再删父表，无副作用）。
 
-### 3. SET NULL（1 个，租户归属可空）
+### 3. SET NULL（2 个，归属可空）
 
 | 子表 | 外键 | 父表 | 说明 |
 | --- | --- | --- | --- |
 | `refresh_tokens` | school_id | schools | 学校删除后令牌保留但失去租户归属（平台超管的令牌本即为 `NULL`） |
+| `users` | student_id | students | 学生档案删除后登录账号保留但断开硬关联（回退「班级+姓名」软关联） |
 
 ## 四、特殊关联（非外键软关联）
 
@@ -165,5 +189,6 @@ MySQL InnoDB 强制外键约束，删除策略已按「关系语义」分层：
 | --- | --- | --- |
 | 学生账号 ↔ 学生档案 | `users.class_id + name` = `students.class_id + name` | 无外键，通过 `get_student_account()` / `get_student_by_account()` 定位 |
 | 头像 | 存于 `users.avatar` | 学生档案不冗余存储，通过软关联取账号头像 |
-| 平台级全局配置 | `settings.school_id IS NULL` | 唯一约束为 `(school_id, key)`，而 MySQL 唯一索引**不约束 NULL**，因此全局键的去重由应用层保证——统一走 `app/platform_settings.py` 的 `get_global_setting` / `set_global_setting`（先查后写，不直接 INSERT）。AI 批改的 5 个全局键（`ai_grading_enabled` 等）同样走此路径；且该模块所有查询显式 `skip_tenant_filter`，否则在带租户上下文里读 `NULL` 行会永远查不到 |
+| 平台级全局配置 | `settings.school_id IS NULL` | 唯一约束为 `(school_id, key)`，而 MySQL 唯一索引**不约束 NULL**，因此全局键的去重由应用层保证——统一走 `app/platform_settings.py` 的 `get_global_setting` / `set_global_setting`（先查后写，不直接 INSERT）。AI 批改的 5 个全局键（`ai_grading_enabled` 等）与 AI 学伴的 2 个全局键（`ai_companion_enabled` / `ai_companion_daily_limit`）同样走此路径；且该模块所有查询显式 `skip_tenant_filter`，否则在带租户上下文里读 `NULL` 行会永远查不到 |
 | AI 凭证的作用域 | `ai_credentials` 表**无 `school_id` 列** | 凭证是平台资产、跨校共用一套，**刻意不带 `school_id`**——因此不会被 ORM 租户过滤器命中（`tenant.py` 只收集含 `school_id` 的映射类），在任何租户上下文下都读得到；安全性改由接口依赖 `require_super_admin` 保证。该设计同时绕开「把密钥塞进 `settings` 表」的三个坑：明文返回 / 值 255 容量 / `NULL` 唯一失效 |
+| 平台级计数表（租户隔离盲区） | `ai_usage_daily` / `ai_usage_daily_companion` 表**无 `school_id` 列** | 二者均为**平台级成本刹车**，跨校共用一道额度、无租户维度，故 `tenant.py` 不收集（**有意为之**，非漏配）。注意：`ai_companion_conversations` / `ai_companion_messages` / `ai_companion_usage_daily_student` **有** `school_id`，**不属于**本盲区，受 ORM 正常隔离；两张 AI 校池表 `ai_usage_daily_school` / `ai_usage_daily_companion_school`（2026-10-01）同样**含** `school_id`（NOT NULL，写入显式赋值），也不属于盲区 |

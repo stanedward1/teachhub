@@ -1,7 +1,7 @@
 """AI 作业批改：触发、执行、结果落库、降级。
 
 链路：**教师点击「AI 批改」** → `homework_service.ai_grade_*`（校验班级归属）
-→ `request_grading`（校验总开关/凭证/额度）→ 线程池 →
+→ `request_grading`（校验总开关/学校闸/凭证/额度）→ 线程池 →
 `_run_grading`（**新 session + 显式租户上下文**）→ 写 `ai_grading_results`。
 
 🔴 **批改是纯手动触发，学生提交不产生任何外呼**：
@@ -36,6 +36,7 @@ from app.models import (
     AiCredential,
     AiGradingResult,
     AiUsageDaily,
+    AiUsageDailySchool,
     Assignment,
     ExcellentWork,
     Submission,
@@ -47,6 +48,10 @@ from app.platform_settings import (
     get_ai_max_tokens,
     is_ai_auto_publish_enabled,
     is_ai_grading_enabled,
+)
+from app.school_settings import (
+    get_school_ai_daily_limit,
+    is_school_ai_grading_enabled,
 )
 from app.services.ai_attachments import extract_attachment, extract_inline_images
 from app.services.ai_client import AiClientError, chat_completion
@@ -259,12 +264,115 @@ def reserve_quota(db: Session, n: int) -> int:
     return take
 
 
-def can_grade(db: Session) -> tuple[bool, str]:
-    """判断当前是否允许发起批改，返回 ``(是否允许, 原因)``。"""
+# ---------------- 校级池原语（docs/DESIGN-AI校级能力.md §3 D2/D4） ----------------
+# 与平台池三原语**同构**：校级池是**独立维度独立表独立锁**（`AiUsageDailySchool`），
+# 与平台池叠加生效（双闸门）；锁 `(day, school_id)` 行，不同学校的预留互不阻塞。
+def school_today_call_count(db: Session, school_id: int | None) -> int:
+    """某校当日已**预留**的批改外呼次数（校级池口径；无行返 0）。
+
+    🔴 **必须手写** `school_id == school_id` 条件：该表含 `school_id`，本校上下文下
+    ORM 会自动注入同值条件（冗余无害），但**超管上下文（tenant scope=None）不注入**
+    —— 漏写会把任意学校的行错当本校行（与每生池不同：学伴的触发者恒为学生，批改
+    的触发者可以是平台超管，必须显式定位）。
+    """
+    if school_id is None:
+        return 0
+    row = (
+        db.query(AiUsageDailySchool)
+        .filter(
+            AiUsageDailySchool.day == _db_today(db),
+            AiUsageDailySchool.school_id == school_id,
+        )
+        .first()
+    )
+    return int(row.call_count or 0) if row else 0
+
+
+def _school_pool_exhausted_reason(db: Session, school_id: int | None) -> str:
+    """校级池耗尽的教师侧文案（检查与预留两处共用，避免文案漂移）。"""
+    return (
+        f"本学校今日 AI 批改次数已用完（今日已用 {school_today_call_count(db, school_id)} 次），"
+        "请明天再试"
+    )
+
+
+def reserve_school_quota(db: Session, school_id: int | None, n: int) -> int:
+    """**原子**预留某校 ``n`` 次批改额度，返回实际预留成功的次数（<= n）。
+
+    与 ``reserve_quota`` **完全同构**（S19 行锁 / S20 SAVEPOINT 建行兜底 / S21 只增
+    不减），只是表与锁粒度换成 ``(day, school_id)``。
+
+    🔴 **回归承诺的机制保证**（设计 §3 D4/D7）：``limit is None``（未配置校级池 =
+    不限）⇒ **原样返回 n：零锁、零写入、零行为变化** —— 无 ``school_ai_*`` 行时
+    本函数是纯透传，整条链路与改造前 bit-for-bit 一致。
+    ``school_id is None``（历史脏数据）同样经 ``get_school_ai_daily_limit`` 返回
+    None 而透传，不放大管控。
+
+    🔴 建行时**显式赋 `school_id`**（铁律 #6）：超管上下文 `before_flush` 不回填，
+    漏赋会落 NULL 且 NOT NULL 约束直接报错。
+    """
+    if n <= 0:
+        return 0
+    limit = get_school_ai_daily_limit(db, school_id)
+    if limit is None:
+        return n
+    if limit <= 0:
+        return 0
+    day = _db_today(db)
+
+    row = (
+        db.query(AiUsageDailySchool)
+        .filter(AiUsageDailySchool.day == day, AiUsageDailySchool.school_id == school_id)
+        .with_for_update()
+        .first()
+    )
+    if row is None:
+        # 首次创建该校当天行：并发下可能撞 `(day, school_id)` 唯一约束，SAVEPOINT 兜底
+        try:
+            with db.begin_nested():
+                db.add(AiUsageDailySchool(day=day, school_id=school_id, call_count=0))
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+        row = (
+            db.query(AiUsageDailySchool)
+            .filter(
+                AiUsageDailySchool.day == day,
+                AiUsageDailySchool.school_id == school_id,
+            )
+            .with_for_update()
+            .first()
+        )
+        if row is None:
+            return 0
+
+    used = int(row.call_count or 0)
+    take = max(0, min(n, limit - used))
+    if take:
+        row.call_count = used + take
+        db.commit()
+    return take
+
+
+def can_grade(db: Session, school_id: int | None = None) -> tuple[bool, str]:
+    """判断当前是否允许发起批改，返回 ``(是否允许, 原因)``。
+
+    闸门顺序（docs/DESIGN-AI校级能力.md §3 D4.2）：平台闸 → 学校闸 → 凭证 →
+    学校池 → 平台池。`school_id` 带默认值 None（向后兼容）：None = 跳过全部校闸
+    （历史脏数据作业不放大管控），行为与单闸时代完全一致。
+    """
     if not is_ai_grading_enabled(db):
         return False, "AI 批改总开关未开启"
+    if not is_school_ai_grading_enabled(db, school_id):
+        # 教师是内部用户，可直说「本校」（设计 D4 定稿）
+        return False, "本校已停用 AI 批改功能"
     if active_credential(db) is None:
         return False, "AI 凭证未配置、未启用或密钥不可用"
+    school_limit = get_school_ai_daily_limit(db, school_id)
+    if school_limit is not None:
+        school_used = school_today_call_count(db, school_id)
+        if school_used >= school_limit:
+            return False, _school_pool_exhausted_reason(db, school_id)
     if remaining_quota(db) <= 0:
         return False, f"今日调用已达上限（{today_call_count(db)}/{get_ai_daily_limit(db)}）"
     return True, ""
@@ -862,6 +970,25 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         kept_images.append(url)
     images = kept_images
 
+    # 前置短路：正文 + 学生附件**抽取得到的**文本/图片全为空 ⇒ 确实无可评内容。
+    # 覆盖「有附件但抽取不到内容」的情形（`.zip/.doc/.xls` 等不支持格式、图片 OCR
+    # 不可用）：结论确定，无需外呼。额度已在上游预留且不退还（S21），此处只省掉一次
+    # 无意义外呼。落确定性 failed 行并 commit，教师才能看到解释（否则永远停在 pending）。
+    # 🔴 必须用**原始** `payload.text` 判断，不能改用折叠后的 `student_text` —— 否则会
+    # 误伤「模板折叠」行为：学生原样交回任务单时（正文空、附件全是模板原文）应由模型
+    # 判定，不能本地短路（2026-09-24 线上修复）。
+    if not (inline.text or "").strip() and not (payload.text or "").strip() and not images:
+        result = _upsert_result(
+            db,
+            submission_id,
+            status="failed",
+            error="未提交可评内容（附件无可抽取文本/图片），未调用模型",
+            school_id=owner_school_id,
+        )
+        db.commit()
+        logger.warning("AI 批改跳过空提交 submission=%s", submission_id)
+        return result
+
     note_parts = [*requirement_notes, payload.note, *inline.notes]
     if attachment_note:
         note_parts.append(attachment_note)
@@ -1091,25 +1218,86 @@ def _prewrite_pending(
 def request_grading(
     db: Session, submission_ids: list[int], school_id: int | None
 ) -> dict:
-    """教师手动触发的统一入口：校验总开关/凭证/额度后投递线程池。
+    """教师手动触发的统一入口：校验总开关/学校闸/凭证/额度后投递线程池。
 
-    额度是**平台级唯一成本刹车**，因此批量触发必须先**原子预留**额度再投递，
-    按预留到的数量截断 —— 宁可少批几份并如实回报，也不能投出超过额度的任务
-    （`reserve_quota` 把「检查 + 占用」合并，避免并发下各自满额投递而超发）。
+    额度是**双闸门**（docs/DESIGN-AI校级能力.md §3 D4）：一次触发同时预留**学校池**
+    与**平台池**，任一不足即拒。批量触发必须先**原子预留**额度再投递，按预留到的
+    数量截断 —— 宁可少批几份并如实回报，也不能投出超过额度的任务（`reserve_quota`
+    / `reserve_school_quota` 把「检查 + 占用」合并，避免并发下各自满额投递而超发）。
+
+    🔴 **空提交前置过滤**：正文与附件路径都为空的提交（确实无可评内容）在**预留额度
+    之前**被剔除 —— `reserve_quota` 的额度「预留即占用、任务失败也不退还」（S21），
+    若放过去就会白吃教师额度。这些提交落一条确定性的 `failed` 结果行（不派发、不占
+    额度），否则教师会看到它们永远停在 `ungraded` 且无任何解释。
 
     Returns:
         ``{queued, skipped, reason}``：实际投递数、因额度不足被截断的份数、
         以及完全无法批改时的原因（可批改时为空串）。
     """
-    allowed, reason = can_grade(db)
+    allowed, reason = can_grade(db, school_id)
     if not allowed:
         return {"queued": 0, "skipped": len(submission_ids), "reason": reason}
 
+    # 前置过滤「确实无可评内容」的提交：正文与 filepath 均为空（真正的空壳提交）。
+    # 必须放在**预留额度之前**：额度预留即占用且不退还（S21），放过去等于白吃额度。
+    # 注意：附件存在但抽取不到文本/图片（.zip/.doc 等不支持格式）由 `grade_submission`
+    # 内部的短路兜底，这里只按「正文 + filepath 是否为空」快速判定。
+    rows = {
+        sid: (content, filepath)
+        for sid, content, filepath in db.query(
+            Submission.id, Submission.content, Submission.filepath
+        )
+        .filter(Submission.id.in_(submission_ids))
+        .all()
+    }
+    blank_ids = [
+        sid
+        for sid in submission_ids
+        if sid in rows
+        and not (rows[sid][0] or "").strip()
+        and not (rows[sid][1] or "").strip()
+    ]
+    if blank_ids:
+        # 落确定性 failed 行：这些提交不占额度、不派发，但必须让教师看到解释，
+        # 否则它们会永远停在 ungraded（相比现状是可见性回退）。
+        for sid in blank_ids:
+            _upsert_result(
+                db,
+                sid,
+                school_id=school_id,
+                status="failed",
+                error="未提交可评内容（正文与附件均为空），未调用模型",
+            )
+        db.commit()
+    blank_set = set(blank_ids)
+    gradeable_ids = [sid for sid in submission_ids if sid not in blank_set]
+    if not gradeable_ids:
+        # 不要返回 `_school_pool_exhausted_reason`：那是误导（额度根本没动）。
+        return {
+            "queued": 0,
+            "skipped": len(submission_ids),
+            "reason": "提交无可评内容（正文与附件均为空）",
+        }
+
     # 🔴 先**原子预留**额度，再按预留到的数量投递：把「查额度 → 截断 → 投递」三步
     # 合成一个原子操作，消除并发批量触发各自按同一份剩余额度满额投递导致的超发
-    # （额度是平台级唯一成本刹车，超发即护栏失效）。
-    take = reserve_quota(db, len(submission_ids))
-    queued = submission_ids[:take]
+    # （超发即护栏失效）。
+    # 预留顺序按设计 §3 D4：**学校池先扣（细粒度先扣，与学伴一致）→ 平台池后扣**，
+    # 平台池预留上限取学校池已给到的量（min 截断）。无校级配置（limit=None）时
+    # `reserve_school_quota` 零锁零写入原样放行，行为与单池时代完全一致。
+    take_school = reserve_school_quota(db, school_id, len(gradeable_ids))
+    if take_school <= 0 and gradeable_ids:
+        # 竞态兜底：can_grade 通过后、预留前校池被并发占满（或显式上限 0）
+        return {
+            "queued": 0,
+            "skipped": len(submission_ids),
+            "reason": _school_pool_exhausted_reason(db, school_id),
+        }
+
+    # 平台池预留（上限为学校池已给到的量）。并发导致平台池实给不足时，学校池多扣
+    # 的 (take_school - take) 次**不退还**（S21：宁可少批，不可超发，勿顺手退还）。
+    take = reserve_quota(db, take_school)
+    queued = gradeable_ids[:take]
 
     # 投递前预写 pending：进程重启/重载时，尚未开跑的排队任务若一行痕迹都没有，
     # 会静默消失且无可兜底；这里先落 pending + provider/model，便于恢复与对账。

@@ -556,6 +556,23 @@ def set_setting(db: Session, key: str, payload: dict, user: User) -> dict:
             status_code=400,
             detail="本页维护各校的校内设置，平台级配置请前往「平台设置」修改",
         )
+    # 🔴 D1 防线（docs/DESIGN-AI校级能力.md §3 D1）：`school_` 前缀 key（校级 AI
+    # 能力等平台管理员维护的配置）禁止经校内设置通道写入 —— 否则校内管理员持有效
+    # JWT 即可直改本校 AI 开关与额度，绕过「超管专用端点」的需求约束（权限旁路）。
+    # 豁免既有 legacy key `school_name`（早于本防线存在、校内设置页的核心字段，
+    # seed.py:596；全库其余 school 级 key 均不带 school_ 前缀），其余 school 级
+    # key（grade/semester/max_upload_size）本就不以 school_ 开头，读写不受影响。
+    # 🔴 key 规范化（QA 加固）：先 strip 前后空白 —— 前导/尾随空格变体（如
+    # " school_ai_x"）是读者按规范 key 永远查不到的垃圾行；黑名单前缀判定改用
+    # 小写化比对，堵 `SCHOOL_AI_*` 大写变体。豁免仅限 strip 后**精确等于**
+    # `school_name`（"School_Name" 等变体同样 400 —— 那是读侧精确匹配不到的垃圾行）。
+    key = key.strip()
+    lowered = key.lower()
+    if lowered.startswith("school_") and key != "school_name":
+        raise HTTPException(
+            status_code=400,
+            detail="该校级配置由平台管理员在学校管理页维护，无法在校内设置中修改",
+        )
     s = db.query(Setting).filter(
         Setting.school_id == user.school_id, Setting.key == key
     ).first()

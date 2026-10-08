@@ -509,11 +509,14 @@ def summarize_performances(
     保证「列表看到的记录」与「汇总统计的记录」永远是同一批 ——
     否则会出现列表 12 条、汇总按 20 条算的口径错位。
 
-    ⚠️ **聚合查询必须显式叠加租户过滤**：ORM 的 `do_orm_execute` + `with_loader_criteria`
-    只对「加载实体」的 SELECT 生效，一旦查询被 `with_entities(func.sum(...))` 改写成
-    纯聚合，`with_loader_criteria` 不会注入任何条件（实测生成的 SQL 里没有 school_id），
-    学校管理员会跨校串数。`admin_service.dashboard()` 的 `_tenant_count` 出于同样原因手工过滤。
-    这里对非平台超管显式加 `school_id`，同时也顺带拦住了「越权传入他校 student_id / class_id」。
+    ⚠️ **聚合查询仍显式叠加租户过滤（防御纵深）**：SQLAlchemy 2.0.35 实测
+    `do_orm_execute` + `with_loader_criteria` 对**所有 SELECT 形态都会注入**——包括被
+    `with_entities(func.sum(...))` 改写的纯聚合（生成的 SQL 里带 school_id）、
+    `group_by` 与子查询。此处的显式 `school_id` 过滤并非「ORM 查不到才补」，
+    而是：① 防御纵深（不依赖事件注入的隐式行为）；② 顺带拦住
+    「越权传入他校 student_id / class_id」（ORM 注入只管行级 school_id，
+    管不了跨班引用参数）。`admin_service.dashboard()` 的 `_tenant_count`
+    手工过滤同理。
 
     口径说明：返回的是**变动口径**（`delta = Σpoints`），与画像页
     `point_summary.total = BASE_POINTS(100) + delta` 的**总分口径**不同 ——

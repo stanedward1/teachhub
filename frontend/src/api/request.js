@@ -247,7 +247,7 @@ request.interceptors.response.use(
     } else if (status === 404) {
       notifyError(normalizeDetail(detail, '请求的资源不存在'), error.config)
     } else if (status === 423) {
-      notifyError(normalizeDetail(detail, '账号已锁定，请稍后再试'), error.config)
+      notifyError(normalizeDetail(detail, '登录尝试过于频繁，请稍后再试'), error.config)
     } else if (status === 429) {
       // 限流对用户是「等一下就好」而非「做错了」：文案给出等待指引，避免「操作频繁」
       // 这种容易被误读成「我操作错了」的说法（尤其多人共用校园网出口时更易误触）。

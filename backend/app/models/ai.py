@@ -90,6 +90,11 @@ class AiUsageDaily(Base):
     本表与结果行的生命周期彻底解耦：额度在**投递前原子预留**（见
     `ai_grading.reserve_quota`），因此计数只增不减，且并发批量触发不会超发。
     `day` 取自**数据库时钟**（`func.current_date()`），与写时间戳同一基准。
+
+    🔴 DC-1 语义变更记录（2026-10，docs/DESIGN-AI校级能力.md §3 D2）：原文「额度刻意
+    不分校」的决策由「AI 能力按平台/学校双维度开启 + 双维度额度池」需求推翻 ——
+    本表仍是平台级唯一总刹车（**语义不变**），校级池作为**可选叠加层**由新表
+    `AiUsageDailySchool` 承载（无校级配置 = 不写该表，双池双闸门）。
     """
 
     __tablename__ = "ai_usage_daily"
@@ -100,6 +105,50 @@ class AiUsageDaily(Base):
     # 业务日（由数据库时钟决定）；唯一索引保证「一天一行」，也是并发首次创建的兜底
     day = Column(Date, nullable=False)
     # 当日已预留（≈ 已发生）的外呼次数
+    call_count = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+
+class AiUsageDailySchool(Base):
+    """AI 批改【校级】每日调用计数（每校一天一行，可选叠加层）。
+
+    语义（docs/DESIGN-AI校级能力.md §3 D2）：平台池（`AiUsageDaily`）仍是全平台
+    唯一总刹车；本表是叠加其上的**校级护栏**，双池双闸门 —— 一次批改同时预留两池，
+    任一不足即拒。无校级配置（settings 无 `school_ai_grading_daily_limit` 行）=
+    不限 = **不写本表**（零 SQL、零行为变化，回归承诺见设计文档 §3 D7）。
+
+    为什么独立成表而非与平台池共用一张表加 kind 列：kind 会把两池的行锁合并到同一
+    物理行集，批改高峰时段同一 `(day, school_id)` 的批改与学伴预留互相阻塞，直接
+    违背本项目「每池一表一把行锁、互不阻塞」的既定哲学（`models/companion.py`
+    明文）。两表结构与既有四张池表风格完全一致。
+
+    🔴 DC-1 语义变更记录（2026-10，docs/DESIGN-AI校级能力.md §3 D2）：原
+    `AiUsageDaily` docstring 写明「额度刻意不分校」，由本次需求（AI 能力按平台/
+    学校双维度开启 + 双维度额度池）推翻；平台池语义不变（总刹车），校级池为可选
+    叠加层。本表即该变更的承载物。
+
+    🔴 写入必须**显式赋 `school_id`**（铁律 #6；超管/教师上下文 `before_flush`
+    不回填，实测见设计文档 §2.7 探针 [C]）。`school_id` **NOT NULL**：校池是学校
+    维度的，必须显式赋值 —— `school_id is None` 的调用（历史脏数据作业）在代码层
+    整段跳过校池逻辑，不触碰本表，模型层 `nullable=False` 兜底。
+
+    唯一约束 `(day, school_id)`：`schools.id` 全局自增不跨校复用，无需把 school_id
+    之外的租户列并入唯一键（与每生池 `(day, student_id)` 的取舍理由相同）。
+    """
+
+    __tablename__ = "ai_usage_daily_school"
+    # 显式命名唯一约束，与迁移建出的约束名保持一致（「迁移链 = 模型 schema」）
+    __table_args__ = (
+        UniqueConstraint("day", "school_id", name="uq_ai_usage_daily_school_day_school"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    # 业务日（由数据库时钟决定）；唯一约束保证「一天一校一行」，也是并发首次创建的兜底
+    day = Column(Date, nullable=False)
+    # 租户归属：写入时必须显式赋值（见类 docstring，勿依赖 before_flush 回填）
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, index=True)
+    # 当日已预留（≈ 已发生）的该校批改外呼次数
     call_count = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())

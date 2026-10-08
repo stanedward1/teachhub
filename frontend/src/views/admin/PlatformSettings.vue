@@ -89,6 +89,51 @@
           />
         </el-form-item>
 
+        <!-- ============ AI 学伴（独立开关 + 独立日额度，设计 §13 / §15.3） ============ -->
+        <el-form-item label="AI 学伴开关">
+          <el-switch
+            v-model="aiForm.companion_enabled"
+            :loading="aiSaving"
+            :disabled="aiLoading"
+            active-text="开启"
+            inactive-text="关闭"
+            @change="saveAiGrading"
+          />
+          <div class="hint">
+            控制学生端「AI 学伴」是否可用。关闭时学生端学伴入口隐藏，且不产生任何 AI 外呼。
+          </div>
+        </el-form-item>
+
+        <el-form-item label="学伴每日上限">
+          <el-input-number
+            v-model="aiForm.companion_daily_limit"
+            :min="1"
+            :max="100000"
+            :disabled="aiLoading"
+          />
+          <el-button type="primary" plain style="margin-left: 12px" :loading="aiSaving" @click="saveAiGrading">
+            保存
+          </el-button>
+          <div class="hint">
+            <b>全平台</b>每日学伴总次数上限（成本保护，跨所有学生合计）；超限当日所有学生都无法继续提问。缺省 6000。
+          </div>
+        </el-form-item>
+
+        <el-form-item label="每生每日上限">
+          <el-input-number
+            v-model="aiForm.companion_per_student_daily_limit"
+            :min="1"
+            :max="100000"
+            :disabled="aiLoading"
+          />
+          <el-button type="primary" plain style="margin-left: 12px" :loading="aiSaving" @click="saveAiGrading">
+            保存
+          </el-button>
+          <div class="hint">
+            <b>每个学生</b>每日可用 AI 学伴的次数上限（各自独立、互不影响）；学生端会实时显示「今日剩余 N 次」。缺省 20。
+          </div>
+        </el-form-item>
+
         <el-form-item label="当前状态">
           <el-tag v-if="!aiForm.configured" type="warning" size="small">凭证未配置</el-tag>
           <el-tag v-else-if="aiForm.enabled" type="success" size="small">运行中</el-tag>
@@ -237,6 +282,11 @@ const aiForm = reactive({
   max_tokens: 1200,
   configured: false,
   today_call_count: 0,
+  // AI 学伴：独立开关 + 独立日额度（缺省 6000，设计 §13.4）
+  companion_enabled: false,
+  companion_daily_limit: 6000,
+  // 每生独立配额：每个学生的每日次数上限（缺省 20，docs/DESIGN-AI学伴配额.md D3）
+  companion_per_student_daily_limit: 20,
 })
 
 async function loadAi() {
@@ -258,6 +308,11 @@ async function saveAiGrading() {
       auto_publish_excellent: aiForm.auto_publish_excellent,
       daily_limit: aiForm.daily_limit,
       max_tokens: aiForm.max_tokens,
+      // 学伴字段（同一个 AI 设置端点，设计 §4.2 / §15.3）
+      companion_enabled: aiForm.companion_enabled,
+      companion_daily_limit: aiForm.companion_daily_limit,
+      // 每生独立配额（docs/DESIGN-AI学伴配额.md D3）
+      companion_per_student_daily_limit: aiForm.companion_per_student_daily_limit,
     })
     Object.assign(aiForm, res)
     ElMessage.success('已保存')

@@ -10,7 +10,7 @@ from app.deps import (
     require_teacher,
 )
 from app.models import User
-from app.schemas import AiCredentialSetting, AiGradingSetting, RegistrationSetting, StudentDeviceSetting
+from app.schemas import AiCredentialSetting, AiGradingSetting, RegistrationSetting, SchoolAiSetting, StudentDeviceSetting
 from app.services import admin_service, ai_admin_service
 
 router = APIRouter(prefix="/api", tags=["系统管理"])
@@ -154,13 +154,19 @@ def test_platform_ai_credential(
     user=Depends(require_super_admin),
     db: Session = Depends(get_db),
 ):
-    """连通性测试：可先用未保存的配置试连，api_key 留空则回退已存密钥。"""
+    """连通性测试：可先用未保存的配置试连（自定义地址须自带 API Key）；
+    请求体留空时测试已保存的配置。"""
     return ai_admin_service.test_credential(db=db, payload=payload, user=user)
 
 
 @router.get("/admin/platform/ai-grading")
 def platform_ai_grading(user=Depends(require_super_admin), db: Session = Depends(get_db)):
-    """读取 AI 批改开关（总开关 / 自动入库 / 限额 / 当日用量）。"""
+    """读取 AI 批改 / 学伴开关（总开关 / 自动入库 / 限额 / 当日用量）。
+
+    含 **AI 学伴**（docs/DESIGN-AI学伴.md）的 `companion_enabled` /
+    `companion_daily_limit` / `companion_today_call_count` —— 学伴使用**独立**的成本
+    刹车（独立计数表），与批改额度互不挤占，故两个当日计数分别返回。
+    """
     return ai_admin_service.grading_setting(db)
 
 
@@ -170,5 +176,32 @@ def set_platform_ai_grading(
     user=Depends(require_super_admin),
     db: Session = Depends(get_db),
 ):
-    """保存 AI 批改开关。总开关为平台级单一粒度（无按校开关）。"""
+    """保存 AI 批改 / 学伴开关。总开关为平台级单一粒度（无按校开关）。
+
+    平台级设置（`school_id IS NULL`）**只能在超管路径写入**；校内上下文（校管）调用
+    会被 `require_super_admin` 拦下（403），不会把全局配置误写成校内配置。
+    """
     return ai_admin_service.set_grading_setting(db=db, payload=payload, user=user)
+
+
+# ---------------- 校级 AI 能力配置（平台超管专属，docs/DESIGN-AI校级能力.md §3 D5 / T04） ----------------
+# 路由归属 admin.py（平台管理类端点集中于此）；students.py 的学校 CRUD 是历史原因，不跟。
+@router.get("/admin/schools/{school_id}/ai-settings")
+def school_ai_settings(
+    school_id: int,
+    user=Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """读取校级 AI 能力配置合并视图（platform / school_override / effective / usage_today）。"""
+    return ai_admin_service.get_school_ai_setting(db=db, school_id=school_id, user=user)
+
+
+@router.put("/admin/schools/{school_id}/ai-settings")
+def set_school_ai_settings(
+    school_id: int,
+    payload: SchoolAiSetting,
+    user=Depends(require_super_admin),
+    db: Session = Depends(get_db),
+):
+    """保存校级 AI 能力配置（部分更新三态：未传=不动 / 显式 null=清除覆盖 / 值=写入）。"""
+    return ai_admin_service.set_school_ai_setting(db=db, school_id=school_id, payload=payload, user=user)

@@ -75,9 +75,14 @@ class AiCredentialSetting(BaseModel):
 
 
 class AiGradingSetting(BaseModel):
-    """平台级 AI 批改开关请求体（平台超管）。
+    """平台级 AI 批改 / 学伴开关请求体（平台超管）。
 
     总开关为**平台级**（无按校粒度），因此 `daily_limit` 是唯一的成本刹车。
+
+    AI 学伴（docs/DESIGN-AI学伴.md）复用本端点：新增 `companion_enabled` 与
+    `companion_daily_limit`。学伴额度与批改额度**相互独立**（两个独立的成本刹车，
+    见设计 §13.1 DC-1），故 `companion_daily_limit` 采用与 `daily_limit` 一致的
+    `ge`/`le` 风格，缺省值 600（`settings.AI_COMPANION_DEFAULT_DAILY_LIMIT`）。
     """
 
     enabled: bool = Field(..., description="AI 批改总开关")
@@ -86,6 +91,69 @@ class AiGradingSetting(BaseModel):
     )
     daily_limit: int = Field(..., ge=1, le=100000, description="每日调用次数上限")
     max_tokens: int = Field(1200, ge=64, le=32000, description="单次调用 max_tokens 上限")
+    companion_enabled: bool = Field(False, description="AI 学伴总开关（平台级，缺省关闭）")
+    companion_daily_limit: int = Field(
+        6000, ge=1, le=100000, description="AI 学伴每日调用次数上限（**平台池**；与批改额度、每生上限均相互独立）"
+    )
+    # 每个学生的每日次数上限（**每生独立配额**，docs/DESIGN-AI学伴配额.md D3）：
+    # 与上方 companion_daily_limit（**全平台**总次数，成本刹车）语义/单位/量级都不同，
+    # 二者**叠加生效（双闸门）**。
+    # ⚠️ 风格取舍（设计 §5.3）：本字段**跟随既有 `companion_daily_limit` 的 `ge/le` 风格**
+    # （带等价默认值 20）。硬约束 #3「不加 ge/le」针对**新增写接口**，本 schema 是既有的
+    # `AiGradingSetting`，为不与既有字段冲突而保持一致；带默认值保住「字段缺省仍 200」。
+    companion_per_student_daily_limit: int = Field(
+        20, ge=1, le=100000, description="每个学生的 AI 学伴每日次数上限（与平台池 companion_daily_limit 不同）"
+    )
+
+
+class SchoolAiSetting(BaseModel):
+    """校级 AI 能力配置请求体（平台超管专用，docs/DESIGN-AI校级能力.md §3 D5 / T04）。
+
+    **部分更新三态语义**（判定必须用 `model_fields_set`，禁止 `if not body.x` ——
+    那会把显式 `False`/`null` 误判成「未传」）：
+
+    - 字段**未传** → 不动该配置；
+    - 显式 **null** → 清除覆盖（删 school 级行：开关恢复跟随平台闸、上限恢复不限）；
+    - 非空值 → 写入覆盖（开关写 `"1"`/`"0"`；上限写十进制字符串，`0` 合法）。
+
+    🔴 铁律 #3：4 个字段全部带等价默认值 `None` ⇒ 空 body `{}` 也 200 且零变化；
+    数值字段**不加 `ge`/`le`** —— 显式传入的数值（含 **bool 排除**：`bool` 是
+    `int` 子类）在 service 层手工校验（负数 ⇒ 400，见 `ai_admin_service.set_school_ai_setting`）。
+    既有的 `AiGradingSetting` 带 `ge/le` 是历史风格，本 schema 不跟随。
+    """
+
+    grading_enabled: bool | None = Field(None, description="本校 AI 批改开关；null=清除覆盖（跟随平台闸）")
+    grading_daily_limit: int | None = Field(None, description="本校批改每日调用次数上限；null=不限")
+    companion_enabled: bool | None = Field(None, description="本校 AI 学伴开关；null=清除覆盖（跟随平台闸）")
+    companion_daily_limit: int | None = Field(None, description="本校学伴每日调用次数上限；null=不限")
+
+    @field_validator("grading_daily_limit", "companion_daily_limit", mode="before")
+    @classmethod
+    def _reject_bool_for_limits(cls, v):
+        """在类型转换**之前**拒绝 bool（⇒ 422）。
+
+        🔴 Pydantic v2 lax 模式会把 `True`/`False` 强转成 `1`/`0`（`bool` 是 `int`
+        子类），handler 层的 `isinstance(v, bool)` 检查将永远看不到 bool ——
+        「bool 冒充数值」必须在进入类型转换前拦下（铁律 #3 的数值判定前移到
+        schema 的 before 阶段；handler 内的检查保留作为 service 直调的防线）。
+        """
+        if isinstance(v, bool):
+            raise ValueError("每日调用次数上限不能是布尔值，请传非负整数")
+        return v
+
+
+class AiCompanionAsk(BaseModel):
+    """AI 学伴提问请求体（学生）。
+
+    🔴 只接受 `question` 一个字段 —— 题干 / 历史 / 开关**一律由服务端自取**（D2），
+    前端禁止传入（多传字段会被 Pydantic 忽略，但设计上明确不开放这些入口）。
+
+    🔴 **类型校验铁律**：`question` **不加 `min_length` / `max_length`**，以保住
+    「字段缺省仍 200 / 服务层空值仍 400」的既有口径 —— 空值/超长的具体判定（含
+    **显式排除 `bool`**）在 service 层做，避免把「缺省」变成 422。
+    """
+
+    question: str | None = Field(None, description="学生本轮提问（1..1500 字）")
 
 
 # ============ 成绩 ============

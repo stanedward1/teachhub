@@ -1,13 +1,13 @@
 # TeachHub API 接口文档
 
-> 更新：2026-09-29 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
+> 更新：2026-10-01 ｜ 前缀约定：所有接口以 `/api` 开头；作业平台以 `/api/homework` 为前缀；认证以 `/api/auth` 为前缀
 >
 > 认证方式：请求头 `Authorization: Bearer <token>`（登录/注册/注册开关状态/学校下拉/班级下拉/刷新令牌/登出/编程练习无需认证）。
 > 令牌双轨：登录返回的访问令牌字段名为 `token`（短期有效，用于鉴权），另有 `refresh_token`（长期有效，用于换取新令牌对，详见「一、认证」末段）。
 >
 > 链路追踪：所有响应均带 `X-Request-ID` 响应头（请求头传入则透传，否则服务端生成 `uuid4`）；服务端日志每行带 `[rid=...]`，可用该 ID 串联同一请求的全部日志。
 >
-> 规模（2026-09-29 实测）：**业务接口 149 条**（`/api/**`）+ **7 条非业务路由**（`/openapi.json`、`/docs`、`/docs/oauth2-redirect`、`/redoc`、`/`、`/health`、`/metrics`），合计 **156 条带方法的已注册路由**。本文件所有计数均以 `len(app.routes)=157` 为分母核对：157 = 156 条带方法路由 + 1 个 `/uploads` 静态目录**挂载**（挂载不是路由，不并入接口计数）。
+> 规模（2026-10-01 实测）：**业务接口 157 条**（`/api/**`）+ **7 条非业务路由**（`/openapi.json`、`/docs`、`/docs/oauth2-redirect`、`/redoc`、`/`、`/health`、`/metrics`），合计 **164 条带方法的已注册路由**。本文件所有计数均以 `len(app.routes)=165` 为分母核对：165 = 164 条带方法路由 + 1 个 `/uploads` 静态目录**挂载**（挂载不是路由，不并入接口计数）。
 
 ## 角色权限说明
 
@@ -52,17 +52,23 @@
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/assignments` | 登录 | 作业列表（学生看本班，教师看自己班级） |
-| GET | `/assignments/{id}` | 登录 | 作业详情 |
+| GET | `/assignments/{id}` | 登录 | 作业详情。**新增字段 `ai_companion_enabled`（布尔）**：平台级 AI 学伴开关，前端据此显隐学生端「AI 学伴」按钮（**经本端点下发，零新增端点、零额外往返**）。⚠️ 本端点依赖 `get_current_user`（**非** `require_student`）⇒ 教师/管理员亦可调用；但学伴**提问**端点另行挂 `require_student` |
 | POST | `/assignments` | 教师+ | 布置作业 |
 | PUT | `/assignments/{id}` | 教师+ | 编辑作业 |
 | DELETE | `/assignments/{id}` | 教师+ | 删除作业 |
 | GET | `/assignments/{id}/submissions` | 登录 | 提交列表（教师侧附 `ai_grading_status` / `ai_score` / `ai_excellent_candidate`，用于「AI 批改」按钮的结果反馈） |
 | GET | `/assignments/{id}/unsubmitted` | 教师+ | 未交名单（应交 = 班级在籍学生，未交 = 应交 − 已交） |
-| POST | `/assignments/{id}/ai-grade` | 教师+ | **触发 AI 批改（教师手动，批量）**：批改该作业下**尚未成功批改**的提交；已批改的跳过，剩余额度不足时按额度截断。返回 `{queued, skipped, already_graded, reason}`。非阻塞（仅入队）。开关关 / 无凭证 / 额度耗尽 → 400 |
+| POST | `/assignments/{id}/ai-grade` | 教师+ | **触发 AI 批改（教师手动，批量）**：批改该作业下**尚未成功批改**的提交；已批改的跳过，剩余额度不足时按额度截断。返回 `{queued, skipped, already_graded, reason}`。非阻塞（仅入队）。400 档位：平台开关关「AI 批改总开关未开启」/ **学校闸关「本校已停用 AI 批改功能」** / 无凭证 / **校池尽「本学校今日 AI 批改次数已用完（今日已用 X 次），请明天再试」** / 平台池尽 |
 | GET | `/assignments/{id}/ai-grade/progress` | 教师+ | **查询某作业批量 AI 批改进度**（前端轮询用）。返回 `{total, success, failed, pending, ungraded, done, finished}`：`done = success + failed`，`ungraded = total − success − failed − pending`。终止字段 `finished = (pending == 0)`（表示「没有在跑的任务了」，**不是** `done == total`——额度截断时会出现 `ungraded > 0` 但 `pending == 0`，此时即应停止轮询并如实展示「还有 N 份未批改」）。纯聚合、无写操作、无外呼。作业不存在 → 404，非本班教师 → 403 |
+| POST | `/assignments/{id}/companion/ask` | **学生** | **AI 学伴提问（学生专属，同步阻塞，超时 25s）**。请求体仅 `{"question": str}`（**走 `AiCompanionAsk` schema**：字段缺省/null → service 层 400；非字符串 → 422；长度 1..1500 在 service 层校验）；**题干 / 历史 / 开关一律由服务端自取**，前端禁止传入。成功返回 `{conversation_id, answer, refused, turns, truncated}`。⚠️ **无幂等性**：同一次提问重试会**再消耗 1 次学伴额度**。**双闸门**（每生配额 + 平台池，叠加生效）：每生配额耗尽 → **429**「你今天使用 AI 学伴的次数已用完，明天再来吧」；平台池耗尽（每生仍有余）→ **429**「AI 学伴今天实在太忙了，明天再来试试吧」（**不向学生泄露平台成本口径**）。**校级闸门叠加后为三闸**（每生 → 学校 → 平台）：**学校闸关 → 403**「AI 学伴在你所在的学校暂未开放」；**学校池尽 → 429**（与平台池共用「太忙了」同款文案，不区分层级）。开关关 `ai_companion_enabled`（平台或本校任一关） → **403**（零外呼）；作业不存在 → **404**；非本班学生 → **403**；提问为空 / 超 1500 字 → **400**；无可用凭证 → **503**；模型调用失败 / 被截断 → **502**（两种差异化文案）。`refused=true` 时 `answer` 是**标准引导话术**（非模型原文）。教师调用 → **403** |
+| GET | `/assignments/{id}/companion/history` | **学生** | **取本学生在该作业下的学伴会话历史**。返回 `{conversation_id, turns, messages: [{id, role, content, refused, created_at}]}`（`role` = `user` / `assistant`，`created_at` 为 ISO 字符串）。**无会话时 `conversation_id=null` + 空数组（不 404）**；开关关闭时同样返回空历史（不 403），前端首屏不报错。作业不存在 → 404；非本班学生 → 403 |
+| GET | `/assignments/{id}/companion/quota` | **学生** | **取本学生今日的学伴额度读数**（每生独立配额，docs/DESIGN-AI学伴配额.md D4）。只读、无副作用。返回 `{enabled: bool, remaining: int, limit: int, used: int, day: "YYYY-MM-DD"}`（**`remaining = min(每生剩余, 学校剩余, 平台池剩余)`**——三池取最小才是真实可问次数，平台池耗尽时显示 0（2026-10-01 修订，此前不并入平台池）；`limit`/`used` 仍为每生口径；开关关闭时 `remaining=0`）。**`day` 已 `stringify_dates`**（硬约束：否则 Pydantic v2 在落库后抛错 → 500）。学生端抽屉打开 / 提问成功后调用，显示「今日剩余 N 次」（**重拉权威值，不本地减一**）。🔴 只挂 `require_student`：教师调用 → **403**。作业不存在 → **404**；非本班学生 → **403** |
+| DELETE | `/assignments/{id}/companion` | **学生** | **清空本学生在该作业下的学伴会话消息**。返回 `{deleted: int}`（删除的消息条数）。**只删本会话**（`school_id` 由 ORM 过滤），**不影响额度**（额度是平台级外呼计数，与消息行生命周期解耦）。作业不存在 → 404；非本班学生 → 403 |
+| GET | `/assignments/{id}/companion/conversations` | **教师（仅）** | **列出该作业下本班学生的学伴会话**（一个学生会话 = 一行，**不含消息内容**）。分页 `page` / `page_size`（默认 20），返回 `{items: [{conversation_id, student_id, student_name, student_avatar, class_id, turn_count, refused_count, has_refused, last_active_at}], total}`。权限口径 = 班主任 ∪ 科任（`apply_teacher_student_filter` 统一收口）。**管理员（school_admin / super_admin）本轮不放行 → 403**（路由依赖 `require_teacher_only`）。非本班作业 → 403；作业不存在 → 404。审计 action = `companion_view_list` |
+| GET | `/companion/conversations/{conversation_id}` | **教师（仅）** | **取单个学伴会话的完整消息**（含**学生提问原文 + AI 全文**；仅元数据无法判断学生卡在哪）。返回 `{conversation_id, student_id, student_name, assignment_id, assignment_title, messages: [{id, role, content, refused, created_at}], turns}`。🔴 **三重硬校验**：① 会话存在；② 其作业本班可访问；③ 该会话 `student_id` 落在教师可见班级范围内。**任一不满足一律 404**（不泄露会话存在性；跨校、跨班、越权均为 404，**非 403**）。管理员本轮不放行 → 403（`require_teacher_only`）。教师侧**只读**，无任何写端点。审计 action = `companion_view_detail` |
 | POST | `/assignments/{id}/submissions` | 学生 | 提交作业（**不触发任何 AI 调用**） |
 | GET | `/submissions/{id}` | 登录 | 提交详情（含 `assignment_title` + 点评 + 评优信息 excellent_id/excellent_note + AI 批改 `ai_grading`）。AI 结果**仅本人可见**（学生读他人提交 403）；学生侧**不含** `error`（失败原因只给教师） |
-| POST | `/submissions/{id}/ai-grade` | 教师+ | **触发 AI 批改（教师手动，单份）**：已有结果则重跑覆盖（用于补批失败件或重交后重批）。返回 `{queued, skipped, reason}`。开关关 / 无凭证 / 额度耗尽 → 400 |
+| POST | `/submissions/{id}/ai-grade` | 教师+ | **触发 AI 批改（教师手动，单份）**：已有结果则重跑覆盖（用于补批失败件或重交后重批）。返回 `{queued, skipped, reason}`。开关关（平台/本校）/ 无凭证 / 额度耗尽（校池/平台池）→ 400（文案同批量入口） |
 | POST | `/submissions/{id}/comments` | 教师+ | 添加点评（含评分 0-100） |
 | DELETE | `/submissions/{sid}/comments/{cid}` | 教师+ | 删除点评 |
 | GET | `/my-submissions` | 学生 | 我的提交（附 `ai_grading_status`：`success` / `pending` / `failed` / `null`） |
@@ -200,6 +206,19 @@
 | POST | `/platform/ai-credential/test` | 超管 | AI 凭证连通性测试（发一次最小请求，允许「先测后存」；`api_key` 留空则回退已存密钥） |
 | GET | `/platform/ai-grading` | 超管 | 查询 AI 批改开关（`enabled`/`auto_publish_excellent`/`daily_limit`/`max_tokens`/`configured`/`today_call_count` 当日用量）；`today_call_count` 取自平台级日计数表 `ai_usage_daily`，与批改结果行生命周期解耦 |
 | PUT | `/platform/ai-grading` | 超管 | 设置 AI 批改开关（`{enabled, auto_publish_excellent, daily_limit(1-100000), max_tokens(64-32000)}`） |
+| GET | `/schools/{school_id}/ai-settings` | 超管 | **读取校级 AI 能力配置合并视图**（`require_super_admin`）。学校不存在 → 404「学校不存在」；非超管 → 403。返回**四段结构**（`day` 已 `stringify_dates`）：`platform`（平台当前值：批改/学伴 开关+每日上限）、`school_override`（4 个 key 的**原始覆盖值**，字符串，无行 = `null`）、`effective`（合并生效值：开关 = 平台 AND 学校；池 = 校级覆盖，`null` = 不限）、`usage_today`（`{day, grading: {used, school_limit}, companion: {used, school_limit}}`，校池今日用量 + 校池上限回显） |
+| PUT | `/schools/{school_id}/ai-settings` | 超管 | **保存校级 AI 能力配置**（body：`{grading_enabled?, grading_daily_limit?, companion_enabled?, companion_daily_limit?}`，全部可省）。**部分更新三态语义**：字段**未传** = 不动；显式 **null** = 删对应 school 级行（清除覆盖：开关恢复跟随平台闸、上限恢复「不限」）；显式**值** = 写入覆盖（开关 true/false；数值 ≥ 0，`0` 合法，bool 冒充数值或负数 → 400）。空 body `{}` → 200 且零变化。写库 + 审计（action `update_school_ai_settings`，detail 只记变更字段名不记值）同事务原子，响应返回与 GET 相同的四段合并视图 |
+
+> **校级 AI 配置键**（存 `settings` 表 school 级行，复用 `(school_id, key)` 唯一约束；**缺省语义 = 未配置行即跟随平台**：开关缺省**开**、上限缺省**不限**，「关」必须显式落行）：
+>
+> | key | 类型 | 语义 | 缺省（无行） |
+> | --- | --- | --- | --- |
+> | `school_ai_grading_enabled` | bool 字符串（`"1"`/`"0"`） | 本校 AI 批改开关 | 开（跟随平台闸） |
+> | `school_ai_companion_enabled` | bool 字符串 | 本校 AI 学伴开关 | 开（跟随平台闸） |
+> | `school_ai_grading_daily_limit` | int 字符串 | 本校批改每日调用次数上限（校池） | 不限（不设校池） |
+> | `school_ai_companion_daily_limit` | int 字符串 | 本校学伴每日调用次数上限（校池） | 不限（不设校池） |
+>
+> 上限值为 `"0"` = 合法配置（今日 0 次，等效停用该池）；空串/非法/负值 = 不限（fail-open 与缺省一致）。两校池计数表：`ai_usage_daily_school` / `ai_usage_daily_companion_school`（唯一 `(day, school_id)`，均为 `schools.id` 外键）。🔴 防线：校内管理员经 `PUT /api/settings/{key}` 写 `school_` 前缀 key → **400**（黑名单，豁免既有 legacy key `school_name`）。
 
 ## 八、其他
 
@@ -241,6 +260,8 @@
 | 校内配置 | `school_id = 本校 id` | `school_name`、`semester`、`grade`、`max_upload_size` | `GET /api/settings`、`PUT /api/settings/{key}`（学校管理员及以上） |
 | 平台全局配置 | `school_id IS NULL` | `allow_registration`、`student_single_device` | `GET/PUT /api/admin/platform/registration`、`GET/PUT /api/admin/platform/student-device`（仅平台超管）；`student_single_device` 缺省 **开**：学生每次登录都会作废该账号此前的全部会话（`token_version` 自增 + 撤销未撤销的 refresh token），仅约束 `role=student` |
 | 平台全局配置 | `school_id IS NULL` | `ai_grading_enabled`、`ai_auto_publish_excellent`、`ai_auto_publish_owner`、`ai_daily_call_limit`、`ai_max_tokens` | `GET/PUT /api/admin/platform/ai-grading`（仅平台超管）；凭证存 `ai_credentials` 表，走 `/api/admin/platform/ai-credential` |
+| 平台全局配置 | `school_id IS NULL` | `ai_companion_enabled`、`ai_companion_daily_limit`、`ai_companion_per_student_daily_limit` | 复用 `GET/PUT /api/admin/platform/ai-grading`（仅平台超管，与上一行**同端点**）。🔴 **与 AI 批改分开控制**：`ai_companion_enabled` 缺省**关**；`ai_companion_daily_limit`（**平台池**，全平台成本刹车）缺省 **6000**，使用**独立计数表 `ai_usage_daily_companion`**（与批改的 `ai_usage_daily` 互不挤占，两把行锁互不阻塞）；`ai_companion_per_student_daily_limit`（**每生独立配额**，公平刹车）缺省 **20**，使用**独立计数表 `ai_companion_usage_daily_student`**（唯一约束 `(day, student_id)`）。**两层额度叠加生效（双闸门）**：任一耗尽都 429，先触发的先拦 |
+| 校级 AI 配置（校级覆盖层） | `school_id = 本校 id` | `school_ai_grading_enabled`、`school_ai_companion_enabled`、`school_ai_grading_daily_limit`、`school_ai_companion_daily_limit` | `GET/PUT /api/admin/schools/{school_id}/ai-settings`（仅平台超管，见「七、系统管理」表后说明）。**开关语义 = 平台闸 × 学校闸（AND），学校闸缺省开**（无行 = 跟随平台闸）；**额度 = 学校池 + 平台池双闸门**（学伴另有每生闸，三闸：每生 → 学校 → 平台），按**调用次数**计。🔴 校内 `PUT /api/settings/{key}` 写 `school_` 前缀 key → 400（黑名单，豁免既有 `school_name`） |
 
 > 读取统一走 `app/platform_settings.py`（`get_global_setting` / `set_global_setting` / `is_registration_allowed` / `is_ai_grading_enabled` 等）；该模块**所有查询显式 `skip_tenant_filter`**，因为全局配置行的 `school_id` 就是 `NULL`，在带租户上下文的请求里（如教师在带班级上下文中触发 AI 批改时读总开关与额度）不加此开关会**永远查不到**并静默落回默认值。
 >
@@ -253,6 +274,12 @@
 > **AI 批改触发点**：**仅** `POST /api/homework/assignments/{id}/ai-grade` 与 `POST /api/homework/submissions/{id}/ai-grade`
 > （教师+，班级归属校验）。学生提交接口 `/assignments/{id}/submissions` **不做任何 AI 调用**。
 > 学生重交时其提交的 AI 批改结果行被删除（旧结果只对旧版本内容成立）。
+>
+> **AI 学伴（学生端引导式问答）**：学生侧 **4 端点**（`ask` / `history` / `quota` / `clear`，均 `require_student`）+ 教师侧 **2 端点**（会话列表 / 会话详情，均 `require_teacher_only`，**只读**）。
+> 链路：`POST /assignments/{id}/companion/ask` 由后端**自取**题干与附件（不信任前端上下文），**原子预留独立学伴额度**后同步调用模型（`AI_COMPANION_TIMEOUT=25`，**< 前端 axios 30s**，留 5s 缓冲）。
+> **额度双闸门**：**每生独立配额**（`ai_companion_per_student_daily_limit`，缺省 20，公平语义）与**平台池**（`ai_companion_daily_limit`，缺省 6000，成本语义）**叠加生效**，任一耗尽都 429；闸门顺序「先每生、后平台池」决定 429 文案（个人 vs 平台）。两层用**独立计数表、独立行锁**，互不阻塞、互不污染。额度**只增不减**（外呼失败不退还）。
+> 护栏为**引导式 + V1 启发式**（长代码块替换为引导话术），**属启发式、非保证**，命中率 / 误杀率须由抽检建立基线。
+> 关闭 `ai_companion_enabled` 时学伴链路**零外呼**（提问 403），学生端按钮隐藏（**非置灰**）。
 
 ## 统一约定
 

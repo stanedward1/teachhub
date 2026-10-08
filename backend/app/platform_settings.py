@@ -56,6 +56,15 @@ AI_DAILY_LIMIT_KEY = "ai_daily_call_limit"
 # 单次调用 max_tokens 上限
 AI_MAX_TOKENS_KEY = "ai_max_tokens"
 
+# ---------------- AI 学伴相关全局配置键（docs/DESIGN-AI学伴.md） ----------------
+# 平台级总开关：关闭时不产生任何外呼（缺省关闭）
+AI_COMPANION_ENABLED_KEY = "ai_companion_enabled"
+# 学伴**独立**每日调用次数上限（与批改的 `ai_daily_call_limit` 相互独立，两个刹车各管一条链路）
+AI_COMPANION_DAILY_LIMIT_KEY = "ai_companion_daily_limit"
+# 学伴**每个学生**每日次数上限（docs/DESIGN-AI学伴配额.md D3，与上方**平台池** key 语义
+# 不同、量级不同、并存不覆盖 —— 复用一个 key 会让两者互相覆盖，是灾难性的配置 bug）。
+AI_COMPANION_PER_STUDENT_DAILY_LIMIT_KEY = "ai_companion_per_student_daily_limit"
+
 # 视为「真」/「假」的字符串取值（比较前忽略大小写并去除首尾空白）
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
@@ -217,4 +226,52 @@ def get_ai_max_tokens(db: Session) -> int:
     """单次调用 max_tokens 上限，缺省取 `settings.AI_DEFAULT_MAX_TOKENS`。"""
     return _as_positive_int(
         get_global_setting(db, AI_MAX_TOKENS_KEY), settings.AI_DEFAULT_MAX_TOKENS
+    )
+
+
+def is_ai_companion_enabled(db: Session) -> bool:
+    """AI 学伴总开关（平台级，缺省**关闭**）。
+
+    关闭时不产生任何外呼 —— 调用方应在发起学伴提问前先用本函数短路。
+
+    Note:
+        内部经 `get_global_setting` 读取，而该函数已带 `execution_options(
+        skip_tenant_filter=True)`。**这是必须的**：学生请求带租户上下文，全局配置行
+        （`school_id IS NULL`）会被 ORM 的 `do_orm_execute` 注入 `school_id = 当前租户`
+        而与 NULL 相与恒为假，不加处理地查询**永远查不到**，会**静默**落回默认 False
+        且**不报错** —— 表面现象是「超管明明开了，学生按钮死活不出现」，极难排查。
+        详见模块 docstring 与 `get_global_setting` 的说明。
+    """
+    return to_bool(get_global_setting(db, AI_COMPANION_ENABLED_KEY), default=False)
+
+
+def get_ai_companion_daily_limit(db: Session) -> int:
+    """学伴每日调用次数上限（成本护栏），缺省取 `settings.AI_COMPANION_DEFAULT_DAILY_LIMIT`。
+
+    与批改的 `get_ai_daily_limit` **同口径但相互独立**：DB 中的
+    `ai_companion_daily_limit` 覆盖 config 缺省值，非法值（非正整数）回落缺省，
+    避免误配成 0 导致功能停摆。学伴链路使用独立的计数表，两套额度互不挤占。
+    """
+    return _as_positive_int(
+        get_global_setting(db, AI_COMPANION_DAILY_LIMIT_KEY),
+        settings.AI_COMPANION_DEFAULT_DAILY_LIMIT,
+    )
+
+
+def get_ai_companion_per_student_daily_limit(db: Session) -> int:
+    """学伴**每个学生**每日次数上限（公平护栏），缺省取
+    `settings.AI_COMPANION_DEFAULT_PER_STUDENT_DAILY_LIMIT`。
+
+    与 `get_ai_companion_daily_limit`（**平台池**，成本护栏）**并存且相互独立**：
+    DB 中的 `ai_companion_per_student_daily_limit` 覆盖 config 缺省值，非法值
+    （非正整数）回落缺省，避免误配成 0 导致所有学生无法提问。
+
+    🔴 内部经 `get_global_setting`（自带 `skip_tenant_filter=True`）读取。**这是必须的**：
+    学生请求带租户上下文，全局配置行（`school_id IS NULL`）会被 ORM 注入
+    `school_id = 当前租户` 而与 NULL 相与恒为假，不加处理地查询**永远查不到**，
+    会**静默**落回缺省且不报错（详见 `get_global_setting` 与 `is_ai_companion_enabled`）。
+    """
+    return _as_positive_int(
+        get_global_setting(db, AI_COMPANION_PER_STUDENT_DAILY_LIMIT_KEY),
+        settings.AI_COMPANION_DEFAULT_PER_STUDENT_DAILY_LIMIT,
     )

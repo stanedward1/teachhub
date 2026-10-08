@@ -7,9 +7,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import get_current_user, require_student, require_teacher
-from app.schemas import SubmissionCommentCreate, SubmissionCreate
-from app.services import homework_service
+from app.deps import (
+    get_current_user,
+    require_student,
+    require_teacher,
+    require_teacher_only,
+)
+from app.schemas import AiCompanionAsk, SubmissionCommentCreate, SubmissionCreate
+from app.services import ai_companion, ai_companion_teacher, homework_service
 
 router = APIRouter(prefix="/api/homework", tags=["作业提交平台"])
 
@@ -202,3 +207,108 @@ def add_comment(
     db: Session = Depends(get_db),
 ):
     return homework_service.add_comment(db, excellent_id, payload, user)
+
+
+# ---------------- AI 学伴（docs/DESIGN-AI学伴.md §4.2 / §14.2） ----------------
+# 分层：本段只做「声明路径 + 依赖注入 + 参数解析 + 调用 service + 返回」；业务逻辑与
+# 数据访问见 `services/ai_companion.py`（学生链路）与 `services/ai_companion_teacher.py`
+# （教师侧只读）。
+
+# ---- 学生侧 3 个端点（🔴 必须 require_student）----
+# 🔴 设计标红的陷阱：项目里 `GET /api/homework/assignments/{id}` 挂的是
+# `get_current_user` 而非 `require_student` ⇒ **教师也能调它**（设计 N6）。学伴端点
+# **必须显式挂 require_student**，否则会出现「教师或任意登录用户以学生身份提问、
+# 消耗学生额度」的口子。
+@router.post("/assignments/{assignment_id}/companion/ask")
+def companion_ask(
+    assignment_id: int,
+    payload: AiCompanionAsk,
+    user=Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """学生提问（同步阻塞调用模型，超时见 `settings.AI_COMPANION_TIMEOUT=25`）。
+
+    请求体仅 `{"question": str}`（校验在 service 层，长度 1..1500）；**禁止前端传
+    题干 / 历史 / 开关**（设计 D2：不信任前端传来的上下文）。
+    越权（非本班作业）⇒ 403；开关关闭 ⇒ 403；额度尽 ⇒ 429；无凭证 ⇒ 503；
+    模型失败 ⇒ 502（超时 / 截断差异化文案，由 service 抛 HTTPException）。
+    """
+    # 🔴 body 走 AiCompanionAsk schema（question: str | None = None，无长度约束）：
+    # 字段缺省/空值仍落 service 层 400（口径不变）；非字符串（int/bool）由 Pydantic
+    # 422 拦截 —— 裸 dict 时代会在 service 层 .strip()/len() 上 500。
+    return ai_companion.ask(db, assignment_id, payload.question, user)
+
+
+@router.get("/assignments/{assignment_id}/companion/history")
+def companion_history(
+    assignment_id: int,
+    user=Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """取本学生在**该作业**下的会话历史（无会话则 `conversation_id=null` + 空数组，不 404）。"""
+    return ai_companion.history(db, assignment_id, user)
+
+
+@router.get("/assignments/{assignment_id}/companion/quota")
+def companion_quota(
+    assignment_id: int,
+    user=Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """取本学生在该作业下**今日的学伴额度读数**（docs/DESIGN-AI学伴配额.md D4）。
+
+    返回 `{enabled, remaining, limit, used, day}`：学生端抽屉打开 / 提问成功后调用，
+    显示「今日剩余 N 次」（**重拉权威值，不本地减一**）。
+
+    只读、无副作用（不写库、不扣额）。`day` 已由 service 层 `stringify_dates`（S12）。
+    🔴 只挂 `require_student`（绝不能挂 `get_current_user`）：否则教师可读学生配额。
+    越权（非本班作业）⇒ 403；作业不存在 ⇒ 404。
+    """
+    return ai_companion.quota(db, assignment_id, user)
+
+
+@router.delete("/assignments/{assignment_id}/companion")
+def companion_clear(
+    assignment_id: int,
+    user=Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """学生清空自己在该作业下的会话（只删本会话，**不影响额度**）。"""
+    return ai_companion.clear(db, assignment_id, user)
+
+
+# ---- 教师侧 2 个端点（🔴 仅教师，管理员不放行）----
+# 设计 §14.2.1：本轮**不给管理员开放**（仅教师）。`require_teacher` 会把
+# school_admin / super_admin 一并放行，故此处用 `require_teacher_only` 严格限定 role=teacher，
+# 满足「超管调教师端点 ⇒ 403」的验收口径。教师侧**只读**（X6），无写端点。
+@router.get("/assignments/{assignment_id}/companion/conversations")
+def companion_conversations(
+    assignment_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    user=Depends(require_teacher_only),
+    db: Session = Depends(get_db),
+):
+    """列出**该作业下**本班学生的学伴会话（一个学生会话 = 一行，**不含消息内容**）。
+
+    权限口径 = 班主任 ∪ 科任（`get_teacher_class_ids` / `apply_teacher_student_filter`）；
+    非本班作业 ⇒ 403。列表审计 action = `companion_view_list`（传 class_id，不传 student_id）。
+    """
+    return ai_companion_teacher.list_companion_conversations(
+        db, assignment_id, user, page, page_size
+    )
+
+
+@router.get("/companion/conversations/{conversation_id}")
+def companion_conversation_detail(
+    conversation_id: int,
+    user=Depends(require_teacher_only),
+    db: Session = Depends(get_db),
+):
+    """取单个会话的完整消息（含学生提问原文 + AI 全文）。
+
+    🔴 三重硬校验（§14.2，缺一不可）：① 会话存在；② 其作业本班可访问；③ 该会话
+    `student_id` 落在教师可见班级范围内。任不满足 ⇒ **404**（不泄露会话存在性）。
+    详情审计 action = `companion_view_detail`（传 student_id）。
+    """
+    return ai_companion_teacher.get_companion_conversation(db, conversation_id, user)

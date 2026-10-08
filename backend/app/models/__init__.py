@@ -28,7 +28,14 @@ from app.models.classlog import (
 )
 from app.models.operation_log import OperationLog
 from app.models.refresh_token import RefreshToken
-from app.models.ai import AiCredential, AiGradingResult, AiUsageDaily
+from app.models.ai import AiCredential, AiGradingResult, AiUsageDaily, AiUsageDailySchool
+from app.models.companion import (
+    AiCompanionConversation,
+    AiCompanionMessage,
+    AiCompanionUsageDailyStudent,
+    AiUsageDailyCompanion,
+    AiUsageDailyCompanionSchool,
+)
 
 __all__ = [
     "User",
@@ -68,4 +75,10 @@ __all__ = [
     "AiCredential",
     "AiGradingResult",
     "AiUsageDaily",
+    "AiUsageDailySchool",
+    "AiCompanionConversation",
+    "AiCompanionMessage",
+    "AiUsageDailyCompanion",
+    "AiUsageDailyCompanionSchool",
+    "AiCompanionUsageDailyStudent",
 ]

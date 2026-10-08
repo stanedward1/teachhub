@@ -191,7 +191,15 @@ def filter_students_by_teacher(db: Session, teacher_id: int, is_admin: bool):
 
 
 def get_student_account(db: Session, class_id: int, name: str) -> User | None:
-    """通过「班级 + 姓名」定位学生登录账号（role=student），不存在返回 None。"""
+    """通过「班级 + 姓名」定位学生登录账号（role=student），不存在返回 None。
+
+    ⚠️ 本函数**保持软匹配不变**：它的入参就是 ``(class_id, name)``，语义即
+    「给我这个班里叫这个名字的账号」，不存在可用于改写的 ``student_id`` ——
+    调用方手里只有班级与姓名，没有档案 id。改为硬外键需要一个额外的「档案 → 账号」
+    入口函数（见 ``get_student_avatar`` 的硬外键分支），不在本函数职责内。
+    因此这里保留原样，仅延续既有 ``.first()`` 语义（该项目账号唯一性由
+    ``users.username_scope`` 复合唯一约束在库层保证，见 models/user.py）。
+    """
     if not class_id or not name:
         return None
     return (
@@ -202,8 +210,46 @@ def get_student_account(db: Session, class_id: int, name: str) -> User | None:
 
 
 def get_student_by_account(db: Session, user: User) -> Student | None:
-    """通过学生登录账号（User）定位其学生档案（Student），不存在返回 None。"""
-    if not user or user.class_id is None:
+    """通过学生登录账号（User）定位其学生档案（Student），不存在返回 None。
+
+    优先走 **硬外键** ``user.student_id``：直接、唯一、不受改名/同名影响。
+    仅当 ``student_id`` 为空（非学生角色、档案未建、或迁移期歧义未回填）时，
+    才回落到旧的 ``(class_id, name)`` 软匹配，保证未回填的历史数据不立即坏掉。
+
+    🔴 租户校验（defense-in-depth）：这里**显式比对** ``school_id``，防范
+    ``db.get`` 的 **identity-map 短路**。
+
+    精确机制（实测，勿误读）：``db.get(Model, pk)`` **本身并不普遍绕过**租户过滤 ——
+    在 **fresh session** 下，它会正常触发 ``do_orm_execute``，``with_loader_criteria``
+    的 ``school_id`` 条件被注入，跨租户 PK 返回 None（探针实测：SQL 1 次、返回 None）。
+    真正会绕过的是**同一 Session 内该对象已在 identity map 中**：若它此前被某条
+    ``execution_options(skip_tenant_filter=True)`` 的查询（全项目 16 处，2026-10-01 实测：
+    platform_settings / admin_service / ai_grading / auth_service / homework_service）
+    或平台超管分支加载过，
+    则 ``db.get`` 直接返回缓存对象、**零 SQL、零事件** ⇒ 过滤无从生效。
+    （注：``skip_tenant_filter`` 见 ``app/tenant.py::_apply_tenant_filter``。）
+
+    因此显式 ``school_id`` 比对是对上述短路的兜底：即便拿到跨租户缓存对象，
+    也会被这里拦下返回 None。平台超管（``school_id is None``）跨租户属预期，放行。
+    """
+    if not user:
+        return None
+
+    # 硬外键优先
+    if getattr(user, "student_id", None) is not None:
+        stu = db.get(Student, user.student_id)
+        if stu is not None:
+            # 同租户校验：仅当双方 school_id 均已知且不一致时判定越界。
+            if (
+                user.school_id is not None
+                and stu.school_id is not None
+                and stu.school_id != user.school_id
+            ):
+                return None
+            return stu
+
+    # 回落：软匹配（历史账号 student_id 尚未回填）
+    if user.class_id is None:
         return None
     return (
         db.query(Student)
@@ -216,8 +262,19 @@ def get_student_avatar(db: Session, student) -> str | None:
     """通过学生档案定位其登录账号头像（users.avatar），不存在返回 None。
 
     头像统一存于 users.avatar，students 表不再冗余存储。
+
+    优先走硬外键：用 ``student.id`` 反查 ``users.student_id``（有索引
+    ``ix_users_student_id``）；查不到再回落到 ``(class_id, name)`` 软匹配。
+    该 queries 走 ORM ``query()``，因此自然受租户过滤管辖，无需额外显式校验。
     """
     if not student:
         return None
-    u = get_student_account(db, student.class_id, student.name)
+    u = (
+        db.query(User)
+        .filter(User.role == "student", User.student_id == student.id)
+        .first()
+    )
+    if u is None:
+        # 回落：软匹配
+        u = get_student_account(db, student.class_id, student.name)
     return u.avatar if u else None

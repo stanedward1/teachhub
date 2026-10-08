@@ -59,6 +59,16 @@ class User(Base):
     phone = Column(String(20))
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)  # 租户归属，super_admin 为 NULL
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=True, index=True)
+    # 学生档案的**硬外键**：把「登录账号」与「学生档案(students)」绑定为可唯一定位的关系，
+    # 取代此前 (class_id, name) 的软匹配（同班同名会命中错人、改名即失配）。
+    # 可空：非学生角色恒为 NULL；学生账号在档案未建/迁移期歧义冲突时也暂空（回落软匹配）。
+    # ondelete=SET NULL：档案被删不应连带删账号（账号还挂登录历史/审计）。
+    student_id = Column(
+        Integer,
+        ForeignKey("students.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # 安全策略：首次登录强制改密 + 登录失败锁定
     must_change_password = Column(Boolean, default=False, nullable=False)  # True=首次登录需改密
     failed_attempts = Column(Integer, default=0, nullable=False)           # 连续失败次数

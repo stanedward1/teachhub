@@ -60,6 +60,12 @@ def require_roles(*roles: str):
 require_student = require_roles("student")
 # 教师/管理员：可访问后台全部功能
 require_teacher = require_roles("teacher", "school_admin", "super_admin")
+# 仅教师本人：**管理员不放行**。
+# 用途：需要「严格限定为教师」的端点 —— 如教师查看本班学生 AI 学伴会话
+# （docs/DESIGN-AI学伴.md §14.2.1 明确「本轮不给管理员开放」）。
+# `require_teacher` 会把 school_admin / super_admin 一并放行，故不能复用它来
+# 表达「仅教师」；需要严格教师语义时必须用本依赖。
+require_teacher_only = require_roles("teacher")
 # 学校管理员及以上
 require_school_admin = require_roles("school_admin", "super_admin")
 # 平台超管

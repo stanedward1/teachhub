@@ -1,6 +1,6 @@
 # TeachHub 架构设计文档
 
-> 版本：2.10 ｜ 更新：2026-09-25 ｜ 适用对象：后端 / 前端 / 测试 / 运维
+> 版本：2.11 ｜ 更新：2026-10-01 ｜ 适用对象：后端 / 前端 / 测试 / 运维
 
 ## 1. 项目定位
 
@@ -52,7 +52,8 @@ teachhub/
 │   │   ├── permissions.py     # 班级权限 + 租户辅助（is_any_admin / get_student_account 等）
 │   │   ├── utils.py           # to_dict / safe_filename / gen_student_no / normalize_page
 │   │   ├── audit.py           # 操作审计日志（含 school_id）+ 批量查询辅助
-│   │   ├── platform_settings.py # 平台级全局配置（school_id IS NULL 作用域）：get/set_global_setting、is_registration_allowed、AI 批改开关与限额（查询显式 skip_tenant_filter）
+│   │   ├── platform_settings.py # 平台级全局配置（school_id IS NULL 作用域）：get/set_global_setting、is_registration_allowed、AI 批改开关与限额、**AI 学伴开关 + 平台池限额（`ai_companion_enabled` / `ai_companion_daily_limit`）+ 每生配额限额（`ai_companion_per_student_daily_limit`）**（查询显式 skip_tenant_filter）
+│   │   ├── school_settings.py # 校级 AI 配置（settings 表 school 级行，`school_ai_*` 4 key）：get/set_school_setting（写 None=删行）、校级开关（缺省开 = 跟随平台闸）与校池限额（缺省不限）；读用 query() 禁 db.get、不加 skip_tenant_filter（实测依据见模块 docstring）
 │   │   ├── observability.py   # 可观测性：访问日志中间件 + /metrics（Prometheus 指标，零依赖）
 │   │   ├── pagination.py      # 单查询分页：paginate(db, stmt, page, page_size)（COUNT(*) OVER () 一次往返取「数据 + 总数」）
 │   │   ├── logging_config.py  # 结构化日志：X-Request-ID 透传 + RequestIdFilter + StructuredFormatter + setup_logging()
@@ -87,15 +88,16 @@ teachhub/
 │   │   │   ├── classlog.py    #   班级日志（日志/计划/课表/活动/谈心/返校/表现/评语）
 │   │   │   ├── attendance.py  #   考勤点名 + 出勤率统计
 │   │   │   ├── mobile.py      #   移动端专用接口（学生速查 + 画像概览）
-│   │   │   ├── admin.py       #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览 / 平台注册开关 / AI 凭证与批改开关
+│   │   │   ├── admin.py       #   账号管理 / 系统设置 / 数据看板 / 审计日志 / 平台概览 / 平台注册开关 / AI 凭证与批改开关 / **校级 AI 配置（GET/PUT `/admin/schools/{id}/ai-settings`，require_super_admin）**
 │   │   │   └── uploads.py     #   通用文件上传
 │   │   ├── services/          # 业务服务层（B1 分层）：router 只做路由/依赖/参数解析/调用/返回
 │   │   │   ├── auth_service.py / students_service.py / classlog_service.py / homework_service.py / admin_service.py
 │   │   │   ├── mobile_service.py / meta_service.py / attendance_service.py / uploads_service.py
 │   │   │   ├── ai_client.py / ai_attachments.py / ai_image.py / ai_grading.py / ai_admin_service.py  # AI 批改：模型客户端 / 附件解析 / 图片管线（内容嗅探·缩放·EXIF）/ 批改调度与降级 / 超管凭证与开关
+│   │   │   ├── ai_companion.py / ai_companion_teacher.py  # AI 学伴：学生问答链路（上下文组装 + 模型调用 + V1 启发式护栏 + 落库 + **平台池四原语 + 每生配额三原语 + 校池原语（三闸：每生→学校→平台）**）/ 教师侧**只读**查询（本班会话列表 + 单会话详情 + 审计）
 │   │   │   └── workbench/     #   工作台子包：_common.py + scores/leaves/communications/resources/exams/seats/imports/profile/reports_service.py
 │   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
-│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 30 个 revision，head a9b8c7d6e5f4）
+│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 34 个 revision，head f8a9b0c1d2e3）
 │   ├── logs/                  # 运行日志（teachhub.log，按天滚动保留 30 天，不入库）
 │   ├── tests/                 # pytest 自动化测试（含 test_multi_tenant.py）
 │   ├── pytest.ini            # pytest 配置（testpaths = tests，仅收集 tests/）
@@ -118,7 +120,7 @@ teachhub/
 │   │   ├── layout/            # StudentLayout / AdminLayout（可折叠外壳）
 │   │   │   └── admin/         #   AdminLayout 子件：AdminSidebar / AdminHeader / menuConfig.js
 │   │   ├── composables/       # 可组合函数（useCrudList / useSort / useDebouncedRef / useDownload / useLogout）
-│   │   ├── components/        # ImportDialog / Markdown / MarkdownEditor / StudentSelect / StudentCard / SortBar / PaginationBar / StateView（四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList / AiGradingPanel（AI 批改纯展示面板，学生口径）
+│   │   ├── components/        # ImportDialog / Markdown / MarkdownEditor / StudentSelect / StudentCard / SortBar / PaginationBar / StateView（四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList / AiGradingPanel（AI 批改纯展示面板，学生口径）/ AiCompanionDrawer（AI 学伴**学生端可写**抽屉）/ CompanionConversationPanel（AI 学伴**教师端只读**面板）
 │   │   ├── mobile/            # 移动端（Vant）：layout + views + api
 │   │   ├── views/student/     # 学生端页面（登录/作业/优秀作品/我的提交+详情/编程练习/资料）
 │   │   └── views/admin/       # 管理端页面（29 个，含 Schools 学校管理、PlatformSettings 平台设置）
@@ -169,14 +171,15 @@ teachhub/
 
 ## 5. 数据模型概览
 
-### 5.1 表清单（37 张表）
+### 5.1 表清单（43 张表）
 
 | 域 | 表 | 关键字段 |
 | --- | --- | -------- |
 | 认证 | `users` / `refresh_tokens` | users：username、password_hash、role、school_id、class_id、name、`token_version`（会话代次，改密/重置后自增使旧 access token 失效）；refresh_tokens：user_id、school_id、token_hash、expires_at、revoked_at、replaced_by |
 | 基础 | `schools` / `classrooms` / `class_teachers` / `students` | 学校（status 启用/停用）/班级/班级教师（班主任+科任）/学生档案（student_type 通学/寄宿） |
 | 作业 | `assignments` / `assignment_attachments` / `submissions` / `submission_comments` / `excellent_works` / `work_comments` | 任务/任务附件（一对多）/提交/提交点评/优秀（含 `source` 来源：manual/ai_recommended）/评论 |
-| AI 批改 | `ai_credentials` / `ai_grading_results` / `ai_usage_daily` | 平台级 AI 凭证（**无 `school_id` 列**，密钥 Fernet 密文）/批改结果（`submission_id` 唯一，`status` pending/success/failed，与教师评语并列存储互不覆盖）/**平台级 AI 日用量计数**（`day` 唯一、`call_count`，与结果行生命周期解耦，额度投递前原子预留，无 `school_id` 列） |
+| AI 批改 | `ai_credentials` / `ai_grading_results` / `ai_usage_daily` / `ai_usage_daily_school` | 平台级 AI 凭证（**无 `school_id` 列**，密钥 Fernet 密文）/批改结果（`submission_id` 唯一，`status` pending/success/failed，与教师评语并列存储互不覆盖）/**平台级 AI 日用量计数**（`day` 唯一、`call_count`，与结果行生命周期解耦，额度投递前原子预留，无 `school_id` 列）/**校级 AI 日用量计数**（唯一 `(day, school_id)`，`school_id` NOT NULL → `schools.id`；校池为可选叠加层，未配置校池 = 不写本表） |
+| AI 学伴 | `ai_companion_conversations` / `ai_companion_messages` / `ai_usage_daily_companion` / `ai_usage_daily_companion_school` / `ai_companion_usage_daily_student` | 学伴会话（`uq_ai_companion_conv_scope = (school_id, student_id, assignment_id)`，一学生×一作业一行，含 `school_id` 受 ORM 隔离）/学伴消息（`role` user/assistant，含 `refused` 拒答标记、`finish_reason`、token 计数；**冗余 `school_id`** 由 `before_flush` 自动回填）/学伴**独立额度计数**（`day` 唯一、`call_count`，🔴 **无 `school_id` 列**：平台级成本刹车，与批改的 `ai_usage_daily` **互不挤占**、两把行锁互不阻塞）/**校级学伴日用量计数**（唯一 `(day, school_id)`，`school_id` NOT NULL → `schools.id`；与批改校池同构、同哲学「每池一表一把锁」）/**每生独立配额计数**（唯一 `(day, student_id)`，含 `school_id`） |
 | 工作台 | `scores` / `leaves` / `attendance` / `communications` / `resources` / `exams` / `seats` / `settings` / `student_profile_tags` / `weekly_reports` / `student_board_history` | 成绩/请假/考勤点名/沟通/资源/试卷/座位/设置/画像标签/周报/住宿历史 |
 | 日志 | `work_logs` / `class_plans` / `teacher_plans` / `schedules` / `activities` / `talks` / `return_records` / `performances` / `student_comments` | 日志/计划/课表/活动/谈心/返校/表现/评语 |
 | 审计 | `operation_logs` | 操作审计日志（含 class_id 班级维度） |
@@ -195,16 +198,17 @@ teachhub/
 - `ai_credentials` **刻意不含 `school_id` 列**：凭证是平台资产、跨校共用一套，不带 `school_id` 就不会被 ORM 租户过滤器命中，安全性由接口依赖 `require_super_admin` 保证；`ai_grading_results.school_id` 则是普通租户列，由 ORM 事件自动回填与过滤
 - `users.token_version` → **会话代次**：access token 载荷内嵌 `tv` 声明，`deps.get_current_user` 校验 `tv == user.token_version`（老 token 无 `tv` 按 0 兼容）。改密（`auth_service.change_password`）与管理员重置密码（`admin_service.reset_password`）均调用 `invalidate_user_sessions()`，自增该值并批量置 `refresh_tokens.revoked_at`，使**已签发的旧 access token 立即失效**——弥补 JWT 无状态无法单个撤销的短板
 - `ai_usage_daily.day` → **平台级 AI 日用量唯一键**（`school_id IS NULL`，跨校共用一道额度刹车）：`call_count` 与 `ai_grading_results` 行生命周期解耦（删结果不清额），`reserve_quota()` 以 `SELECT ... FOR UPDATE` 行锁 + 唯一键兜底**原子预留**，超限部分不再投递
+- **AI 能力双维度（平台 / 学校）**（2026-10-01）：开关 = **平台闸 × 学校闸（AND），学校闸缺省开**（`settings` 表无 school 级行 = 跟随平台闸），4 个 `school_ai_*` key 存 school 级行（`school_settings.py` 读写；校内 `PUT /api/settings/{key}` 写 `school_` 前缀 → 400 黑名单，豁免 legacy `school_name`）。额度 = **学校池 + 平台池双闸门**（学伴另有每生闸，三闸：每生 → 学校 → 平台；批改双闸：学校 → 平台）：一次调用同时预留两池，任一不足即拒，沿用「每池一表一把行锁、互不阻塞」哲学（两张校池表 `ai_usage_daily_school` / `ai_usage_daily_companion_school`，唯一 `(day, school_id)`，写入显式赋 `school_id`）。**校池未配置（无行）= 不限 = 零 SQL 写入**，保证无校配置时全部行为与上线前一致（回归承诺）。配置入口：超管端点 `GET/PUT /api/admin/schools/{school_id}/ai-settings` + 学校管理页「AI 配置」弹窗
 - `submissions` 唯一约束 `uq_submission_assignment_student`（`assignment_id + student_id`）→ 同一学生同一作业至多一条提交；并发首次提交由 `IntegrityError` 兜底退化为更新（双击幂等）
 - `import_history.user_id` → `users.id`：导入操作人追溯
 
 ### 5.3 外键删除策略（分层）
 
-外键共 73 个（模型定义口径），按语义分层设置 `ondelete` 删除规则：
+外键共 83 个（模型定义口径，2026-10-01 实测 `Base.metadata` 逐列统计）。删除规则分三层：**24 个显式声明 `ondelete`（CASCADE 22 / SET NULL 2）**，其余 59 个**未显式设置**（`ondelete=None`，InnoDB 默认行为等价 RESTRICT）：
 
-- **CASCADE（18 个，纯从属关系）**：作业链（`assignment_attachments`/`submissions`→`assignments`、`excellent_works`/`submission_comments`→`submissions`、`work_comments`→`excellent_works`、`ai_grading_results`→`submissions`）+ 学生业务链（`scores`/`attendance`/`leaves`/`performances`/`communications`/`talks`/`return_records`/`student_comments`/`student_profile_tags`/`student_board_history`/`submissions`→`students`）。删父记录自动级联删子记录。
-- **RESTRICT（54 个，归属/操作人关系）**：`classrooms.teacher_id`、`class_teachers.teacher_id`、`assignments.created_by`、`excellent_works.selected_by`、`ai_credentials.updated_by`、各日志表的 `teacher_id`/`created_by`/`changed_by` 等，以及所有 `school_id`/`class_id` 引用（含 `ai_grading_results.school_id`）。删归属主体时保留业务数据，由应用层显式处理。
-- **SET NULL（1 个，租户归属可空）**：`refresh_tokens.school_id` → `schools.id`（学校删除后令牌保留但失去租户归属；平台超管的令牌本即 `NULL`）。
+- **CASCADE（22 个，纯从属关系）**：作业链（`assignment_attachments`/`submissions`→`assignments`、`excellent_works`/`submission_comments`→`submissions`、`work_comments`→`excellent_works`、`ai_grading_results`→`submissions`）+ **AI 学伴链（`ai_companion_conversations`→`students`/`assignments`、`ai_companion_messages`→`ai_companion_conversations`、`ai_companion_usage_daily_student`→`students`）** + 学生业务链（`scores`/`attendance`/`leaves`/`performances`/`communications`/`talks`/`return_records`/`student_comments`/`student_profile_tags`/`student_board_history`/`submissions`→`students`）。删父记录自动级联删子记录。
+- **默认 RESTRICT 语义（59 个，`ondelete` 未显式设置）**：这些列在模型中**未声明** `ondelete`，依赖 InnoDB 默认行为（不级联、不置空）：`classrooms.teacher_id`、`class_teachers.teacher_id`、`assignments.created_by`、`excellent_works.selected_by`、`ai_credentials.updated_by`、各日志表的 `teacher_id`/`created_by`/`changed_by` 等，以及所有 `school_id`/`class_id` 引用（含 `ai_grading_results.school_id`、`ai_companion_conversations.school_id`、`ai_companion_messages.school_id`、`ai_companion_usage_daily_student.school_id`、**两张 AI 校池表的 `school_id`**：`ai_usage_daily_school` / `ai_usage_daily_companion_school`）。删归属主体时保留业务数据，由应用层显式处理。
+- **SET NULL（2 个，归属可空）**：`refresh_tokens.school_id` → `schools.id`（学校删除后令牌保留但失去租户归属；平台超管的令牌本即 `NULL`）；`users.student_id` → `students.id`（学生档案删除后登录账号保留但断开硬关联，回退「班级+姓名」软关联）。
 - **代码双保险**：`cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序先删子表再删父表，与 DB CASCADE 兼容（先显式清空，CASCADE 无副作用）。
 
 > 说明一：模型大多**不定义 ORM relationship**，关联查询通过 `db.get()` / `filter()` 手动完成，以避免模块间循环 import；唯一例外是同文件内的 `Assignment ↔ AssignmentAttachment`（一对多，用 `relationship` + `cascade="all, delete-orphan"` 实现附件级联删除）。
@@ -251,6 +255,8 @@ teachhub/
 | `EmptyState.vue` | 统一空状态占位（默认插槽可放「新建」等按钮）；多由 `StateView` 间接使用 | 各列表页 |
 | `VirtualList.vue` | 长列表虚拟滚动（固定行高窗口化，`requestAnimationFrame` 节流，DOM 节点数恒定） | 移动端「快捷记录」选学生弹窗（全校长列表） |
 | `AiGradingPanel.vue` | **AI 批改意见纯展示面板（学生口径）**：状态标签 / 分数 / 总评 / 亮点 / 改进建议 / 「AI 生成，仅供参考」免责声明，`pending` 与无结果给占位。**不展示** `model` / `excellent_reason` / `attachment_used` 等教师专属字段 | 学生端「我的提交详情」（`/my-submissions/{id}`）、「作业详情」教师反馈区块（`/homework/{id}`）、「优秀作品详情」（`/excellent/{id}`） |
+| `AiCompanionDrawer.vue` | **AI 学伴学生端可写抽屉**：引导式问答输入 + 「今日剩余次数」展示；提问成功后**重拉权威剩余值**（不本地减一），`remaining<=0` 时前置禁用避免反复撞 429 | 学生端「作业详情」（`/homework/{id}`） |
+| `CompanionConversationPanel.vue` | **AI 学伴教师端只读面板**：展示某学生在本作业下的完整会话（学生提问原文 + AI 全文 + 转数），**无任何写操作** | 教师端「提交列表」（`views/admin/AssignmentSubmissions.vue`） |
 
 > **AI 批改展示约定**：学生端三处统一复用 `AiGradingPanel`（纯展示）；**教师端刻意不复用** —— 教师端（提交详情 / 提交审阅）的 AI 区块带「采纳为优秀 / 重新批改」等交互，职责不同，保留各自实现。
 
@@ -340,6 +346,7 @@ teachhub/
 | 可观测性 | 自研中间件 + `/metrics`，零第三方依赖 | 单实例部署零成本接入 Prometheus；多副本再换共享计数 |
 | AI 凭证存储 | 专用 `ai_credentials` 表（**无 `school_id`**） | 绕过「塞进 `settings`」的三个坑：明文返回 / 值 255 容量 / `NULL` 唯一失效；安全性改由 `require_super_admin` 保证 |
 | AI 批改触发 | **教师手动**（不做学生提交自动批改） | 成本可控、外发时机可控；提交链路上零 AI 调用，AI 不可用不影响交作业 |
+| AI 学伴调用 | **同步阻塞**（学生当场等回答，后端超时 25s < 前端 axios 30s）+ **双额度闸门（平台池 + 每生配额）** + **启发式护栏** | 与批改的「异步线程池 + 投递即返回」范式不同：学生需即时反馈，故同步等待并压短超时留 5s 缓冲；额度用**两张独立表**：平台池 `ai_usage_daily_companion`（成本刹车）+ 每生配额 `ai_companion_usage_daily_student`（公平刹车，唯一约束 `(day, student_id)`），**叠加生效、互不挤占、各自行锁互不阻塞**；护栏为 system prompt 引导准则 + V1 **启发式**长代码块拦截（**非保证**，Hit/误杀率须抽检建立基线） |
 | 推理模型调用 | **显式关闭思考**（`thinking.type=disabled`） | 思考 token 与正文共用 `max_tokens`，开启会把预算吃光导致正文为空（线上事故）；门控于 `base_url` 含 `deepseek` |
 | 重复内容的成本 | 靠**上游前缀缓存**，不靠「少发」 | 批改无状态，任务附件必然随每份提交重复送入；把稳定内容放消息最前即可命中 DeepSeek 自动前缀缓存（1/10~1/50 计价）。⚠️ 依赖**官方直连端点**，中转/聚合平台返回 `cached_tokens: 0` |
 | 任务附件纳入批改 | 读 `assignment_attachments`，但设预算与名额下限 | 上机任务常把要求只写在附件里；文本限 `AI_MAX_INPUT_CHARS` 的 25%，图片**至少为学生材料保留 1 个名额**，防附件把学生内容挤掉 |

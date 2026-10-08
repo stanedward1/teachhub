@@ -72,6 +72,24 @@
         <el-button type="primary" :loading="submitting" @click="submit">提交作业</el-button>
       </div>
     </div>
+
+    <!-- AI 学伴：浮动入口（开关关闭时隐藏，不置灰；设计 §6.2）。
+         :key=assignment.id 强制切作业时重建组件 ⇒ 会话内存态天然隔离（设计 §6）。 -->
+    <button
+      v-if="assignment?.ai_companion_enabled"
+      class="companion-fab"
+      title="AI 学伴"
+      @click="companionOpen = true"
+    >
+      <el-icon><MagicStick /></el-icon>
+      <span>AI 学伴</span>
+    </button>
+    <AiCompanionDrawer
+      v-if="assignment?.ai_companion_enabled"
+      :key="assignment.id"
+      v-model="companionOpen"
+      :assignment-id="assignment.id"
+    />
   </div>
 </template>
 
@@ -82,6 +100,7 @@ import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import AiGradingPanel from '../../components/AiGradingPanel.vue'
+import AiCompanionDrawer from '../../components/AiCompanionDrawer.vue'
 import { homeworkApi, uploadFile } from '../../api'
 
 const route = useRoute()
@@ -92,6 +111,8 @@ const submitting = ref(false)
 const filepath = ref('')
 const filename = ref('')
 const submission = ref(null)
+// AI 学伴抽屉开关
+const companionOpen = ref(false)
 
 onMounted(async () => {
   await load()
@@ -265,5 +286,28 @@ async function submit() {
 }
 .attach-link {
   margin: 4px 0;
+}
+/* AI 学伴浮动入口：固定右下角，不遮挡「提交作业」区（设计 §6.2） */
+.companion-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 18px;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #6366f1, #0ea5e9);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.4);
+  transition: transform 0.15s ease;
+}
+.companion-fab:hover {
+  transform: translateY(-2px);
 }
 </style>

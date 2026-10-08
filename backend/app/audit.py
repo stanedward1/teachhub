@@ -10,6 +10,20 @@ from app.models import Classroom, OperationLog, Student, User
 from app.utils import to_dict
 
 
+# ---------------- 审计 action 常量（集中定义，避免散落字面量导致检索不一致） ----------------
+# AI 学伴教师侧查看动作。审计日志的首要消费方式是**检索/过滤**与**按 action 聚合**
+# （`/admin/audit-logs`、`admin_service.audit_log_stats`），故列表与详情用**两个独立
+# action**（而非「统一 action + detail 区分 scope」）—— 后者会让「按 action 精确过滤 /
+# 统计查看次数」退化为文本模糊匹配，无法建索引、无法可靠聚合。
+# 设计依据：docs/DESIGN-AI学伴.md §14.5 / §18.3。
+AUDIT_COMPANION_VIEW_LIST = "companion_view_list"
+AUDIT_COMPANION_VIEW_DETAIL = "companion_view_detail"
+
+# 校级 AI 能力配置变更（超管专用端点，docs/DESIGN-AI校级能力.md §3 D5 / T04）。
+# detail 只记变更的 key 列表，**不记配置值**（与凭证审计同哲学：审计可检索、不敏感）。
+AUDIT_UPDATE_SCHOOL_AI_SETTINGS = "update_school_ai_settings"
+
+
 def active_student_id_query(db: Session):
     """在籍（未退学）学生 id 子查询，供 `Model.student_id.in_(...)` 过滤使用。"""
     return db.query(Student.id).filter(Student.is_dropped_out.is_(False))

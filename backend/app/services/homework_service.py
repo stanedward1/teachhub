@@ -229,8 +229,9 @@ def ai_grade_submission(db: Session, submission_id: int, user: User) -> dict:
 def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
     """教师手动批改**整个作业**的全部提交（§F3 批量入口）。
 
-    - 只批**尚无成功结果**的提交：已批改的跳过，避免重复点击白白消耗额度；
-      需要重批单份时走 `ai_grade_submission`。
+    - 只批**尚无成功结果且未在批改中**的提交：已批改的、正在批改中的都跳过，
+      避免重复点击白白消耗额度（后端非阻塞返回后前端按钮即复位，教师双击会二次
+      投递 → 重复外呼 + 重复扣配额）；需要重批单份时走 `ai_grade_submission`。
     - 剩余额度不足时按额度截断，并在返回值里如实回报 `skipped`。
 
     Returns:
@@ -251,22 +252,34 @@ def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
     if not submission_ids:
         return {"queued": 0, "skipped": 0, "already_graded": 0, "reason": "该作业暂无提交"}
 
-    graded_ids = {
-        sid
-        for (sid,) in db.query(AiGradingResult.submission_id)
+    # 一次性取回 (submission_id, status)：既排除**已成功**的，也排除**正在批改中**
+    # （pending）的。只剔除 success 时，教师双击会在首次请求非阻塞返回后二次投递，
+    # 对同一份提交重复外呼并重复预扣配额（平台池默认 200 次/日，连点即可烧穿）。
+    graded_ids: set[int] = set()
+    inflight_ids: set[int] = set()
+    for sid, status in (
+        db.query(AiGradingResult.submission_id, AiGradingResult.status)
         .filter(
             AiGradingResult.submission_id.in_(submission_ids),
-            AiGradingResult.status == "success",
+            AiGradingResult.status.in_(("success", "pending")),
         )
         .all()
-    }
-    pending_ids = [sid for sid in submission_ids if sid not in graded_ids]
+    ):
+        (graded_ids if status == "success" else inflight_ids).add(sid)
+    pending_ids = [
+        sid
+        for sid in submission_ids
+        if sid not in graded_ids and sid not in inflight_ids
+    ]
     if not pending_ids:
+        reason = (
+            "其余提交正在批改中，请稍候" if inflight_ids else "全部提交均已批改"
+        )
         return {
             "queued": 0,
-            "skipped": 0,
+            "skipped": len(submission_ids),
             "already_graded": len(graded_ids),
-            "reason": "全部提交均已批改",
+            "reason": reason,
         }
 
     outcome = ai_grading.request_grading(db, pending_ids, a.school_id)
@@ -285,7 +298,7 @@ def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
     db.commit()
     return {
         "queued": outcome["queued"],
-        "skipped": outcome["skipped"] + len(graded_ids),
+        "skipped": outcome["skipped"] + len(graded_ids) + len(inflight_ids),
         "already_graded": len(graded_ids),
         "reason": outcome["reason"],
     }
@@ -401,6 +414,21 @@ def get_assignment(db: Session, assignment_id: int, user: User) -> dict:
     d["class_name"] = cls.name if cls else None
     d["creator_name"] = creator.name if creator else None
     d["attachments"] = _attachments_out(a)
+    # AI 学伴开关：搭车该端点返回（设计 §2.6.1 Q7，零新增端点、零额外往返 ——
+    # HomeworkDetail.vue 本来就调它）。学生端据此控制学伴按钮显隐。
+    # 🔴 下发值为「平台 AND 学校」合并值（docs/DESIGN-AI校级能力.md §3 D6）：
+    # `is_school_ai_companion_enabled` 缺省开（无 school 级行 / `a.school_id` 为 None
+    # 时恒 True），故无校级配置时合并值 ≡ 平台闸原值（行为不变）。只合平台值会导致
+    # 「学生看得到按钮却提问 403」。
+    # 🔴 `is_ai_companion_enabled` 内部必须走带 `skip_tenant_filter` 的 `get_global_setting`
+    # （platform_settings 已实现）：学生请求带租户上下文，不加处理查全局配置
+    # （`school_id IS NULL`）会**静默**落回 False 且不报错，表现为「超管开了但学生按钮
+    # 死活不出现」。本字段对教师无害（同端点教师也可见，只是一个平台级布尔，不含任何
+    # 学生数据/凭证），故无需按角色区分。
+    from app.platform_settings import is_ai_companion_enabled
+    from app.school_settings import is_school_ai_companion_enabled
+
+    d["ai_companion_enabled"] = is_ai_companion_enabled(db) and is_school_ai_companion_enabled(db, a.school_id)
     return d
 
 
