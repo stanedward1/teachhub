@@ -81,6 +81,11 @@ def create_schedule(payload: dict, user: User = Depends(get_current_user), db: S
     return classlog_service.create_schedule(db, payload, user)
 
 
+@router.put("/schedules/{schedule_id}")
+def update_schedule(schedule_id: int, payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return classlog_service.update_schedule(db, schedule_id, payload, user)
+
+
 @router.delete("/schedules/{schedule_id}")
 def delete_schedule(schedule_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.delete_schedule(db, schedule_id, user)

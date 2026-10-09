@@ -16,7 +16,7 @@ from app.services.workbench._common import (
     is_any_admin,
     is_student_in_teacher_classes,
     normalize_page,
-    parse_date,
+    parse_date_or_400,
     serialize_list_with_students,
     stringify_dates,
     student_name,
@@ -56,14 +56,18 @@ def list_leaves(
 
 def create_leave(db: Session, user, payload: LeaveCreate) -> dict:
     """新增请假记录。"""
-    ensure_student_operable(db, payload.student_id)
+    # 复用返回的 Student 以继承其 school_id（见下方 school_id 说明）
+    student = ensure_student_operable(db, payload.student_id)
     if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload.student_id):
         raise HTTPException(status_code=403, detail="无权为该学生创建请假")
     x = Leave(
         student_id=payload.student_id,
+        # 显式继承父资源（学生档案）的租户归属：超管（school_id=None）上下文下
+        # before_flush 不会回填，落 NULL 会导致该行对所有租户都不可见。
+        school_id=student.school_id,
         reason=payload.reason,
-        start_date=parse_date(payload.start_date),
-        end_date=parse_date(payload.end_date),
+        start_date=parse_date_or_400(payload.start_date),
+        end_date=parse_date_or_400(payload.end_date),
         status=payload.status,
         image=payload.image,
     )
@@ -85,7 +89,7 @@ def update_leave(db: Session, user, leave_id: int, payload: LeaveUpdate) -> dict
     data = payload.model_dump(exclude_unset=True)
     for f in ("reason", "start_date", "end_date", "status", "image"):
         if f in data and data[f] is not None:
-            setattr(x, f, parse_date(data[f]) if f in ("start_date", "end_date") else data[f])
+            setattr(x, f, parse_date_or_400(data[f]) if f in ("start_date", "end_date") else data[f])
     audit(db, user, "update_leave", target=f"请假#{leave_id}-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"事由：{x.reason or '未填写'}；时间：{x.start_date or ''} ~ {x.end_date or ''}")
     db.commit()
     db.refresh(x)

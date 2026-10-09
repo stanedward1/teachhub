@@ -14,7 +14,7 @@ from app.services.workbench._common import (
     get_teacher_class_ids,
     is_any_admin,
     is_teacher_class_owner,
-    parse_date,
+    parse_date_or_400,
     to_dict,
 )
 
@@ -86,7 +86,12 @@ def get_weekly_data(db: Session, user, class_id: int, week_start: str = "", week
         "class_id": class_id,
         "total_students": total_students,
         "leave_count": len(leaves),
-        "attendance_rate": round((total_students * 5 - len(leaves)) / (total_students * 5) * 100, 1) if total_students else 0,
+        # 出勤率 =（应到人次 - 请假人次）/ 应到人次，应到口径为 总人数×5（既定口径）。
+        # 请假条数可能超过 总人数×5（同一学生多条请假），故钳制到 [0,100] 避免出现负数。
+        "attendance_rate": max(
+            0.0,
+            min(100.0, round((total_students * 5 - len(leaves)) / (total_students * 5) * 100, 1)),
+        ) if total_students else 0,
         "positive_count": positive_count,
         "negative_count": negative_count,
         "score_avg": score_avg,
@@ -156,13 +161,19 @@ def save_report(db: Session, user, payload: ReportSave) -> dict:
         r.content = payload.content
         r.data_snapshot = json.dumps(payload.data_snapshot, ensure_ascii=False)
     else:
-        if class_id:
-            ensure_class_operable(db, class_id)
+        # 班级必填：weekly_reports.class_id 为 NOT NULL，缺省时原会触发 IntegrityError
+        # 被统一转成 409（语义错误），这里在服务层提前校验为 400。
+        if not class_id:
+            raise HTTPException(status_code=400, detail="请选择班级")
+        # 毕业限制（复用返回的 Classroom 以继承其 school_id）
+        classroom = ensure_class_operable(db, class_id)
         r = WeeklyReport(
             class_id=class_id,
+            # 显式继承父资源（班级）的租户归属，避免超管上下文下 school_id 落 NULL
+            school_id=classroom.school_id,
             title=title,
-            week_start=parse_date(payload.week_start),
-            week_end=parse_date(payload.week_end),
+            week_start=parse_date_or_400(payload.week_start),
+            week_end=parse_date_or_400(payload.week_end),
             content=payload.content,
             data_snapshot=json.dumps(payload.data_snapshot, ensure_ascii=False),
             created_by=user.id,

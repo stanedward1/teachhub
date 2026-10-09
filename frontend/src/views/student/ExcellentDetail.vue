@@ -90,7 +90,7 @@ async function submit() {
   if (submitting.value) return
   submitting.value = true
   try {
-    await homeworkApi.addComment(route.params.id, { content: comment.value })
+    await homeworkApi.addComment(route.params.id, { content: comment.value.trim() })
     comment.value = ''
     ElMessage.success('评论成功')
     load()

@@ -24,10 +24,19 @@ def class_options(db: Session, school_id: int | None = None) -> dict:
     """班级下拉选项（登录/注册时使用，无需登录）。仅返回未毕业班级。
 
     传入 school_id 时只返回该校班级（多租户下学生登录页按学校级联）。
+
+    🔴 未传 school_id 时**返回空列表**：本端点无需登录，若不加限制，匿名请求即可拿到
+    **全部学校**的班级名称/代码/专业（跨租户信息泄露）。此前无 school_id 时只是跳过
+    过滤条件，等于把多租户隔离交给调用方自觉 —— 已收紧为「无 school_id 即空」。
+    登录页/注册页必须先选定学校（school_id）才能看到班级。
     """
-    q = db.query(Classroom).filter(Classroom.is_graduated.is_(False))
-    if school_id:
-        q = q.filter(Classroom.school_id == school_id)
+    if not school_id:
+        return {"items": []}
+    q = (
+        db.query(Classroom)
+        .filter(Classroom.is_graduated.is_(False))
+        .filter(Classroom.school_id == school_id)
+    )
     rows = q.order_by(Classroom.id).all()
     # 同时返回 code：班级代码常与名称不同（如名称"2026级计算机2班"、代码"2622"），
     # 只显示名称时容易被误认为"班级不在下拉框里"。

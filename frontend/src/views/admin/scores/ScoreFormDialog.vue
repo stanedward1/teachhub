@@ -44,9 +44,8 @@ const visible = computed({
 })
 
 const saving = ref(false)
-// 表单默认值：新增时使用；编辑时先铺默认值再被行数据覆盖，
-// 保证 row 上的额外键（id / student_name / student_no 等）原样带入 form，
-// 保存时随表单一起提交给后端（与原 `Object.assign(form, row)` 语义一致）。
+// 表单默认值：新增时使用；编辑时先铺默认值再被行数据的**已声明字段**覆盖，
+// 避免把 row 上的额外键（id / student_name / student_no 等）注入 reactive 并提交。
 const DEFAULTS = { student_id: null, subject: '', score: 0, exam_name: '' }
 const form = reactive({ ...DEFAULTS })
 
@@ -59,16 +58,27 @@ watch(
 )
 
 function init() {
-  if (props.score) Object.assign(form, DEFAULTS, props.score)
-  else Object.assign(form, DEFAULTS)
+  if (props.score) {
+    // 只拷表单声明的字段
+    const picked = {}
+    for (const key of Object.keys(DEFAULTS)) {
+      if (props.score[key] !== undefined) picked[key] = props.score[key]
+    }
+    Object.assign(form, DEFAULTS, picked)
+  } else {
+    Object.assign(form, DEFAULTS)
+  }
 }
 
 async function save() {
   if (!form.student_id || !form.subject) return ElMessage.warning('请选择学生并填写科目')
   saving.value = true
   try {
-    if (props.score) await scoreApi.update(props.score.id, form)
-    else await scoreApi.create(form)
+    // 显式构造载荷：只提交表单声明的字段
+    const payload = {}
+    for (const key of Object.keys(DEFAULTS)) payload[key] = form[key]
+    if (props.score) await scoreApi.update(props.score.id, payload)
+    else await scoreApi.create(payload)
     ElMessage.success('保存成功')
     visible.value = false
     emit('saved')

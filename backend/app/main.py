@@ -72,6 +72,18 @@ logger = logging.getLogger("teachhub")
 # 确保上传目录存在
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
+
+def _docs_kwargs(env: str) -> dict:
+    """按运行环境决定 FastAPI 交互式文档的开关（纯函数，便于单测）。
+
+    production 下返回 ``docs_url=None, redoc_url=None`` 关闭 /docs 与 /redoc，
+    避免对外暴露完整 API 结构；其他环境返回空 dict，保持默认行为（文档开启）。
+    """
+    if env == "production":
+        return {"docs_url": None, "redoc_url": None}
+    return {}
+
+
 app = FastAPI(
     title=f"{settings.APP_NAME} API",
     description="""
@@ -92,6 +104,7 @@ app = FastAPI(
 数据按 `school_id` 租户隔离，由 ORM 层自动为查询注入过滤（含 `db.get`），跨校访问返回 404。
 """,
     version=settings.APP_VERSION,
+    **_docs_kwargs(settings.ENV),
 )
 
 # ⚠️ CORSMiddleware 必须在**所有** `@app.middleware("http")` 之后注册（见文件末尾），
@@ -265,7 +278,10 @@ _reconcile_interrupted_grading()
 
 @app.get("/")
 def root():
-    return {"name": settings.APP_NAME, "version": settings.APP_VERSION, "docs": "/docs"}
+    info = {"name": settings.APP_NAME, "version": settings.APP_VERSION}
+    if settings.ENV != "production":
+        info["docs"] = "/docs"
+    return info
 
 
 @app.get("/health")

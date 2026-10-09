@@ -4,7 +4,7 @@ from typing import List
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import Classroom, ClassTeacher, Student, User
+from app.models import Classroom, ClassTeacher, School, Student, User
 
 
 # ---------------- 角色与租户辅助 ----------------
@@ -25,6 +25,21 @@ def ensure_same_school(user, target_school_id: int | None) -> None:
         return
     if target_school_id is not None and target_school_id != user.school_id:
         raise HTTPException(status_code=403, detail="无权访问其他学校的数据")
+
+
+def resolve_school_id_or_400(db: Session, user, requested_school_id: int | None) -> int | None:
+    """解析「无父资源的学校级实体」归属 school_id（工作日志 / 计划 / 资源 / 试卷统一口径）。
+
+    平台超管必须显式指定，否则 400；其他角色取 user.school_id 并忽略入参（防跨校写入）。
+    """
+    if is_platform_admin(user):
+        if requested_school_id is None:
+            raise HTTPException(status_code=400, detail="请选择学校")
+        school = db.get(School, requested_school_id)
+        if school is None:
+            raise HTTPException(status_code=400, detail="学校不存在")
+        return school.id
+    return user.school_id
 
 
 def ensure_student_operable(db: Session, student_id: int) -> Student:

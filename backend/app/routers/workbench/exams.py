@@ -2,7 +2,7 @@
 from fastapi import Depends, File, UploadFile
 from sqlalchemy.orm import Session
 
-from app.routers.workbench._common import dep, get_current_user, get_db, new_router
+from app.routers.workbench._common import dep, get_db, new_router
 from app.schemas import ExamUpdate
 from app.services.workbench import exams_service
 
@@ -18,11 +18,17 @@ def list_exams(keyword: str = "", _=Depends(dep), db: Session = Depends(get_db))
 def upload_exam(
     title: str = "未命名试卷",
     exam_type: str = "单元测验",
+    school_id: int | None = None,
     file: UploadFile = File(None),
-    user=Depends(get_current_user),
+    # 🔴 依赖必须是 `dep`（= require_teacher：teacher/school_admin/super_admin）。
+    # 此前误挂 `get_current_user`（= 任意已登录用户）⇒ **学生也能创建试卷记录**，
+    # 而 `/resources` 与其余 4 个 `/exams/*` 端点均已是 `require_teacher`。此处对齐同权。
+    user=Depends(dep),
     db: Session = Depends(get_db),
 ):
-    return exams_service.upload_exam(db, user, title=title, exam_type=exam_type, file=file)
+    return exams_service.upload_exam(
+        db, user, title=title, exam_type=exam_type, file=file, school_id=school_id
+    )
 
 
 @router.put("/exams/{exam_id}")

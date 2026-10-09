@@ -8,7 +8,10 @@
     <el-form label-width="90px">
       <el-form-item label="已选学生">
         <span style="font-weight: 500">{{ students.length }} 人</span>
-        <div v-if="students.length" style="color: #909399; font-size: 12px; line-height: 1.6">
+        <div
+          v-if="students.length"
+          style="color: var(--el-color-info); font-size: 12px; line-height: 1.6"
+        >
           {{ namesPreview }}
         </div>
       </el-form-item>
@@ -19,7 +22,9 @@
           show-password
           style="width: 240px"
         />
-        <div style="color: #909399; font-size: 12px; line-height: 1.6; margin-top: 4px">
+        <div
+          style="color: var(--el-color-info); font-size: 12px; line-height: 1.6; margin-top: 4px"
+        >
           弱密码（不满足 8 位且含字母数字）会标记为「需修改」，学生下次登录时会被要求改密。
         </div>
       </el-form-item>

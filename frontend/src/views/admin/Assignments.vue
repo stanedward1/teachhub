@@ -6,7 +6,7 @@
         placeholder="全部班级"
         clearable
         style="width: 200px"
-        @change="load"
+        @change="onFilterChange"
       >
         <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
       </el-select>
@@ -47,6 +47,9 @@
         </el-table>
       </StateView>
     </div>
+
+    <!-- 任务列表分页：后端按 page/page_size 切页（P1-3），筛选班级变化时回到第 1 页 -->
+    <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
 
     <el-dialog v-model="dialog" :title="editing ? '编辑任务' : '新建任务'" width="760px">
       <el-form label-width="80px">
@@ -190,11 +193,16 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import StateView from '../../components/StateView.vue'
-import { homeworkApi, metaApi, uploadFile } from '../../api'
+import PaginationBar from '../../components/PaginationBar.vue'
+import { homeworkApi, studentApi, uploadFile } from '../../api'
 
 const items = ref([])
 const classes = ref([])
 const classId = ref(null)
+// 列表分页状态（P1-3）：翻页 / 改每页条数由 PaginationBar 触发 load
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 const loading = ref(false)
 const error = ref(false)
 const dialog = ref(false)
@@ -211,13 +219,24 @@ const form = reactive({
 })
 
 onMounted(async () => {
-  const res = await metaApi.classes()
-  classes.value = res.items
+  // 用**已鉴权**的班级列表（GET /api/classrooms，依赖 require_teacher）替代公共端点
+  // /api/meta/classes：后者无需登录即可访问，未传 school_id 时曾返回**全部学校**的班级；
+  // 收紧后未传即返回空。本页需要的正是「当前登录上下文可见的班级」（管理员=本校全部，
+  // 教师=自己负责的）。graduated=false 与旧端点「仅未毕业班级」的口径保持一致。
+  // 包 try/catch：班级列表拉取失败不应阻断下方 load()（与登录页 loadClasses 同范式）。
+  try {
+    const res = await studentApi.classrooms({ graduated: 'false' })
+    classes.value = res.items
+  } catch (e) {
+    console.error('[Assignments] 加载班级列表失败:', e)
+  }
   load()
 })
 
 // AI 批改：纯手动触发（学生提交不会自动批改），只批该作业下尚未批改的提交
 const aiGradingId = ref(null)
+// 删除任务的重入锁：防止双击重复删除（进入即置位、finally 复位）
+const removing = ref(false)
 
 // ---- AI 批改进度：弹窗 + 轮询到「无在跑任务」为止 ----
 const progressDialog = ref(false)
@@ -271,11 +290,15 @@ function openProgress(row) {
 
 async function aiGrade(row) {
   if (!row.submission_count) return ElMessage.warning('该任务暂无提交')
-  await ElMessageBox.confirm(
-    `将对「${row.title}」下尚未批改的提交发起 AI 批改（已批改的会自动跳过），确认继续？`,
-    'AI 批改',
-    { type: 'info' }
-  )
+  try {
+    await ElMessageBox.confirm(
+      `将对「${row.title}」下尚未批改的提交发起 AI 批改（已批改的会自动跳过），确认继续？`,
+      'AI 批改',
+      { type: 'info' }
+    )
+  } catch {
+    return // 用户取消确认框：静默返回，不弹任何提示
+  }
   aiGradingId.value = row.id
   try {
     const res = await homeworkApi.aiGradeAssignment(row.id)
@@ -292,12 +315,21 @@ async function aiGrade(row) {
   }
 }
 
+// 筛选班级变化：结果集变小，必须回到第 1 页再查（否则新条件配旧页码可能越界空页）
+function onFilterChange() {
+  page.value = 1
+  load()
+}
+
 async function load() {
   loading.value = true
   error.value = false
   try {
-    const res = await homeworkApi.assignments(classId.value ? { class_id: classId.value } : {})
+    const params = { page: page.value, page_size: pageSize.value }
+    if (classId.value) params.class_id = classId.value
+    const res = await homeworkApi.assignments(params)
     items.value = res.items
+    total.value = res.total
   } catch (e) {
     error.value = true
   } finally {
@@ -376,11 +408,18 @@ const picked = ref(null)
 const rollingName = ref('')
 const pickedIds = ref([])
 let rollTimer = null
+// 定格定时器（setTimeout）的 id：与 rollTimer 一样必须在卸载/重抽前清理，
+// 否则弹窗关闭或组件卸载后它仍会触发并写 picking/picked
+let rollStopTimer = null
 
 function stopRolling() {
   if (rollTimer) {
     clearInterval(rollTimer)
     rollTimer = null
+  }
+  if (rollStopTimer) {
+    clearTimeout(rollStopTimer)
+    rollStopTimer = null
   }
 }
 
@@ -406,7 +445,7 @@ function randomPick() {
     i += 1
   }, 60)
   // 1.2 秒后定格，营造抽签感
-  setTimeout(() => {
+  rollStopTimer = setTimeout(() => {
     stopRolling()
     picking.value = false
     picked.value = target
@@ -432,10 +471,20 @@ async function openUnsubmitted(row) {
 }
 
 async function remove(row) {
-  await ElMessageBox.confirm(`确定删除任务「${row.title}」吗？`, '提示', { type: 'warning' })
-  await homeworkApi.deleteAssignment(row.id)
-  ElMessage.success('删除成功')
-  load()
+  if (removing.value) return // 防双击：删除在途时忽略重复触发
+  removing.value = true
+  try {
+    try {
+      await ElMessageBox.confirm(`确定删除任务「${row.title}」吗？`, '提示', { type: 'warning' })
+    } catch {
+      return // 用户取消确认框：静默返回，不弹任何提示
+    }
+    await homeworkApi.deleteAssignment(row.id)
+    ElMessage.success('删除成功')
+    load()
+  } finally {
+    removing.value = false
+  }
 }
 
 onBeforeUnmount(() => {
@@ -466,7 +515,7 @@ onBeforeUnmount(() => {
 }
 
 .danger-text {
-  color: #f56c6c;
+  color: var(--el-color-danger);
   font-weight: 600;
 }
 
@@ -480,7 +529,7 @@ onBeforeUnmount(() => {
 
 .pick-progress {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-color-info);
 }
 
 .pick-card {
@@ -490,13 +539,13 @@ onBeforeUnmount(() => {
   text-align: center;
   background: #fef0f0;
   border: 1px solid #fbc4c4;
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 
 .pick-card.rolling {
   background: #f4f4f5;
   border-color: #d3d4d6;
-  color: #909399;
+  color: var(--el-color-info);
 }
 
 .pick-card .pick-name {
@@ -511,7 +560,7 @@ onBeforeUnmount(() => {
 }
 
 .ok-text {
-  color: #67c23a;
+  color: var(--el-color-success);
   font-weight: 600;
 }
 
@@ -524,19 +573,19 @@ onBeforeUnmount(() => {
 .progress-running {
   margin: 8px 0 0;
   font-size: 12px;
-  color: #909399;
+  color: var(--el-color-info);
 }
 
 .progress-done {
   margin: 8px 0 0;
   font-size: 13px;
   font-weight: 600;
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 
 .progress-retry {
   margin: 8px 0 0;
   font-size: 12px;
-  color: #e6a23c;
+  color: var(--el-color-warning);
 }
 </style>

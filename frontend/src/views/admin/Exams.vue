@@ -60,6 +60,16 @@
     <!-- 上传试卷弹窗 -->
     <el-dialog v-model="uploadDialog" title="上传试卷" width="520px" @close="resetUpload">
       <el-form label-width="80px">
+        <el-form-item v-if="isPlatformAdminUser" label="学校" required>
+          <el-select
+            v-model="uploadForm.school_id"
+            filterable
+            placeholder="选择学校"
+            style="width: 100%"
+          >
+            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="试卷名称" required>
           <el-input v-model="uploadForm.title" placeholder="请输入试卷名称" />
         </el-form-item>
@@ -131,7 +141,8 @@ import SortBar from '../../components/SortBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
 import { useCrudList } from '../../composables/useCrudList'
-import { examApi } from '../../api'
+import { examApi, schoolApi } from '../../api'
+import { isPlatformAdmin } from '../../utils/auth'
 
 const { order, useSorted } = useSort('exams')
 const keyword = useDebouncedRef('', 300)
@@ -154,7 +165,10 @@ watch(keyword, reload)
 const uploadDialog = ref(false)
 const uploadRef = ref(null)
 const uploading = ref(false)
-const uploadForm = reactive({ title: '', exam_type: '单元测验' })
+// 平台超管：试卷表无父资源可继承 school_id，上传时须显式选校（非超管不渲染该项、不传参）
+const isPlatformAdminUser = isPlatformAdmin()
+const schools = ref([])
+const uploadForm = reactive({ title: '', exam_type: '单元测验', school_id: null })
 const selectedFile = ref(null)
 
 // 编辑
@@ -180,12 +194,24 @@ function formatSize(bytes) {
 // 上传
 function openUpload() {
   resetUpload()
+  if (isPlatformAdminUser) loadSchools()
   uploadDialog.value = true
+}
+
+// 超管上传时拉取学校列表；返回结构为 { items: [...], total }（见 students_service.list_schools）
+async function loadSchools() {
+  try {
+    const res = await schoolApi.list()
+    schools.value = res.items || []
+  } catch (e) {
+    // 加载失败：下拉为空，提交时会被「请选择学校」拦截；错误提示由全局拦截器统一处理
+  }
 }
 
 function resetUpload() {
   uploadForm.title = ''
   uploadForm.exam_type = '单元测验'
+  uploadForm.school_id = null
   selectedFile.value = null
   uploadRef.value?.clearFiles()
 }
@@ -203,6 +229,7 @@ function onFileRemove() {
 
 async function doUpload() {
   if (!uploadForm.title.trim()) return ElMessage.warning('请输入试卷名称')
+  if (isPlatformAdminUser && !uploadForm.school_id) return ElMessage.warning('请选择学校')
   if (!selectedFile.value) return ElMessage.warning('请选择试卷文件')
   uploading.value = true
   try {
@@ -210,7 +237,8 @@ async function doUpload() {
     fd.append('title', uploadForm.title.trim())
     fd.append('exam_type', uploadForm.exam_type)
     fd.append('file', selectedFile.value)
-    await examApi.upload(fd)
+    // 超管显式选校：作为 querystring 第 2 参透传；教师/校管传空对象，请求与旧版一致
+    await examApi.upload(fd, isPlatformAdminUser ? { school_id: uploadForm.school_id } : {})
     ElMessage.success('上传成功')
     uploadDialog.value = false
     load()
@@ -229,7 +257,8 @@ async function downloadFile(row) {
     a.href = url
     a.download = row.filename || row.title
     a.click()
-    URL.revokeObjectURL(url)
+    // 延迟回收：部分浏览器异步读取 blob，紧随 click 立即 revoke 可能中断下载
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   } catch (e) {
     ElMessage.error('下载失败')
   }

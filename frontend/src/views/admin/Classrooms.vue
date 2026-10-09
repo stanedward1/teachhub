@@ -85,7 +85,12 @@
           <el-switch v-model="form.is_graduated" active-text="已毕业" inactive-text="在读" />
           <div
             v-if="form.is_graduated"
-            style="color: #e6a23c; font-size: 12px; line-height: 1.5; margin-top: 4px"
+            style="
+              color: var(--el-color-warning);
+              font-size: 12px;
+              line-height: 1.5;
+              margin-top: 4px;
+            "
           >
             标记毕业后，教师与管理员将无法再对该班所有学生进行各项操作。
           </div>
@@ -252,7 +257,11 @@ async function addTeacher() {
 }
 
 async function removeTeacher(t) {
-  await ElMessageBox.confirm(`确定移除科任老师「${t.name}」吗？`, '提示', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(`确定移除科任老师「${t.name}」吗？`, '提示', { type: 'warning' })
+  } catch {
+    return // 用户取消确认框：静默返回，不弹任何提示
+  }
   try {
     await studentApi.removeClassTeacher(currentClass.value.id, t.teacher_id)
     ElMessage.success('已移除')

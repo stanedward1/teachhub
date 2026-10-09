@@ -16,7 +16,7 @@ import logging
 import os
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -57,10 +57,24 @@ def _check_student_access(assignment: Assignment, user: User):
 
 
 def _check_teacher_assignment_access(db: Session, user: User, assignment: Assignment):
-    """教师只能访问自己负责班级的作业/提交，管理员不受限。"""
+    """教师可访问「自己负责班级」的作业/提交，或**自己创建**的作业；管理员不受限。
+
+    🔴 「创建者保留管理权」（2026-10-09 用户拍板）：``assignment.created_by`` 与
+    「班主任 ∪ 科任」（``is_teacher_class_owner``）**并列**为放行条件，满足其一即可。
+    理由：写路径本来就认创建者（``update_assignment`` / ``delete_assignment`` 里的
+    ``a.created_by != user.id and not is_any_admin(user)`` 判断），读路径若不认，会出现
+    「能改能删、却打不开」的自相矛盾（同类缺陷模式见 D-403-1）。
+    ⚠️ 非越权：``school_id`` 仍由 ORM 事件注入，跨校不可见。
+    ⚠️ 副作用：创建者即使已不带该班，也**能触发该作业的 AI 批改**（消耗学校/平台额度）
+    —— 与写路径「能改能删」一致，属「创建者保留管理权」口径的必然结果。
+    """
     if assignment is None:
         return
-    if user.role == "teacher" and not is_teacher_class_owner(db, user.id, assignment.class_id):
+    if user.role == "teacher":
+        if is_teacher_class_owner(db, user.id, assignment.class_id):
+            return
+        if assignment.created_by is not None and assignment.created_by == user.id:
+            return
         raise HTTPException(status_code=403, detail="无权访问其他班级的任务")
 
 
@@ -207,14 +221,41 @@ def _discard_ai_grading(db: Session, submission_id: int) -> None:
 def ai_grade_submission(db: Session, submission_id: int, user: User) -> dict:
     """教师手动批改**单份**提交（允许对已有结果重跑覆盖）。
 
+    - 已有 `pending` 结果行 ⇒ 正在批改中，本次幂等空操作返回（`queued=0`），
+      避免教师双击 / 多标签页重复外呼并重复预扣配额（批量入口已修同一类问题）。
+    - 已有 `success` 结果行 ⇒ **照常重跑**（设计内能力，由前端二次确认把关）。
+
     Raises:
-        HTTPException: 提交不存在 404；非本班教师 403。
+        HTTPException: 提交不存在 404；非本班且非创建者教师 403。
     """
     s = db.get(Submission, submission_id)
     if not s:
         raise HTTPException(status_code=404, detail="提交不存在")
     a = db.get(Assignment, s.assignment_id)
     _check_teacher_assignment_access(db, user, a)
+
+    # 幂等守卫：该提交已有 `pending` 结果行 ⇒ 正在批改中，本次为教师双击 / 多标签页
+    # 造成的重复投递，直接空操作返回（不重复外呼、不重复预扣配额）。返回 200 而非 400
+    # —— 这不是错误，是「已经在做了」。`success` 一律放行：允许按设计对已有结果重跑覆盖，
+    # 前端对重批做二次确认（此处绝不做静默跳过，否则会剥夺教师重批能力）。
+    row = (
+        db.query(AiGradingResult)
+        # 🔴 必须跳过租户过滤：`submission_id` 是**全局唯一**键，结果行的身份与租户无关。
+        # 结果行 `school_id` 可能为 NULL 或属他校（历史脏数据），当前教师租户读不到 ⇒
+        # 守卫失效 → 继续 `request_grading` → 被 `_apply_prewrite` 跳过（claimed=[]）→
+        # 最终抛 400「无法发起批改」，而正确文案应是「该提交正在批改中，请稍候」。
+        # 与 `ai_grading._apply_prewrite` / `_upsert_result` 的 skip 口径一致。
+        .execution_options(skip_tenant_filter=True)
+        .filter(AiGradingResult.submission_id == submission_id)
+        .first()
+    )
+    if row is not None and row.status == "pending":
+        return {
+            "queued": 0,
+            "skipped": 1,
+            "already_graded": 0,
+            "reason": "该提交正在批改中，请稍候",
+        }
 
     outcome = ai_grading.request_grading(
         db, [submission_id], a.school_id if a else user.school_id
@@ -259,6 +300,10 @@ def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
     inflight_ids: set[int] = set()
     for sid, status in (
         db.query(AiGradingResult.submission_id, AiGradingResult.status)
+        # 🔴 必须跳过租户过滤（同单份守卫）：`submission_id` 全局唯一，结果行身份与租户
+        # 无关。结果行 `school_id` 为 NULL 或属他校（历史脏数据）时，当前租户读不到 ⇒
+        # 已 success 的脏归属行会被重新入队 → 重复外呼 + 重复占额度。
+        .execution_options(skip_tenant_filter=True)
         .filter(
             AiGradingResult.submission_id.in_(submission_ids),
             AiGradingResult.status.in_(("success", "pending")),
@@ -308,7 +353,7 @@ def ai_grade_progress(db: Session, assignment_id: int, user: User) -> dict:
     """查询**整份作业**的 AI 批改进度（前端轮询用）。
 
     与批量触发 `ai_grade_assignment` 复用**同一套权限判据**
-    （`_check_teacher_assignment_access`：仅本班教师 / 管理员可读），不另写一套。
+    （`_check_teacher_assignment_access`：本班教师或该作业创建者 / 管理员可读），不另写一套。
     纯聚合、无写操作、无外呼，可安全被前端每 2 秒轮询一次。
 
     `finished` 的语义是「**没有在跑的任务了**」（`pending == 0`），而**不是**
@@ -317,7 +362,7 @@ def ai_grade_progress(db: Session, assignment_id: int, user: User) -> dict:
     因此这里如实展示「还有 N 份未批改」，并在 `pending == 0` 时让前端停止轮询。
 
     Raises:
-        HTTPException: 作业不存在 404；非本班教师 403。
+        HTTPException: 作业不存在 404；非本班且非创建者教师 403。
     """
     a = db.get(Assignment, assignment_id)
     if not a:
@@ -337,24 +382,41 @@ def ai_grade_progress(db: Session, assignment_id: int, user: User) -> dict:
 
 
 # ---------------- 作业任务 ----------------
-def list_assignments(db: Session, class_id: int | None, user: User) -> dict:
+def list_assignments(
+    db: Session,
+    class_id: int | None,
+    user: User,
+    page: int | None = None,
+    page_size: int | None = None,
+) -> dict:
     # 学生角色：预取学生档案，用于判断是否已提交
     stu = get_student_by_account(db, user) if user.role == "student" else None
     q = db.query(Assignment)
     if user.role == "student":
         q = q.filter(Assignment.class_id == user.class_id)
     elif user.role == "teacher":
-        # 教师只看自己负责班级的作业
-        q = q.filter(Assignment.class_id.in_(get_teacher_class_ids(db, user.id)))
+        # 教师看自己负责班级的作业，外加**自己创建**的（「创建者保留管理权」）
+        q = q.filter(
+            or_(
+                Assignment.class_id.in_(get_teacher_class_ids(db, user.id)),
+                Assignment.created_by == user.id,
+            )
+        )
     elif class_id:
         q = q.filter(Assignment.class_id == class_id)
 
     # 预加载附件，避免逐行懒加载（N+1）
-    rows = (
-        q.options(selectinload(Assignment.attachments))
-        .order_by(Assignment.created_at.desc(), Assignment.id.desc())
-        .all()
+    q = q.options(selectinload(Assignment.attachments)).order_by(
+        Assignment.created_at.desc(), Assignment.id.desc()
     )
+    if page is not None or page_size is not None:
+        # 分页路径：规范参数（page_size 上限 200，防 `?page_size=100000` 放大查询）
+        page, page_size = normalize_page(page, page_size)
+        rows, total = paginate(db, q, page, page_size)
+    else:
+        # 兼容路径：不传 page/page_size 时保持原全量行为与返回结构不变
+        rows = q.all()
+        total = len(rows)
 
     # 批量查询：班级名 / 创建者名 / 各作业提交数 / 当前学生已提交的作业，消除逐行 db.get 与 count
     assign_ids = [a.id for a in rows]
@@ -399,7 +461,7 @@ def list_assignments(db: Session, class_id: int | None, user: User) -> dict:
         if stu:
             d["my_submitted"] = a.id in my_submitted_ids
         items.append(d)
-    return {"items": items, "total": len(items)}
+    return {"items": items, "total": total}
 
 
 def get_assignment(db: Session, assignment_id: int, user: User) -> dict:
@@ -508,7 +570,13 @@ def delete_assignment(db: Session, assignment_id: int, user: User) -> dict:
 
 
 # ---------------- 作业提交 ----------------
-def list_submissions(db: Session, assignment_id: int, user: User) -> dict:
+def list_submissions(
+    db: Session,
+    assignment_id: int,
+    user: User,
+    page: int | None = None,
+    page_size: int | None = None,
+) -> dict:
     a = db.get(Assignment, assignment_id)
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -520,7 +588,15 @@ def list_submissions(db: Session, assignment_id: int, user: User) -> dict:
         if not stu:
             return {"items": [], "total": 0}
         q = q.filter(Submission.student_id == stu.id)
-    rows = q.order_by(Submission.created_at.desc(), Submission.id.desc()).all()
+    q = q.order_by(Submission.created_at.desc(), Submission.id.desc())
+    if page is not None or page_size is not None:
+        # 分页路径：规范参数（page_size 上限 200，防 `?page_size=100000` 放大查询）
+        page, page_size = normalize_page(page, page_size)
+        rows, total = paginate(db, q, page, page_size)
+    else:
+        # 兼容路径：不传 page/page_size 时保持原全量行为与返回结构不变
+        rows = q.all()
+        total = len(rows)
     # 批量查询，避免 N+1（姓名/学号 + 头像各一次）
     stu_map = batch_student_map(db, [s.student_id for s in rows])
     avatar_map = batch_student_avatar_map(db, [s.student_id for s in rows])
@@ -545,7 +621,7 @@ def list_submissions(db: Session, assignment_id: int, user: User) -> dict:
         d["ai_score"] = ai.get("score")
         d["ai_excellent_candidate"] = ai.get("is_excellent_candidate", False)
         items.append(d)
-    return {"items": items, "total": len(items)}
+    return {"items": items, "total": total}
 
 
 def unsubmitted_students(db: Session, assignment_id: int, user: User) -> dict:

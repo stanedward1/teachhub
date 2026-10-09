@@ -34,14 +34,22 @@ def get_seat(db: Session, user, class_id: int) -> dict:
 def save_seat(db: Session, user, payload: SeatSave) -> dict:
     """保存班级座位表（不存在则新建）。"""
     class_id = payload.class_id
-    ensure_class_operable(db, class_id)
+    # 复用返回的 Classroom 以继承其 school_id
+    classroom = ensure_class_operable(db, class_id)
     if not is_any_admin(user):
         if not is_teacher_class_owner(db, user.id, class_id):
             raise HTTPException(status_code=403, detail="无权修改该班级座位表")
     s = db.query(Seat).filter(Seat.class_id == class_id).first()
     if not s:
-        s = Seat(class_id=class_id)
+        s = Seat(
+            class_id=class_id,
+            # 显式继承父资源（班级）的租户归属，避免超管上下文下 school_id 落 NULL
+            school_id=classroom.school_id,
+        )
         db.add(s)
+    elif s.school_id is None:
+        # 顺带修复历史脏行：school_id 落 NULL 的行在全租户下都不可见
+        s.school_id = classroom.school_id
     s.layout = json.dumps(payload.layout, ensure_ascii=False)
     s.columns = payload.columns
     audit(db, user, "save_seat", target=f"保存座位表")

@@ -11,7 +11,11 @@
     <van-grid :column-num="2" :gutter="12" class="m-grid">
       <van-grid-item icon="clock-o" text="考勤打卡" @click="$router.push('/m/checkin')" />
       <van-grid-item icon="friends-o" text="学生速查" @click="$router.push('/m/students')" />
-      <van-grid-item icon="add-o" text="记表现" @click="$router.push('/m/record?type=performance')" />
+      <van-grid-item
+        icon="add-o"
+        text="记表现"
+        @click="$router.push('/m/record?type=performance')"
+      />
       <van-grid-item icon="chat-o" text="记谈心" @click="$router.push('/m/record?type=talk')" />
       <van-grid-item icon="notes-o" text="请假管理" @click="$router.push('/m/leaves')" />
     </van-grid>

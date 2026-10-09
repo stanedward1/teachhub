@@ -71,7 +71,11 @@ async def request_logging_middleware(request: Request, call_next):
             _http_status_total[str(status_code)] += 1
             for i, bound in enumerate(_HIST_BUCKETS):
                 if elapsed <= bound:
+                    # Prometheus 直方图桶为「增量」语义：只落在**第一个**满足
+                    # `elapsed <= le` 的桶（累计由 render_metrics 在渲染期完成）。
+                    # 若无 break，则每个满足条件的桶都会 +1，渲染再累计 ⇒ 系统性偏大。
                     _http_duration_buckets[request.url.path][i] += 1
+                    break
             if elapsed >= 1.0:
                 _slow_requests_total += 1
         # 慢请求提升到 WARNING，便于日志采集系统快速定位

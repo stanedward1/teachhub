@@ -23,7 +23,9 @@
         />
         <div class="m-rate-label">
           <div>出勤率</div>
-          <div class="m-rate-sub">在籍 {{ summary.student_count }} 人 · 记录 {{ summary.total }} 人次</div>
+          <div class="m-rate-sub">
+            在籍 {{ summary.student_count }} 人 · 记录 {{ summary.total }} 人次
+          </div>
         </div>
       </div>
 
@@ -68,7 +70,7 @@ const statusList = [
   { name: '出勤', color: '#16a34a' },
   { name: '缺勤', color: '#dc2626' },
   { name: '请假', color: '#f59e0b' },
-  { name: '迟到', color: '#2563eb' }
+  { name: '迟到', color: '#2563eb' },
 ]
 
 function fmt(d) {
@@ -99,8 +101,7 @@ async function loadClasses() {
       classId.value = classOptions.value[0].value
       await load()
     }
-  } catch (e) {
-  }
+  } catch (e) {}
 }
 
 async function load() {

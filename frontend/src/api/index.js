@@ -43,7 +43,8 @@ export const homeworkApi = {
   createAssignment: (data) => request.post('/api/homework/assignments', data),
   updateAssignment: (id, data) => request.put(`/api/homework/assignments/${id}`, data),
   deleteAssignment: (id) => request.delete(`/api/homework/assignments/${id}`),
-  submissions: (id) => request.get(`/api/homework/assignments/${id}/submissions`),
+  submissions: (id, params) =>
+    request.get(`/api/homework/assignments/${id}/submissions`, { params }),
   // 未交名单：该作业下发班级中尚未提交的学生
   unsubmitted: (id) => request.get(`/api/homework/assignments/${id}/unsubmitted`),
   submissionDetail: (id) => request.get(`/api/homework/submissions/${id}`),
@@ -68,15 +69,16 @@ export const homeworkApi = {
   // ============ AI 学伴（设计 §4.2）============
   // 学生侧（可写）：提问 / 取历史 / 清空本会话。依赖 require_student，教师不可调用。
   // 注意：ask 无幂等性，重试会再扣 1 次额度（设计 §2.2.2 方案 A）。
-  companionAsk: (id, data) =>
-    request.post(`/api/homework/assignments/${id}/companion/ask`, data),
+  companionAsk: (id, data) => request.post(`/api/homework/assignments/${id}/companion/ask`, data),
   companionHistory: (id) => request.get(`/api/homework/assignments/${id}/companion/history`),
   // 每生独立配额：查询本生今日剩余次数（只读；同学伴开关由后端统一判定）
   companionQuota: (id) => request.get(`/api/homework/assignments/${id}/companion/quota`),
   clearCompanion: (id) => request.delete(`/api/homework/assignments/${id}/companion`),
   // 教师侧（只读，设计 §14.2）：本班学生的学伴会话列表 / 单会话完整消息。
-  companionConversations: (id, params) =>
-    request.get(`/api/homework/assignments/${id}/companion/conversations`, { params }),
+  // 🔴 会话列表是纯附加信息：调用方（AssignmentSubmissions）已按失败降级为空处理，
+  // 故允许传 `_silent: true` 抑制全局拦截器的错误弹窗（避免噪音）。
+  companionConversations: (id, params, config = {}) =>
+    request.get(`/api/homework/assignments/${id}/companion/conversations`, { params, ...config }),
   companionConversationDetail: (conversationId) =>
     request.get(`/api/homework/companion/conversations/${conversationId}`),
 }
@@ -156,9 +158,10 @@ export const resourceApi = {
 
 export const examApi = {
   list: (params) => request.get('/api/exams', { params }),
-  upload: (formData) =>
+  upload: (formData, params = {}) =>
     request.post('/api/exams/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      params,
     }),
   update: (id, data) => request.put(`/api/exams/${id}`, data),
   download: (id) => request.get(`/api/exams/${id}/download`, { responseType: 'blob' }),
@@ -192,6 +195,7 @@ export const planApi = {
 export const scheduleApi = {
   list: (params) => request.get('/api/schedules', { params }),
   create: (data) => request.post('/api/schedules', data),
+  update: (id, data) => request.put(`/api/schedules/${id}`, data),
   remove: (id) => request.delete(`/api/schedules/${id}`),
 }
 

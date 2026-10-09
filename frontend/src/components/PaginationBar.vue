@@ -25,7 +25,7 @@ defineProps({
   total: { type: Number, default: 0 },
   page: { type: Number, default: 1 },
   pageSize: { type: Number, default: 20 },
-  sizeOptions: { type: Array, default: () => [20, 50, 100] }
+  sizeOptions: { type: Array, default: () => [20, 50, 100] },
 })
 
 const emit = defineEmits(['update:page', 'update:pageSize', 'change'])

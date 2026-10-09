@@ -5,5 +5,5 @@ export const mobileApi = {
   // 学生速查列表（精简字段，默认排除退学）
   students: (params) => request.get('/api/mobile/students', { params }),
   // 学生画像概览
-  overview: (id) => request.get(`/api/mobile/students/${id}/overview`)
+  overview: (id) => request.get(`/api/mobile/students/${id}/overview`),
 }

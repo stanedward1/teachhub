@@ -8,7 +8,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
 const props = defineProps({
-  content: { type: String, default: '' }
+  content: { type: String, default: '' },
 })
 
 const html = computed(() => {

@@ -5,7 +5,7 @@
 
     <div class="page-card" style="max-width: 520px">
       <!-- 头像区域 -->
-      <div style="text-align: center; margin-bottom: 24px;">
+      <div style="text-align: center; margin-bottom: 24px">
         <el-upload
           :show-file-list="false"
           :before-upload="beforeAvatarUpload"
@@ -15,11 +15,13 @@
           <el-avatar :size="80" :src="avatarUrl" class="avatar-upload">
             {{ user?.name?.[0] }}
           </el-avatar>
-          <div style="margin-top: 8px; color: var(--text-tertiary); font-size: 12px; cursor: pointer;">
+          <div
+            style="margin-top: 8px; color: var(--text-tertiary); font-size: 12px; cursor: pointer"
+          >
             点击更换头像
           </div>
         </el-upload>
-        <div style="color: var(--text-tertiary); font-size: 11px; margin-top: 4px;">
+        <div style="color: var(--text-tertiary); font-size: 11px; margin-top: 4px">
           支持 JPG/PNG/GIF/WebP，不超过 2MB
         </div>
       </div>
@@ -52,16 +54,23 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed } from 'vue'
+import { reactive, ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { authApi } from '../../api'
-import { getUser, setAuth } from '../../utils/auth'
+import { getUser, setAuth, getToken } from '../../utils/auth'
 
 const user = computed(() => getUser())
-const avatarUrl = computed(() => user.value?.avatar || '')
+// 头像展示的响应式来源：getUser() 只读 localStorage、不具响应性，
+// 更换头像后必须靠本地 ref 立即刷新界面（原 computed 依赖不到任何响应式源、永久缓存）
+const avatarSrc = ref('')
+const avatarUrl = computed(() => avatarSrc.value || user.value?.avatar || '')
 const pwd = reactive({ old_password: '', new_password: '' })
 const loading = ref(false)
 const avatarLoading = ref(false)
+
+onMounted(() => {
+  avatarSrc.value = getUser()?.avatar || ''
+})
 
 function beforeAvatarUpload(file) {
   const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
@@ -86,11 +95,12 @@ async function handleAvatarUpload(options) {
     const current = getUser()
     if (current) {
       current.avatar = res.avatar
-      const token = localStorage.getItem('token')
+      const token = getToken()
       if (token) {
         setAuth(token, current)
       }
     }
+    if (res.avatar) avatarSrc.value = res.avatar
     ElMessage.success('头像更新成功')
   } catch (e) {
   } finally {

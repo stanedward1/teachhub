@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     #   SQLite:     sqlite:///./teachhub.db
     #   PostgreSQL: postgresql://user:pass@localhost:5432/teachhub
     DATABASE_URL: str = "mysql+pymysql://root:root@127.0.0.1:3306/teachhub?charset=utf8mb4"
+    # 慢 SQL 日志阈值（秒）：单条语句执行耗时超过该值记 WARNING（见 app/database.py 的事件监听）
+    SLOW_SQL_THRESHOLD_SECONDS: float = 1.0
     UPLOAD_DIR: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
     # 头像存储目录：统一派生自 UPLOAD_DIR，避免「avatars」在三处硬编码。
     # 注意：这是磁盘路径，与前端访问的 URL 前缀「/uploads/avatars/」无关。
@@ -102,6 +104,13 @@ class Settings(BaseSettings):
     AI_THINKING_MODE: str = "disabled"
     # 思考强度：下发 ``reasoning_effort``（low/high/max）；空串 = 不发送，交由服务商默认。
     AI_REASONING_EFFORT: str = ""
+    # 思考控制字段（``thinking`` / ``reasoning_effort``）的**下发白名单**：
+    # 逗号分隔的 base_url 关键词（大小写不敏感，忽略空段）。这些是 DeepSeek 风格的
+    # 专有字段，对不支持的 OpenAI 兼容端点发未知 body 字段可能直接 400，因此
+    # **只对白名单内的端点下发**（不做自动能力探测——探测一次即一次真实外呼）。
+    # 缺省仅 ``deepseek``，与白名单化之前的行为逐字一致；其他同样采用该字段形态的
+    # 端点（如智谱 GLM）由运维把关键词追加进来即可，无需改代码、不新增 UI/DB 设置。
+    AI_THINKING_HOST_KEYWORDS: str = "deepseek"
     # 截断重试时单次 max_tokens 的上限，防止重试把成本放大到不可控。
     AI_MAX_TOKENS_CEILING: int = 8192
     # 送入模型的输入字符上限（作业要求 + 正文 + 附件合并后截断）
@@ -166,7 +175,7 @@ class Settings(BaseSettings):
     # 限流是**按客户端 IP 计数**的。校园网 / 机房 / 企业出口普遍是 NAT 共享 IP，
     # 几十上百名师生从同一 IP 登录会互相挤占配额 —— 阈值定得太小，第六个登录的人
     # 就会收到 429「操作过于频繁」。因此这里把阈值放宽到「一个人一天正常操作也远远
-    # 用不完」的量级；防爆破的主力仍是**账号维度**的失败锁定（5 次错口令锁 15 分钟，
+    # 用不完」的量级；防爆破的主力仍是**账号维度**的失败锁定（15 次错口令锁 15 分钟，
     # 见 auth_service.MAX_FAILED_ATTEMPTS），IP 限流只兜底「同一出口高频轮询」。
     # 这些值均可通过环境变量覆盖，部署到不同规模的环境时无需改代码。
     AUTH_LOGIN_RATE_LIMIT: str = "30/minute"       # 登录

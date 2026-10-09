@@ -63,9 +63,26 @@ const refreshClient = axios.create({
 // 场景：用户快速连续点击、搜索框输入抖动等导致的重复 GET/POST。
 const pending = new Map()
 
+// multipart（FormData）请求的唯一键序号：见 genKey 内说明
+let multipartSeq = 0
+
 function genKey(config) {
+  // 🔴 幂等：同一 config 的键只算一次并缓存。FormData 分支含自增序号（非幂等），
+  // 而本函数一次请求会被调用 **3 次**（请求拦截器的 removePending + pending.set，
+  // 响应拦截器的 removePending）——若不缓存，存入的键永远匹配不到清理时的键，
+  // `pending` 条目会逐次泄漏（直到路由切换的 abortAllPending 才回收）。
+  if (config._pendingKey) return config._pendingKey
   const { method, url, params, data } = config
-  return [method, url, JSON.stringify(params || {}), JSON.stringify(data || {})].join('&')
+  // FormData（文件上传）不可序列化：JSON.stringify(FormData) 恒为 "{}"，
+  // 会让「同一 URL 的并发 multipart 请求」产生相同 key 而互相 abort
+  // （多附件上传时只剩最后一个）。故对 multipart 用唯一键，不做并发去重；
+  // 防重复提交由业务自身的 loading/禁用态负责。
+  const key =
+    typeof FormData !== 'undefined' && data instanceof FormData
+      ? [method, url, 'multipart', ++multipartSeq].join('&')
+      : [method, url, JSON.stringify(params || {}), JSON.stringify(data || {})].join('&')
+  config._pendingKey = key
+  return key
 }
 
 // 下载类请求（responseType: 'blob'）不随路由切换取消：
@@ -74,12 +91,18 @@ function isDownloadRequest(config) {
   return config?.responseType === 'blob'
 }
 
+// 每个请求的唯一身份号：用于判断「调用方是否仍是该占位的主人」（见 removePending）
+let pendingSeq = 0
+
 function removePending(config) {
   const key = genKey(config)
-  if (pending.has(key)) {
-    pending.get(key).controller.abort()
-    pending.delete(key)
-  }
+  const item = pending.get(key)
+  if (!item) return
+  // 仅当调用方仍是该占位的主人时才回收：否则「被顶替的前一个请求」在取消回调里
+  // 会误伤已顶替注册的后一个请求（同 key 双击 ⇒ 两次请求一起被取消）。
+  if (config._pendingId != null && item.id !== config._pendingId) return
+  item.controller.abort()
+  pending.delete(key)
 }
 
 request.interceptors.request.use((config) => {
@@ -87,10 +110,16 @@ request.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  // 此刻 config 尚无 _pendingId ⇒ 无条件清理同 key 的上一个占位
   removePending(config)
   const controller = new AbortController()
+  config._pendingId = ++pendingSeq
   config.signal = controller.signal
-  pending.set(genKey(config), { controller, keep: isDownloadRequest(config) })
+  pending.set(genKey(config), {
+    controller,
+    id: config._pendingId,
+    keep: isDownloadRequest(config),
+  })
   return config
 })
 
@@ -208,7 +237,10 @@ request.interceptors.response.use(
     }
     // 网络层错误（超时、断网、跨域等），无 response
     if (!error.response) {
-      notifyError(error.code === 'ECONNABORTED' ? '请求超时，请重试' : '网络异常，请检查网络连接', error.config)
+      notifyError(
+        error.code === 'ECONNABORTED' ? '请求超时，请重试' : '网络异常，请检查网络连接',
+        error.config
+      )
       return Promise.reject(error)
     }
     const detail = error.response?.data?.detail

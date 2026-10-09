@@ -5,14 +5,30 @@
     </van-dropdown-menu>
 
     <van-cell-group inset style="margin-top: 8px">
-      <van-field :model-value="date" readonly is-link label="日期" placeholder="选择日期" @click="showCalendar = true" />
-      <van-cell title="出勤率统计" is-link icon="bar-chart-o" @click="$router.push('/m/attendance-stats')" />
+      <van-field
+        :model-value="date"
+        readonly
+        is-link
+        label="日期"
+        placeholder="选择日期"
+        @click="showCalendar = true"
+      />
+      <van-cell
+        title="出勤率统计"
+        is-link
+        icon="bar-chart-o"
+        @click="$router.push('/m/attendance-stats')"
+      />
     </van-cell-group>
 
     <!-- 快捷操作：默认全员出勤，只标异常 -->
     <div class="m-quick" v-if="students.length">
-      <van-button size="small" type="primary" plain icon="completed" @click="markAllPresent">全员出勤</van-button>
-      <van-button size="small" type="warning" plain icon="refresh" @click="markAllAbsent">全员缺勤</van-button>
+      <van-button size="small" type="primary" plain icon="completed" @click="markAllPresent"
+        >全员出勤</van-button
+      >
+      <van-button size="small" type="warning" plain icon="refresh" @click="markAllAbsent"
+        >全员缺勤</van-button
+      >
       <span class="m-quick-tip">默认出勤，只点异常学生</span>
     </div>
 
@@ -69,12 +85,7 @@ const showCalendar = ref(false)
 
 const showAction = ref(false)
 const currentStudent = ref(null)
-const statusActions = [
-  { name: '出勤' },
-  { name: '缺勤' },
-  { name: '请假' },
-  { name: '迟到' }
-]
+const statusActions = [{ name: '出勤' }, { name: '缺勤' }, { name: '请假' }, { name: '迟到' }]
 
 const statusCounts = computed(() => {
   const map = { 出勤: 0, 缺勤: 0, 请假: 0, 迟到: 0 }
@@ -103,8 +114,7 @@ async function loadClasses() {
       classId.value = classOptions.value[0].value
       await load()
     }
-  } catch (e) {
-  }
+  } catch (e) {}
 }
 
 async function load() {
@@ -121,13 +131,17 @@ async function load() {
 
 // 一键全员出勤
 function markAllPresent() {
-  students.value.forEach((s) => { s.status = '出勤' })
+  students.value.forEach((s) => {
+    s.status = '出勤'
+  })
   showToast('已设为全员出勤')
 }
 
 // 一键全员缺勤（用于反选：先全缺勤，再把到校的标成出勤）
 function markAllAbsent() {
-  students.value.forEach((s) => { s.status = '缺勤' })
+  students.value.forEach((s) => {
+    s.status = '缺勤'
+  })
   showToast('已设为全员缺勤，请点选到校学生')
 }
 

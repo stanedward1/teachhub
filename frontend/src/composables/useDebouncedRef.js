@@ -1,4 +1,4 @@
-import { customRef } from 'vue'
+import { customRef, onScopeDispose } from 'vue'
 
 /**
  * 自定义 ref：对 set 做防抖（默认 300ms）。
@@ -11,6 +11,13 @@ export function useDebouncedRef(value, delay = 300) {
   return customRef((track, trigger) => {
     let val = value
     let timer = null
+    // 组件卸载 / effect scope 停止时清理未触发的防抖定时器，避免卸载后回调仍执行
+    onScopeDispose(() => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+    })
     return {
       get() {
         track()
@@ -20,7 +27,7 @@ export function useDebouncedRef(value, delay = 300) {
         val = newValue
         if (timer) clearTimeout(timer)
         timer = setTimeout(trigger, delay)
-      }
+      },
     }
   })
 }

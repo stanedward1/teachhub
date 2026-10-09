@@ -15,7 +15,7 @@ class Score(Base):
     subject = Column(String(50), nullable=False, index=True)
     score = Column(Float, nullable=False)
     exam_name = Column(String(100), index=True)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
 class Leave(Base):
@@ -31,7 +31,7 @@ class Leave(Base):
     end_date = Column(Date)
     status = Column(String(20), default="登记")  # 登记 / 已销假
     image = Column(String(500))
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
 class Communication(Base):
@@ -165,7 +165,7 @@ class StudentBoardHistory(Base):
     old_type = Column(String(20))  # day / boarding
     new_type = Column(String(20), nullable=False)
     changed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
 class Attendance(Base):

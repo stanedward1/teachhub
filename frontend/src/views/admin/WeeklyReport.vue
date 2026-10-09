@@ -297,7 +297,11 @@ function viewReport(row) {
 }
 
 async function deleteReport(row) {
-  await ElMessageBox.confirm(`确定删除报告「${row.title}」吗？`, '提示', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(`确定删除报告「${row.title}」吗？`, '提示', { type: 'warning' })
+  } catch {
+    return // 用户取消确认框：静默返回，不弹任何提示
+  }
   await reportApi.remove(row.id)
   ElMessage.success('删除成功')
   loadHistory()

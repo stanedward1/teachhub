@@ -1,6 +1,6 @@
 # TeachHub 数据库 ER 图
 
-> 更新：2026-10-01 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：43 张 ｜ 外键：83 个（模型定义口径，实测：CASCADE 22 / SET NULL 2 / 未显式设置（默认 RESTRICT 语义）59）｜ 迁移：34 个 revision（线性单链，head `f8a9b0c1d2e3`）
+> 更新：2026-10-01 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：43 张 ｜ 外键：83 个（模型定义口径，实测：CASCADE 22 / SET NULL 2 / 未显式设置（默认 RESTRICT 语义）59）｜ 迁移：35 个 revision（线性单链，head `b7c8d9e0f1a2`）
 
 ## 一、实体关系总览（Mermaid）
 

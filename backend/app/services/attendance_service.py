@@ -53,17 +53,27 @@ def checkin(db: Session, user: User, payload: AttendanceCheckin) -> dict:
     except ValueError:
         raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD")
 
-    # 毕业班级不可再点名
-    ensure_class_operable(db, class_id)
+    # 毕业班级不可再点名（复用返回的 Classroom 以继承其 school_id）
+    classroom = ensure_class_operable(db, class_id)
     if not is_any_admin(user) and not is_teacher_class_owner(db, user.id, class_id):
         raise HTTPException(status_code=403, detail="无权为该班级点名")
+
+    # 先剔除状态非法的记录，再按 student_id 去重（保留首次出现）：
+    # - 若先按 student_id 去重，同一学生「首条状态非法 + 次条合法」时会把整组丢掉
+    #   （合法状态被一并丢弃）；先过滤可保证合法条目不因非法首条而丢失。
+    # - database.py 配置 autoflush=False，循环内 `db.query(Attendance)...first()` 看不到本轮
+    #   刚 `db.add` 的未 flush 行 ⇒ 同一 payload 里重复的 student_id 会被插两行，
+    #   commit 时撞 uq_attendance_student_date → 409。去重后语义为「同生取首条状态」。
+    records = [r for r in records if r.status in ATTENDANCE_STATUS]
+    deduped: dict[int, object] = {}
+    for r in records:
+        deduped.setdefault(r.student_id, r)
+    records = list(deduped.values())
 
     saved = 0
     for r in records:
         student_id = r.student_id
         status = r.status
-        if status not in ATTENDANCE_STATUS:
-            continue
         # 仅接受本班在籍学生
         student = db.get(Student, student_id)
         if not student or student.class_id != class_id or student.is_dropped_out:
@@ -80,8 +90,18 @@ def checkin(db: Session, user: User, payload: AttendanceCheckin) -> dict:
         )
         if existing:
             existing.status = status
+            # 顺带修复历史脏行：school_id 落 NULL 的行在全租户下都不可见
+            if existing.school_id is None:
+                existing.school_id = classroom.school_id
         else:
-            db.add(Attendance(class_id=class_id, student_id=student_id, date=date, status=status))
+            db.add(Attendance(
+                class_id=class_id,
+                student_id=student_id,
+                date=date,
+                status=status,
+                # 显式继承父资源（班级）的租户归属，避免超管上下文下 school_id 落 NULL
+                school_id=classroom.school_id,
+            ))
         saved += 1
 
     audit(db, user, "attendance_checkin", target=f"班级#{class_id} {date} 考勤点名", class_id=class_id, detail=f"记录 {saved} 条")

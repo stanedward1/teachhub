@@ -76,9 +76,10 @@
 
     <el-dialog v-model="dialog" :title="editing ? '编辑请假' : '登记请假'" width="460px">
       <el-form label-width="80px">
-        <el-form-item label="学生" required
-          ><StudentSelect v-model="form.student_id" show-class-filter
-        /></el-form-item>
+        <el-form-item label="学生" required>
+          <!-- 编辑态不可改学生：后端 LeaveUpdate 无 student_id，改了静默无效 -->
+          <StudentSelect v-model="form.student_id" show-class-filter :disabled="!!editing" />
+        </el-form-item>
         <el-form-item label="事由"><el-input v-model="form.reason" /></el-form-item>
         <el-form-item label="开始日期"
           ><el-date-picker
@@ -124,6 +125,8 @@ const classId = ref(null)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
+// 销假的重入锁：防止双击重复写库（进入即置位、finally 复位）
+const finishing = ref(false)
 const form = reactive({ student_id: null, reason: '', start_date: '', end_date: '' })
 const {
   items: rawItems,
@@ -165,7 +168,13 @@ function openCreate() {
 
 function openEdit(row) {
   editing.value = row
-  Object.assign(form, row)
+  // 只拷贝表单声明的字段，避免整行的 status / student_name 等额外键动态注入 reactive
+  Object.assign(form, {
+    student_id: row.student_id,
+    reason: row.reason,
+    start_date: row.start_date,
+    end_date: row.end_date,
+  })
   dialog.value = true
 }
 
@@ -173,8 +182,17 @@ async function save() {
   if (!form.student_id) return ElMessage.warning('请选择学生')
   saving.value = true
   try {
-    if (editing.value) await leaveApi.update(editing.value.id, form)
-    else await leaveApi.create(form)
+    // 显式构造载荷：openEdit 的 Object.assign(form, row) 会把 row 的 status 等键
+    // 动态注入 reactive；若整个 form 直接提交，"编辑已销假后再登记请假"会残留
+    // status="已销假" 被后端 LeaveCreate.status 接收、把新记录写成已销假。
+    const payload = {
+      student_id: form.student_id,
+      reason: form.reason,
+      start_date: form.start_date,
+      end_date: form.end_date,
+    }
+    if (editing.value) await leaveApi.update(editing.value.id, payload)
+    else await leaveApi.create(payload)
     ElMessage.success('保存成功')
     dialog.value = false
     load()
@@ -185,8 +203,14 @@ async function save() {
 }
 
 async function finish(row) {
-  await leaveApi.update(row.id, { status: '已销假' })
-  ElMessage.success('已销假')
-  load()
+  if (finishing.value) return // 防双击：写入在途时忽略重复触发
+  finishing.value = true
+  try {
+    await leaveApi.update(row.id, { status: '已销假' })
+    ElMessage.success('已销假')
+    load()
+  } finally {
+    finishing.value = false
+  }
 }
 </script>

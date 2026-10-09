@@ -47,6 +47,11 @@
 
     <el-dialog v-model="dialog" title="上传资源" width="460px">
       <el-form label-width="80px">
+        <el-form-item v-if="isPlatformAdminUser" label="学校" required>
+          <el-select v-model="form.school_id" filterable placeholder="选择学校" style="width: 100%">
+            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="名称" required><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="分类">
           <el-select v-model="form.category" style="width: 100%">
@@ -83,13 +88,17 @@ import SortBar from '../../components/SortBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
 import { useCrudList } from '../../composables/useCrudList'
-import { resourceApi, uploadFile } from '../../api'
+import { resourceApi, schoolApi, uploadFile } from '../../api'
+import { isPlatformAdmin } from '../../utils/auth'
 
 const { order, useSorted } = useSort('resources')
 const keyword = useDebouncedRef('', 300)
 const dialog = ref(false)
 const saving = ref(false)
-const form = reactive({ name: '', category: '课件', filename: '', filepath: '' })
+// 平台超管：资源表无父资源可继承 school_id，创建时须显式选校（非超管不渲染该项、不下发）
+const isPlatformAdminUser = isPlatformAdmin()
+const schools = ref([])
+const form = reactive({ name: '', category: '课件', filename: '', filepath: '', school_id: null })
 const {
   items: rawItems,
   loading,
@@ -108,8 +117,25 @@ watch(keyword, reload)
 onMounted(load)
 
 function openCreate() {
-  Object.assign(form, { name: '', category: '课件', filename: '', filepath: '' })
+  Object.assign(form, {
+    name: '',
+    category: '课件',
+    filename: '',
+    filepath: '',
+    school_id: null,
+  })
+  if (isPlatformAdminUser) loadSchools()
   dialog.value = true
+}
+
+// 超管创建时拉取学校列表；返回结构为 { items: [...], total }（见 students_service.list_schools）
+async function loadSchools() {
+  try {
+    const res = await schoolApi.list()
+    schools.value = res.items || []
+  } catch (e) {
+    // 加载失败：下拉为空，提交时会被「请选择学校」拦截；错误提示由全局拦截器统一处理
+  }
 }
 
 async function doUpload({ file }) {
@@ -121,9 +147,18 @@ async function doUpload({ file }) {
 
 async function save() {
   if (!form.name) return ElMessage.warning('请填写资源名称')
+  if (isPlatformAdminUser && !form.school_id) return ElMessage.warning('请选择学校')
   saving.value = true
   try {
-    await resourceApi.create(form)
+    // 显式构造载荷：仅超管下发 school_id；教师/校管不下发，后端按其 user.school_id 归属
+    const payload = {
+      name: form.name,
+      category: form.category,
+      filename: form.filename,
+      filepath: form.filepath,
+    }
+    if (isPlatformAdminUser) payload.school_id = form.school_id
+    await resourceApi.create(payload)
     ElMessage.success('保存成功')
     dialog.value = false
     load()

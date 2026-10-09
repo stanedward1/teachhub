@@ -204,11 +204,15 @@ def score_analysis(
 
 def create_score(db: Session, user, payload: ScoreCreate) -> dict:
     """新增成绩。"""
-    ensure_student_operable(db, payload.student_id)
+    # 复用返回的 Student 以继承其 school_id（父资源租户归属）
+    student = ensure_student_operable(db, payload.student_id)
     if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload.student_id):
         raise HTTPException(status_code=403, detail="无权为该学生创建成绩")
     s = Score(
         student_id=payload.student_id,
+        # 显式继承学生档案的租户归属：超管（school_id=None）上下文下 before_flush 不回填，
+        # 落 NULL 会导致该行对所有租户都不可见。
+        school_id=student.school_id,
         subject=payload.subject,
         score=payload.score,
         exam_name=payload.exam_name,
@@ -383,6 +387,8 @@ def import_scores(db: Session, user, file) -> dict:
 
         session.add(Score(
             student_id=student.id,
+            # 同上：显式继承学生档案租户，避免超管上下文下 school_id 落 NULL
+            school_id=student.school_id,
             subject=data["subject"],
             score=float(data["score"]),
             exam_name=data["exam_name"],

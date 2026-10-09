@@ -114,8 +114,9 @@
               <el-radio value="off">关闭</el-radio>
             </el-radio-group>
             <div class="ai-hint">
-              平台当前：{{ aiPlatform.grading_enabled ? '开启' : '关闭' }}（平台级，前往「平台设置」修改）。
-              「跟随平台」= 不单独设置，随平台总闸变化。
+              平台当前：{{
+                aiPlatform.grading_enabled ? '开启' : '关闭'
+              }}（平台级，前往「平台设置」修改）。 「跟随平台」= 不单独设置，随平台总闸变化。
             </div>
           </el-form-item>
           <el-form-item label="每日调用次数上限（额度池）">
@@ -133,8 +134,9 @@
             />
             <div class="ai-hint">
               平台池当前：{{ aiPlatform.grading_daily_limit }} 次/日；本校今日已用
-              {{ aiUsage.grading?.used ?? 0 }} 次（校级生效上限：{{ aiUsage.grading?.school_limit ?? '不限' }}）。
-              0 表示今日完全停用；「不限」= 不设校级额度池，仅受平台池约束。
+              {{ aiUsage.grading?.used ?? 0 }} 次（校级生效上限：{{
+                aiUsage.grading?.school_limit ?? '不限'
+              }}）。 0 表示今日完全停用；「不限」= 不设校级额度池，仅受平台池约束。
             </div>
           </el-form-item>
         </el-form>
@@ -149,8 +151,9 @@
               <el-radio value="off">关闭</el-radio>
             </el-radio-group>
             <div class="ai-hint">
-              平台当前：{{ aiPlatform.companion_enabled ? '开启' : '关闭' }}（平台级，前往「平台设置」修改）。
-              「跟随平台」= 不单独设置，随平台总闸变化。
+              平台当前：{{
+                aiPlatform.companion_enabled ? '开启' : '关闭'
+              }}（平台级，前往「平台设置」修改）。 「跟随平台」= 不单独设置，随平台总闸变化。
             </div>
           </el-form-item>
           <el-form-item label="每日调用次数上限（额度池）">
@@ -168,8 +171,9 @@
             />
             <div class="ai-hint">
               平台池当前：{{ aiPlatform.companion_daily_limit }} 次/日；本校今日已用
-              {{ aiUsage.companion?.used ?? 0 }} 次（校级生效上限：{{ aiUsage.companion?.school_limit ?? '不限' }}）。
-              0 表示今日完全停用；「不限」= 不设校级额度池，仅受平台池约束。
+              {{ aiUsage.companion?.used ?? 0 }} 次（校级生效上限：{{
+                aiUsage.companion?.school_limit ?? '不限'
+              }}）。 0 表示今日完全停用；「不限」= 不设校级额度池，仅受平台池约束。
             </div>
           </el-form-item>
         </el-form>
@@ -190,6 +194,8 @@ import { useCrudList } from '../../composables/useCrudList'
 import { schoolApi, adminApi } from '../../api'
 
 const saving = ref(false)
+// 启用/停用学校的状态锁：防双击造成重复切换（写入在途时忽略重复触发）
+const togglingStatus = ref(false)
 const overview = ref({})
 const dialogVisible = ref(false)
 const isEdit = ref(false)
@@ -262,18 +268,28 @@ async function saveSchool() {
 }
 
 async function toggleStatus(row) {
-  const next = row.status === 'active' ? 'disabled' : 'active'
-  await schoolApi.setStatus(row.id, next)
-  ElMessage.success(next === 'active' ? '已启用' : '已停用')
-  load()
+  if (togglingStatus.value) return // 防双击：写入在途时忽略重复触发
+  togglingStatus.value = true
+  try {
+    const next = row.status === 'active' ? 'disabled' : 'active'
+    await schoolApi.setStatus(row.id, next)
+    ElMessage.success(next === 'active' ? '已启用' : '已停用')
+    load()
+  } finally {
+    togglingStatus.value = false
+  }
 }
 
 async function removeSchool(row) {
-  await ElMessageBox.confirm(
-    `确定删除学校「${row.name}」吗？该校若有班级数据将无法删除。`,
-    '删除确认',
-    { type: 'warning' }
-  )
+  try {
+    await ElMessageBox.confirm(
+      `确定删除学校「${row.name}」吗？该校若有班级数据将无法删除。`,
+      '删除确认',
+      { type: 'warning' }
+    )
+  } catch {
+    return // 用户取消确认框：静默返回，不弹任何提示
+  }
   await schoolApi.remove(row.id)
   ElMessage.success('已删除')
   load()
@@ -333,7 +349,9 @@ function buildAiPayload() {
   return {
     grading_enabled: aiForm.grading_enabled === 'follow' ? null : aiForm.grading_enabled === 'on',
     grading_daily_limit:
-      aiForm.grading_limit_mode === 'follow' ? null : Math.trunc(Number(aiForm.grading_daily_limit) || 0),
+      aiForm.grading_limit_mode === 'follow'
+        ? null
+        : Math.trunc(Number(aiForm.grading_daily_limit) || 0),
     companion_enabled:
       aiForm.companion_enabled === 'follow' ? null : aiForm.companion_enabled === 'on',
     companion_daily_limit:

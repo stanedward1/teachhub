@@ -52,7 +52,7 @@ async function save() {
   try {
     await authApi.changePassword({
       old_password: old_password.value,
-      new_password: new_password.value
+      new_password: new_password.value,
     })
     // 改密后清除强制改密标记
     setAuth(getToken(), { ...getUser(), must_change_password: false })

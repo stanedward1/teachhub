@@ -74,6 +74,28 @@ class AiCredentialSetting(BaseModel):
     enabled: bool = Field(True, description="该凭证是否启用")
 
 
+class AiCredentialTestSetting(BaseModel):
+    """AI 凭证**连通性测试**请求体（全部可选；仅 `/admin/platform/ai-credential/test` 使用）。
+
+    与保存用的 `AiCredentialSetting` **字段同名、`max_length` 同约束**，但**全部可省**：
+    - `base_url` + `model` **同时非空** ⇒ 走「未保存配置试连」（必须自带 `api_key`，
+      绝不把已保存密钥发往自定义地址 —— 防密钥外泄 / SSRF）；
+    - 全省略（``{}`` / ``null`` / 无 body）⇒ 回退**已保存**凭证。
+
+    🔴 保存用的 `AiCredentialSetting` **必填校验一个字不改**：`PUT .../ai-credential`
+    传 ``{}`` 仍必须 422（否则保存路径会被「无 base_url/model」的脏数据击穿）。
+    ⚠️ 本 schema **不带** `min_length=1`：空串按「未提供」处理（由 service 的
+    `.strip()` 判定），而不是 422 —— 测试端点的语义是「省略即回退」，不是「校验」。
+    """
+
+    provider: str | None = Field(None, max_length=50, description="服务商标识（测试场景不使用）")
+    base_url: str | None = Field(None, max_length=255, description="服务地址；留空则测试已保存凭证")
+    model: str | None = Field(None, max_length=100, description="模型名；留空则用已保存凭证")
+    api_key: str | None = Field(None, max_length=500, description="API Key；自定义地址必须自带")
+    vision_enabled: bool | None = Field(None, description="与保存体同名（测试场景不使用）")
+    enabled: bool | None = Field(None, description="与保存体同名（测试场景不使用）")
+
+
 class AiGradingSetting(BaseModel):
     """平台级 AI 批改 / 学伴开关请求体（平台超管）。
 
@@ -220,6 +242,8 @@ class StudentUpdate(BaseModel):
 class WorkLogCreate(BaseModel):
     date: str | None = None
     content: str = ""
+    # 学校级归属：平台超管必须显式指定；教师/校管由服务层忽略并取自身 school_id
+    school_id: int | None = Field(None, description="归属学校 ID（仅平台超管需要）")
 
 
 class ReturnRecordCreate(BaseModel):
@@ -265,6 +289,8 @@ class ResourceCreate(BaseModel):
     category: str = Field("其他", max_length=50)
     filename: str | None = None
     filepath: str | None = None
+    # 学校级实体归属：平台超管必须显式指定；教师/校管由服务层忽略并取自身 school_id
+    school_id: int | None = Field(None, description="归属学校 ID（仅平台超管需要）")
 
 
 # ============ 试卷 ============

@@ -110,7 +110,12 @@
           label="所属学校"
           required
         >
-          <el-select v-model="form.school_id" placeholder="请选择学校" style="width: 100%">
+          <el-select
+            v-model="form.school_id"
+            placeholder="请选择学校"
+            style="width: 100%"
+            :disabled="!!editing"
+          >
             <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
         </el-form-item>
@@ -272,9 +277,13 @@ async function save() {
 }
 
 async function resetPwd(row) {
-  await ElMessageBox.confirm(`确定将「${row.name}」的密码重置为 123456 吗？`, '提示', {
-    type: 'warning',
-  })
+  try {
+    await ElMessageBox.confirm(`确定将「${row.name}」的密码重置为 123456 吗？`, '提示', {
+      type: 'warning',
+    })
+  } catch {
+    return // 用户取消确认框：静默返回，不弹任何提示
+  }
   await adminApi.resetPassword(row.id, { password: '123456' })
   ElMessage.success('密码已重置为 123456')
 }

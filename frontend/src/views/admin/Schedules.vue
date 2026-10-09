@@ -91,7 +91,7 @@ const { items, loading, error, load, reload } = useCrudList(
     delete rest.page_size
     return scheduleApi.list(rest).then((r) => ({ items: r.items, total: r.items.length }))
   },
-  { buildParams: () => ({ class_id: classId.value }) },
+  { buildParams: () => ({ class_id: classId.value }) }
 )
 
 onMounted(async () => {
@@ -125,10 +125,12 @@ function openEdit(c) {
 async function save() {
   saving.value = true
   try {
+    // 编辑走 PUT 原位更新：不再「先删后建」，避免删除成功但创建失败时课表直接消失
     if (editing.value) {
-      await scheduleApi.remove(editing.value.id)
+      await scheduleApi.update(editing.value.id, { ...form, class_id: classId.value })
+    } else {
+      await scheduleApi.create({ ...form, class_id: classId.value })
     }
-    await scheduleApi.create({ ...form, class_id: classId.value })
     ElMessage.success('保存成功')
     dialog.value = false
     load()

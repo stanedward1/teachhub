@@ -30,12 +30,7 @@
                 size="large"
                 style="width: 100%"
               >
-                <el-option
-                  v-for="c in classes"
-                  :key="c.id"
-                  :label="classLabel(c)"
-                  :value="c.id"
-                />
+                <el-option v-for="c in classes" :key="c.id" :label="classLabel(c)" :value="c.id" />
               </el-select>
             </el-form-item>
             <el-form-item>
@@ -72,12 +67,7 @@
                 size="large"
                 style="width: 100%"
               >
-                <el-option
-                  v-for="c in classes"
-                  :key="c.id"
-                  :label="classLabel(c)"
-                  :value="c.id"
-                />
+                <el-option v-for="c in classes" :key="c.id" :label="classLabel(c)" :value="c.id" />
               </el-select>
             </el-form-item>
             <el-form-item>

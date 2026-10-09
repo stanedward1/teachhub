@@ -35,11 +35,13 @@
         <span class="ps-label">积分变动</span>
       </div>
       <div class="ps-item">
-        <span class="ps-value" style="color: #67c23a">{{ signed(summary.positive) }}</span>
+        <span class="ps-value" style="color: var(--el-color-success)">{{
+          signed(summary.positive)
+        }}</span>
         <span class="ps-label">累计加分</span>
       </div>
       <div class="ps-item">
-        <span class="ps-value" style="color: #f56c6c">{{ summary.negative }}</span>
+        <span class="ps-value" style="color: var(--el-color-danger)">{{ summary.negative }}</span>
         <span class="ps-label">累计扣分</span>
       </div>
       <div class="ps-item">
@@ -82,10 +84,10 @@
                 :style="{
                   color:
                     (row.points || 0) > 0
-                      ? '#67c23a'
+                      ? 'var(--el-color-success)'
                       : (row.points || 0) < 0
-                        ? '#f56c6c'
-                        : '#909399',
+                        ? 'var(--el-color-danger)'
+                        : 'var(--el-color-info)',
                   fontWeight: 600,
                 }"
               >
@@ -123,7 +125,9 @@
         </el-form-item>
         <el-form-item label="积分">
           <el-input-number v-model="form.points" :min="-100" :max="100" />
-          <span style="margin-left: 8px; color: #909399; font-size: 12px">正数加分，负数减分</span>
+          <span style="margin-left: 8px; color: var(--el-color-info); font-size: 12px"
+            >正数加分，负数减分</span
+          >
         </el-form-item>
         <el-form-item label="内容"
           ><el-input v-model="form.content" type="textarea" :rows="3"
@@ -206,9 +210,9 @@ function signed(v) {
 
 const deltaColor = computed(() => {
   const d = summary.value.delta || 0
-  if (d > 0) return '#67c23a'
-  if (d < 0) return '#f56c6c'
-  return '#909399'
+  if (d > 0) return 'var(--el-color-success)'
+  if (d < 0) return 'var(--el-color-danger)'
+  return 'var(--el-color-info)'
 })
 
 // 跨模块学生卡片
@@ -270,6 +274,6 @@ async function save() {
 }
 .ps-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-color-info);
 }
 </style>

@@ -52,11 +52,14 @@ def list_communications(
 
 def create_communication(db: Session, user, payload: CommunicationCreate) -> dict:
     """新增沟通记录。"""
-    ensure_student_operable(db, payload.student_id)
+    # 复用返回的 Student 以继承其 school_id（见下方 school_id 说明）
+    student = ensure_student_operable(db, payload.student_id)
     if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload.student_id):
         raise HTTPException(status_code=403, detail="无权为该学生创建沟通")
     x = Communication(
         student_id=payload.student_id,
+        # 显式继承父资源（学生档案）的租户归属，避免超管上下文下 school_id 落 NULL
+        school_id=student.school_id,
         method=payload.method,
         content=payload.content,
         feedback=payload.feedback,

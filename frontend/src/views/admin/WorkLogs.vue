@@ -41,6 +41,11 @@
 
     <el-dialog v-model="dialog" :title="editing ? '编辑日志' : '写日志'" width="820px">
       <el-form label-width="60px">
+        <el-form-item v-if="isPlatformAdminUser && !editing" label="学校" required>
+          <el-select v-model="form.school_id" filterable placeholder="选择学校" style="width: 100%">
+            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="日期">
           <el-date-picker
             v-model="form.date"
@@ -75,14 +80,18 @@ import PaginationBar from '../../components/PaginationBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
 import { useCrudList } from '../../composables/useCrudList'
-import { workLogApi } from '../../api'
+import { workLogApi, schoolApi } from '../../api'
+import { isPlatformAdmin } from '../../utils/auth'
 
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
 const previewDialog = ref(false)
 const previewContent = ref('')
-const form = reactive({ date: '', content: '' })
+// 平台超管：工作日志无父资源可继承 school_id，创建时须显式选校（非超管不渲染该项、不下发）
+const isPlatformAdminUser = isPlatformAdmin()
+const schools = ref([])
+const form = reactive({ date: '', content: '', school_id: null })
 
 // 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（删除文案）
 const {
@@ -105,18 +114,34 @@ const items = useSorted(rawItems)
 onMounted(load)
 
 function today() {
-  return new Date().toISOString().slice(0, 10)
+  // 本地日期：toISOString() 走 UTC，清晨（UTC 与本地跨天时）会返回差一天的日期
+  const d = new Date()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
 }
 
 function openCreate() {
   editing.value = null
-  Object.assign(form, { date: today(), content: '' })
+  Object.assign(form, { date: today(), content: '', school_id: null })
+  if (isPlatformAdminUser) loadSchools()
   dialog.value = true
+}
+
+// 超管创建时拉取学校列表；返回结构为 { items: [...], total }（见 students_service.list_schools）
+async function loadSchools() {
+  try {
+    const res = await schoolApi.list()
+    schools.value = res.items || []
+  } catch (e) {
+    // 加载失败：下拉为空，提交时会被「请选择学校」拦截；错误提示由全局拦截器统一处理
+  }
 }
 
 function openEdit(row) {
   editing.value = row
-  Object.assign(form, row)
+  // 只拷贝表单声明的字段，避免把整行的 id / created_at 等额外键动态注入 reactive
+  Object.assign(form, { date: row.date, content: row.content })
   dialog.value = true
 }
 
@@ -126,10 +151,18 @@ function preview(row) {
 }
 
 async function save() {
+  // 超管创建必须指定学校（编辑分支不下发、不校验）
+  if (isPlatformAdminUser && !editing.value && !form.school_id) {
+    return ElMessage.warning('请选择学校')
+  }
   saving.value = true
   try {
-    if (editing.value) await workLogApi.update(editing.value.id, form)
-    else await workLogApi.create(form)
+    // 显式构造载荷：只提交表单声明的字段
+    const payload = { date: form.date, content: form.content }
+    // 仅超管创建时下发 school_id；教师/校管不下发，后端按其 user.school_id 归属
+    if (isPlatformAdminUser && !editing.value) payload.school_id = form.school_id
+    if (editing.value) await workLogApi.update(editing.value.id, payload)
+    else await workLogApi.create(payload)
     ElMessage.success('保存成功')
     dialog.value = false
     load()

@@ -47,8 +47,9 @@ from app.permissions import (
     apply_teacher_student_filter,
     ensure_student_operable,
     ensure_class_operable,
+    resolve_school_id_or_400,
 )
-from app.utils import stringify_dates, to_dict, normalize_page, parse_date
+from app.utils import stringify_dates, to_dict, normalize_page, parse_date_or_400
 
 
 # ---------------- 内部辅助 ----------------
@@ -62,12 +63,16 @@ def _filter_student_query(db: Session, model, user: User):
     return q
 
 
-def _check_student_permission(db: Session, user: User, student_id: int):
-    """教师只能操作自己班级学生的记录；退学/毕业学生不可操作（教师与管理员均受限）。"""
+def _check_student_permission(db: Session, user: User, student_id: int) -> Student:
+    """教师只能操作自己班级学生的记录；退学/毕业学生不可操作（教师与管理员均受限）。
+
+    返回对应的 ``Student`` 实例，供调用方复用其字段（如 ``school_id``）。
+    """
     # 退学/毕业限制
-    ensure_student_operable(db, student_id)
+    student = ensure_student_operable(db, student_id)
     if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
         raise HTTPException(status_code=403, detail="无权操作该学生的记录")
+    return student
 
 
 def _check_class_permission(db: Session, user: User, class_id: int):
@@ -132,7 +137,10 @@ def list_work_logs(db: Session, page: int, page_size: int, user: User) -> dict:
 def create_work_log(db: Session, user: User, payload) -> dict:
     x = WorkLog(
         teacher_id=user.id,
-        date=parse_date(payload.date),
+        # 显式写归属学校：WorkLog 无父资源可继承。平台超管必须显式选校（否则 400），
+        # 教师/校管取自身 school_id 并忽略入参（防跨校写入）。
+        school_id=resolve_school_id_or_400(db, user, payload.school_id),
+        date=parse_date_or_400(payload.date),
         content=payload.content,
     )
     db.add(x)
@@ -149,7 +157,7 @@ def update_work_log(db: Session, log_id: int, payload: dict, user: User) -> dict
     if not is_any_admin(user) and x.teacher_id != user.id:
         raise HTTPException(status_code=403, detail="无权操作他人的日志")
     if payload.get("date") is not None:
-        x.date = parse_date(payload["date"])
+        x.date = parse_date_or_400(payload["date"])
     if payload.get("content") is not None:
         x.content = payload["content"]
     audit(db, user, "update_work_log", target=f"日志#{log_id}")
@@ -190,6 +198,8 @@ def create_plan(db: Session, model, user: User, payload: dict) -> dict:
         raise HTTPException(status_code=400, detail="标题不能为空")
     x = model(
         teacher_id=user.id,
+        # 同 create_work_log：计划无父资源，平台超管必须显式选校，其余取 user.school_id。
+        school_id=resolve_school_id_or_400(db, user, payload.get("school_id")),
         title=title,
         plan_type=payload.get("plan_type", "计划"),
         content=payload.get("content", ""),
@@ -252,8 +262,8 @@ def list_schedules(db: Session, class_id: int | None, user: User) -> dict:
 def create_schedule(db: Session, payload: dict, user: User) -> dict:
     if not payload.get("class_id"):
         raise HTTPException(status_code=400, detail="请选择班级")
-    # 毕业限制
-    ensure_class_operable(db, payload["class_id"])
+    # 毕业限制（复用返回的 Classroom 以继承其 school_id）
+    classroom = ensure_class_operable(db, payload["class_id"])
     # 教师只能为自己负责的班级排课
     _check_class_permission(db, user, payload["class_id"])
     day_of_week = payload.get("day_of_week", 1)
@@ -264,6 +274,9 @@ def create_schedule(db: Session, payload: dict, user: User) -> dict:
         raise HTTPException(status_code=400, detail="节次应为 1-12")
     x = Schedule(
         class_id=payload["class_id"],
+        # 显式继承父资源（班级）的租户归属：超管（school_id=None）上下文下
+        # before_flush 不会回填，落 NULL 会导致该行对所有租户都不可见。
+        school_id=classroom.school_id,
         day_of_week=day_of_week,
         period=period,
         subject=payload.get("subject"),
@@ -271,6 +284,54 @@ def create_schedule(db: Session, payload: dict, user: User) -> dict:
     )
     db.add(x)
     audit(db, user, "create_schedule", target=f"新增课表")
+    db.commit()
+    db.refresh(x)
+    return to_dict(x)
+
+
+def update_schedule(db: Session, schedule_id: int, payload: dict, user: User) -> dict:
+    """修改课表（本人负责班级的教师或管理员；不存在 404）。
+
+    设计要点：
+    - 权限口径与 ``delete_schedule`` 完全一致（毕业限制 + 班级归属校验）；
+    - ``class_id`` **不允许修改**（传了且与现值不同 → 400）：改班级等价于换行归属，
+      前端「编辑」场景从不改班级，与其静默忽略，不如让契约显式报错；
+    - ``school_id`` **刻意不更新**：``before_flush`` 只对新建行回填，更新已有行时
+      乱写归属会把租户隔离写坏；
+    - 字段语义为「缺省 = 保持现值」，仅更新请求体里出现的字段。
+    """
+    x = db.get(Schedule, schedule_id)
+    if not x:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    # 毕业限制
+    ensure_class_operable(db, x.class_id)
+    # 教师只能修改自己负责班级的课程（与 delete_schedule 同口径）
+    _check_class_permission(db, user, x.class_id)
+
+    # class_id 不允许修改
+    new_class_id = payload.get("class_id")
+    if new_class_id is not None and new_class_id != x.class_id:
+        raise HTTPException(status_code=400, detail="不允许修改班级")
+
+    # 先整体校验再落字段，避免「半途失败留下部分修改」
+    if payload.get("day_of_week") is not None:
+        day_of_week = payload["day_of_week"]
+        if not isinstance(day_of_week, int) or not (1 <= day_of_week <= 7):
+            raise HTTPException(status_code=400, detail="星期应为 1-7")
+    if payload.get("period") is not None:
+        period = payload["period"]
+        if not isinstance(period, int) or not (1 <= period <= 12):
+            raise HTTPException(status_code=400, detail="节次应为 1-12")
+
+    if payload.get("day_of_week") is not None:
+        x.day_of_week = payload["day_of_week"]
+    if payload.get("period") is not None:
+        x.period = payload["period"]
+    for f in ("subject", "teacher_name"):
+        if f in payload:
+            setattr(x, f, payload[f])
+
+    audit(db, user, "update_schedule", target=f"课表#{schedule_id}")
     db.commit()
     db.refresh(x)
     return to_dict(x)
@@ -312,14 +373,19 @@ def create_activity(db: Session, payload: dict, user: User) -> dict:
     title = (payload.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="活动标题不能为空")
-    # 毕业限制
-    if payload.get("class_id"):
-        ensure_class_operable(db, payload["class_id"])
+    # 班级必填：activities.class_id 为 NOT NULL，缺省时原会触发 IntegrityError
+    # 被统一转成 409（语义错误），这里提前校验为 400。
+    class_id = payload.get("class_id")
+    if not class_id:
+        raise HTTPException(status_code=400, detail="请选择班级")
+    # 毕业限制（复用返回的 Classroom 以继承其 school_id）
+    classroom = ensure_class_operable(db, class_id)
     # 教师只能为自己负责的班级创建活动
-    if payload.get("class_id"):
-        _check_class_permission(db, user, payload["class_id"])
+    _check_class_permission(db, user, class_id)
     x = Activity(
-        class_id=payload.get("class_id"),
+        class_id=class_id,
+        # 显式继承父资源（班级）的租户归属，避免超管上下文下 school_id 落 NULL
+        school_id=classroom.school_id,
         title=title,
         content=payload.get("content", ""),
         filepath=_encode_filepath(payload.get("filepath")),
@@ -375,10 +441,12 @@ def list_talks(
 
 
 def create_talk(db: Session, payload, user: User) -> dict:
-    # 教师只能与自己班级学生谈心
-    _check_student_permission(db, user, payload.student_id)
+    # 教师只能与自己班级学生谈心（复用返回的 Student 以继承其 school_id）
+    student = _check_student_permission(db, user, payload.student_id)
     x = Talk(
         student_id=payload.student_id,
+        # 显式继承父资源（学生档案）的租户归属，避免超管上下文下 school_id 落 NULL
+        school_id=student.school_id,
         teacher_id=user.id,
         content=payload.content,
         images=_encode_filepath(payload.images),
@@ -427,11 +495,13 @@ def list_return_records(
 
 
 def create_return_record(db: Session, payload, user: User) -> dict:
-    # 教师只能为自己班级学生登记返校
-    _check_student_permission(db, user, payload.student_id)
+    # 教师只能为自己班级学生登记返校（复用返回的 Student 以继承其 school_id）
+    student = _check_student_permission(db, user, payload.student_id)
     x = ReturnRecord(
         student_id=payload.student_id,
-        return_date=parse_date(payload.return_date),
+        # 显式继承父资源（学生档案）的租户归属，避免超管上下文下 school_id 落 NULL
+        school_id=student.school_id,
+        return_date=parse_date_or_400(payload.return_date),
         reason=payload.reason,
         note=payload.note,
     )
@@ -559,8 +629,8 @@ def summarize_performances(
 def create_performance(db: Session, payload: dict, user: User) -> dict:
     if not payload.get("student_id"):
         raise HTTPException(status_code=400, detail="请选择学生")
-    # 教师只能为自己班级学生登记表现
-    _check_student_permission(db, user, payload["student_id"])
+    # 教师只能为自己班级学生登记表现（复用返回的 Student 以继承其 school_id）
+    student = _check_student_permission(db, user, payload["student_id"])
     ptype = payload.get("ptype", "积极")
     content = payload.get("content", "")
     # 分值：积极默认加分、消极默认减分，可手动指定
@@ -570,6 +640,8 @@ def create_performance(db: Session, payload: dict, user: User) -> dict:
 
     x = Performance(
         student_id=payload["student_id"],
+        # 显式继承父资源（学生档案）的租户归属，避免超管上下文下 school_id 落 NULL
+        school_id=student.school_id,
         ptype=ptype,
         points=points,
         content=content,
@@ -703,9 +775,14 @@ def list_student_comments(
 def create_student_comment(db: Session, payload: dict, user: User) -> dict:
     if not payload.get("student_id"):
         raise HTTPException(status_code=400, detail="请选择学生")
-    # 教师只能为自己班级学生写评语
-    _check_student_permission(db, user, payload["student_id"])
-    x = StudentComment(student_id=payload["student_id"], content=payload.get("content", ""))
+    # 教师只能为自己班级学生写评语（复用返回的 Student 以继承其 school_id）
+    student = _check_student_permission(db, user, payload["student_id"])
+    x = StudentComment(
+        student_id=payload["student_id"],
+        # 显式继承父资源（学生档案）的租户归属，避免超管上下文下 school_id 落 NULL
+        school_id=student.school_id,
+        content=payload.get("content", ""),
+    )
     db.add(x)
     audit(db, user, "create_student_comment", target=f"新增评语-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"内容：{(x.content or '')[:80]}")
     db.commit()

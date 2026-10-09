@@ -83,6 +83,11 @@ _HTML_IMAGE_RE = re.compile(
 # 前端上传接口返回的访问前缀（见 uploads.save_upload 的 url 字段）
 _UPLOADS_URL_PREFIX = "/uploads/"
 
+# 内嵌图片「未参与批改」时在正文里就地写入的占位符。
+# 抽成模块级常量供调用方（`ai_grading.grade_submission`）复用：vision 关闭时正文可能
+# 只剩这个占位符，去掉它即可判定「无可评内容」而短路，省掉一次注定无效的外呼。
+IMAGE_SKIPPED_MARKER = "【图片未参与批改】"
+
 
 @dataclass
 class AttachmentPayload:
@@ -303,12 +308,12 @@ def extract_inline_images(
 
         if not vision_enabled:
             notes.append(f"内嵌图片未参与批改：未启用多模态（{rel}）")
-            rebuilt.append("【图片未参与批改】")
+            rebuilt.append(IMAGE_SKIPPED_MARKER)
             continue
 
         if len(images) >= limit:
             notes.append(f"内嵌图片未参与批改：超出单次上限 {limit} 张（{rel}）")
-            rebuilt.append("【图片未参与批改】")
+            rebuilt.append(IMAGE_SKIPPED_MARKER)
             continue
 
         ext = os.path.splitext(rel)[1].lower()
@@ -317,22 +322,22 @@ def extract_inline_images(
         except ValueError:
             # 正文 Markdown 里的 `/uploads/../../x` 也算穿越：给说明，绝不读盘
             notes.append(f"内嵌图片未参与批改：文件路径非法（{rel}）")
-            rebuilt.append("【图片未参与批改】")
+            rebuilt.append(IMAGE_SKIPPED_MARKER)
             continue
         if ext in UNSUPPORTED_IMAGE_EXTS:
             # 命中明确不支持的格式：精确说明、绝不送入模型（否则学生传 BMP 会让整份批改 400）
             notes.append(f"内嵌图片未参与批改：{_unsupported_image_reason(ext)}（{rel}）")
-            rebuilt.append("【图片未参与批改】")
+            rebuilt.append(IMAGE_SKIPPED_MARKER)
             continue
         if ext not in IMAGE_EXTS or not os.path.exists(path):
             notes.append(f"内嵌图片未参与批改：文件不存在或格式不支持（{rel}）")
-            rebuilt.append("【图片未参与批改】")
+            rebuilt.append(IMAGE_SKIPPED_MARKER)
             continue
 
         data_url, reason = _image_data_url(path)
         if data_url is None:
             notes.append(f"内嵌图片未参与批改：{reason}（{rel}）")
-            rebuilt.append("【图片未参与批改】")
+            rebuilt.append(IMAGE_SKIPPED_MARKER)
             continue
 
         images.append(data_url)

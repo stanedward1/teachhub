@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.models import Exam
 from app.schemas import ExamUpdate
-from app.services.workbench._common import audit, to_dict
+from app.services.workbench._common import (
+    audit,
+    resolve_school_id_for_schools_scope,
+    to_dict,
+)
 from app.uploads import resolve_upload_path, save_upload
 
 # 试卷允许的文档格式
@@ -23,10 +27,21 @@ def list_exams(db: Session, keyword: str = "") -> dict:
     return {"items": [to_dict(x) for x in rows], "total": len(rows)}
 
 
-def upload_exam(db: Session, user, title: str = "未命名试卷", exam_type: str = "单元测验", file=None) -> dict:
+def upload_exam(
+    db: Session,
+    user,
+    title: str = "未命名试卷",
+    exam_type: str = "单元测验",
+    file=None,
+    school_id: int | None = None,
+) -> dict:
     """上传试卷文件：支持 .docx / .pdf / .doc 等格式。"""
     if not file:
         raise HTTPException(status_code=400, detail="请选择试卷文件")
+
+    # 先解析归属学校（超管必须显式指定）——放在落盘之前，避免校验失败却已把文件写入磁盘。
+    # 试卷是学校级实体、无父资源可继承：超管需显式指定，教师/校管取自身 school_id。
+    resolved_school_id = resolve_school_id_for_schools_scope(db, user, school_id)
 
     original = file.filename or "exam"
     ext = os.path.splitext(original)[1].lower()
@@ -41,6 +56,7 @@ def upload_exam(db: Session, user, title: str = "未命名试卷", exam_type: st
 
     x = Exam(
         title=title.strip() or "未命名试卷",
+        school_id=resolved_school_id,
         exam_type=exam_type,
         filename=saved["filename"],
         filepath=saved["filepath"],

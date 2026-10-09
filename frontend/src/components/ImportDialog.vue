@@ -10,7 +10,9 @@
     <el-form label-width="80px">
       <el-form-item label="导入模板">
         <el-button type="primary" link @click="onDownloadTemplate">{{ templateLabel }}</el-button>
-        <span style="color: #909399; font-size: 12px; margin-left: 8px">请按模板格式填写数据</span>
+        <span style="color: var(--el-color-info); font-size: 12px; margin-left: 8px"
+          >请按模板格式填写数据</span
+        >
       </el-form-item>
       <el-form-item label="选择文件">
         <el-upload
@@ -146,7 +148,7 @@ async function loadHistory() {
   try {
     const res = await importApi.history(
       { import_type: props.importType, page_size: HISTORY_SIZE },
-      { _silent: true },
+      { _silent: true }
     )
     history.value = res.items || []
   } catch (e) {

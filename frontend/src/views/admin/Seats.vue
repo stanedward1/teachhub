@@ -1,7 +1,12 @@
 <template>
   <div>
     <div class="toolbar">
-      <el-select v-model="classId" placeholder="选择班级" style="width: 200px" @change="onClassChange">
+      <el-select
+        v-model="classId"
+        placeholder="选择班级"
+        style="width: 200px"
+        @change="onClassChange"
+      >
         <el-option v-for="c in classes" :key="c.id" :label="c.name" :value="c.id" />
       </el-select>
       <el-input-number v-model="columns" :min="3" :max="8" />
@@ -120,7 +125,9 @@ function shuffle() {
 }
 
 function sortByNo() {
-  seats.value = [...seats.value].sort((a, b) => (a.student_no || '').localeCompare(b.student_no || ''))
+  seats.value = [...seats.value].sort((a, b) =>
+    (a.student_no || '').localeCompare(b.student_no || '')
+  )
 }
 
 async function save() {

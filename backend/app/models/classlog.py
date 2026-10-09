@@ -115,7 +115,7 @@ class Performance(Base):
     points = Column(Integer, default=1)  # 分值：正数加分、负数减分，默认 积极+1/消极-1
     content = Column(Text)
     image = Column(String(500))
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
 class StudentComment(Base):

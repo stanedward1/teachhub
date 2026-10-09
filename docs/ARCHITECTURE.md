@@ -97,7 +97,7 @@ teachhub/
 │   │   │   ├── ai_companion.py / ai_companion_teacher.py  # AI 学伴：学生问答链路（上下文组装 + 模型调用 + V1 启发式护栏 + 落库 + **平台池四原语 + 每生配额三原语 + 校池原语（三闸：每生→学校→平台）**）/ 教师侧**只读**查询（本班会话列表 + 单会话详情 + 审计）
 │   │   │   └── workbench/     #   工作台子包：_common.py + scores/leaves/communications/resources/exams/seats/imports/profile/reports_service.py
 │   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
-│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 34 个 revision，head f8a9b0c1d2e3）
+│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 35 个 revision，head b7c8d9e0f1a2）
 │   ├── logs/                  # 运行日志（teachhub.log，按天滚动保留 30 天，不入库）
 │   ├── tests/                 # pytest 自动化测试（含 test_multi_tenant.py）
 │   ├── pytest.ini            # pytest 配置（testpaths = tests，仅收集 tests/）
@@ -145,7 +145,7 @@ teachhub/
 | 角色 | 登录入口 | 可访问范围 | 服务端约束 |
 | ---- | -------- | ---------- | ---------- |
 | `student` | `/`（学生端，选学校 → 班级 + 姓名） | 仅作业提交平台（本班） | `require_student` / `get_current_user` |
-| `teacher` | `/admin`（管理端，选学校 → 用户名） | 自己负责班级（班主任 + 科任）的作业管理 + 工作台 + 班级日志 | `require_teacher` |
+| `teacher` | `/admin`（管理端，选学校 → 用户名） | 自己负责班级（班主任 + 科任）的作业管理（另含**自己创建**的作业 —— 「创建者保留管理权」）+ 工作台 + 班级日志 | `require_teacher` |
 | `school_admin` | `/admin`（管理端） | 本校全部班级/学生/账号 + 系统管理 | `require_school_admin` |
 | `super_admin` | `/admin`（管理端） | 跨学校：学校开通/启停 + 全局概览 + 所有租户数据 | `require_super_admin` |
 

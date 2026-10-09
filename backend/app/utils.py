@@ -2,6 +2,8 @@ import re
 import uuid
 from datetime import date, datetime
 
+from fastapi import HTTPException
+
 
 def gen_student_no(db, student_model) -> str:
     """生成全局唯一学号（ZC + 日期 + 4 位随机），用于自助注册等无学号场景。"""
@@ -72,6 +74,23 @@ def parse_date(value):
             return None
         return datetime.strptime(value, "%Y-%m-%d").date()
     raise ValueError(f"无法解析的日期: {value!r}")
+
+
+def parse_date_or_400(value):
+    """解析日期，非法格式统一转 400（把「格式错误」从 500 收敛为客户端错误）。
+
+    语义与 :func:`parse_date` 完全一致（`None` / 空串 → `None`，`date` 原样返回，
+    `'YYYY-MM-DD'` → `date`），差别仅在于：当字符串格式非法时不再向上抛裸
+    `ValueError`（会被 `main.py` 统一兜底成 **500**），而是转为
+    ``HTTPException(400, "日期格式应为 YYYY-MM-DD")``。
+
+    专供**写接口**在服务层直接表达「日期格式错误」；刻意**不改** ``parse_date`` 本身，
+    因为导入等场景依赖其抛 ``ValueError`` 由各自逻辑处理（如逐行记录错误）。
+    """
+    try:
+        return parse_date(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD")
 
 
 def clamp_score(value, lo: float = 0.0, hi: float = 100.0) -> float:

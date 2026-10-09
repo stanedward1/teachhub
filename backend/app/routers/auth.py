@@ -8,10 +8,7 @@
 （`POST /api/auth/refresh`、`POST /api/auth/logout`）与登录响应的
 `refresh_token` 字段。
 """
-import os
-import uuid
-
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
@@ -22,7 +19,7 @@ from app.deps import get_current_user
 from app.models import School, User
 from app.platform_settings import is_registration_allowed
 from app.schemas import LoginRequest, PasswordRequest, RefreshRequest, RegisterRequest
-from app.services import auth_service
+from app.services import auth_service, uploads_service
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -122,55 +119,18 @@ def change_password(
     return auth_service.change_password(db, user, payload)
 
 
-_AVATAR_DIR = settings.AVATAR_DIR
-_AVATAR_MAX_SIZE = 2 * 1024 * 1024  # 2MB
-_AVATAR_ALLOWED = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-
-
 @router.post("/avatar")
 def upload_avatar(
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """学生 / 教师上传自己的头像。"""
-    original = file.filename or "avatar"
-    ext = os.path.splitext(original)[1].lower()
-    if ext not in _AVATAR_ALLOWED:
-        raise HTTPException(status_code=400, detail=f"仅支持图片格式：{'、'.join(sorted(_AVATAR_ALLOWED))}")
+    """学生 / 教师上传自己的头像。
 
-    name = f"avatar_{user.id}_{uuid.uuid4().hex[:8]}{ext}"
-    os.makedirs(_AVATAR_DIR, exist_ok=True)
-    dest = os.path.join(_AVATAR_DIR, name)
-
-    size = 0
-    chunk_size = 1024 * 1024
-    try:
-        with open(dest, "wb") as f:
-            while True:
-                chunk = file.file.read(chunk_size)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > _AVATAR_MAX_SIZE:
-                    f.close()
-                    os.remove(dest)
-                    raise HTTPException(status_code=413, detail=f"头像文件不能超过 {_AVATAR_MAX_SIZE // (1024*1024)}MB")
-                f.write(chunk)
-    except HTTPException:
-        raise
-    except Exception:
-        if os.path.exists(dest):
-            os.remove(dest)
-        raise
-
-    # 删除旧头像文件
-    if user.avatar:
-        old_name = user.avatar.rsplit("/", 1)[-1]
-        old_full = os.path.join(_AVATAR_DIR, old_name)
-        if os.path.exists(old_full):
-            os.remove(old_full)
-
-    user.avatar = f"/uploads/avatars/{name}"
+    校验（图片白名单 / 2MB 上限）、分块落盘与旧头像清理已下沉到
+    :func:`app.services.uploads_service.save_avatar`；本路由仅做依赖注入、
+    落库与返回（对外状态码 / 文案 / 返回结构保持不变）。
+    """
+    user.avatar = uploads_service.save_avatar(file, user_id=user.id, old_path=user.avatar)
     db.commit()
     return {"avatar": user.avatar}

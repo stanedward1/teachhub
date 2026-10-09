@@ -26,9 +26,15 @@
         </el-table-column>
         <el-table-column label="AI 批改" width="110">
           <template #default="{ row }">
-            <el-tag v-if="row.ai_grading_status === 'success'" type="success" size="small">已批改</el-tag>
-            <el-tag v-else-if="row.ai_grading_status === 'pending'" type="warning" size="small">批改中</el-tag>
-            <el-tag v-else-if="row.ai_grading_status === 'failed'" type="info" size="small">未完成</el-tag>
+            <el-tag v-if="row.ai_grading_status === 'success'" type="success" size="small"
+              >已批改</el-tag
+            >
+            <el-tag v-else-if="row.ai_grading_status === 'pending'" type="warning" size="small"
+              >批改中</el-tag
+            >
+            <el-tag v-else-if="row.ai_grading_status === 'failed'" type="info" size="small"
+              >未完成</el-tag
+            >
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>

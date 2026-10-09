@@ -54,6 +54,11 @@
 
     <el-dialog v-model="dialog" :title="editing ? '编辑' : '新建'" width="820px">
       <el-form label-width="80px">
+        <el-form-item v-if="isPlatformAdminUser && !editing" label="学校" required>
+          <el-select v-model="form.school_id" filterable placeholder="选择学校" style="width: 100%">
+            <el-option v-for="s in schools" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="标题" required><el-input v-model="form.title" /></el-form-item>
         <el-form-item label="类型">
           <el-radio-group v-model="form.plan_type">
@@ -84,7 +89,8 @@ import SortBar from '../../components/SortBar.vue'
 import StateView from '../../components/StateView.vue'
 import { useSort } from '../../composables/useSort'
 import { useCrudList } from '../../composables/useCrudList'
-import { planApi } from '../../api'
+import { planApi, schoolApi } from '../../api'
+import { isPlatformAdmin } from '../../utils/auth'
 
 const tab = ref('class')
 const planType = ref('')
@@ -93,7 +99,10 @@ const editing = ref(null)
 const saving = ref(false)
 const previewDialog = ref(false)
 const previewContent = ref('')
-const form = reactive({ title: '', plan_type: '计划', content: '' })
+// 平台超管：计划无父资源可继承 school_id，创建时须显式选校（非超管不渲染该项、不下发）
+const isPlatformAdminUser = isPlatformAdmin()
+const schools = ref([])
+const form = reactive({ title: '', plan_type: '计划', content: '', school_id: null })
 
 // 班级/教师计划总结共用一套列表：按 tab 切换两个接口；无分页，wrapper 合成 total。
 // 客户端排序仍由 useSort 处理（items 取 useCrudList 返回的原始列表）。
@@ -103,16 +112,19 @@ const {
   error,
   load,
   reload,
-} = useCrudList(async (params) => {
-  const rest = { ...params }
-  delete rest.page
-  delete rest.page_size
-  const res =
-    tab.value === 'class' ? await planApi.classPlans(rest) : await planApi.teacherPlans(rest)
-  return { items: res.items, total: res.items.length }
-}, {
-  buildParams: () => ({ plan_type: planType.value }),
-})
+} = useCrudList(
+  async (params) => {
+    const rest = { ...params }
+    delete rest.page
+    delete rest.page_size
+    const res =
+      tab.value === 'class' ? await planApi.classPlans(rest) : await planApi.teacherPlans(rest)
+    return { items: res.items, total: res.items.length }
+  },
+  {
+    buildParams: () => ({ plan_type: planType.value }),
+  }
+)
 
 const { order, useSorted } = useSort('plans')
 const items = useSorted(rawItems)
@@ -121,13 +133,30 @@ onMounted(load)
 
 function openCreate() {
   editing.value = null
-  Object.assign(form, { title: '', plan_type: planType.value || '计划', content: '' })
+  Object.assign(form, {
+    title: '',
+    plan_type: planType.value || '计划',
+    content: '',
+    school_id: null,
+  })
+  if (isPlatformAdminUser) loadSchools()
   dialog.value = true
+}
+
+// 超管创建时拉取学校列表；返回结构为 { items: [...], total }（见 students_service.list_schools）
+async function loadSchools() {
+  try {
+    const res = await schoolApi.list()
+    schools.value = res.items || []
+  } catch (e) {
+    // 加载失败：下拉为空，提交时会被「请选择学校」拦截；错误提示由全局拦截器统一处理
+  }
 }
 
 function openEdit(row) {
   editing.value = row
-  Object.assign(form, row)
+  // 只拷贝表单声明的字段，避免整行的 id 等额外键被动态注入 reactive
+  Object.assign(form, { title: row.title, plan_type: row.plan_type, content: row.content })
   dialog.value = true
 }
 
@@ -138,15 +167,23 @@ function preview(row) {
 
 async function save() {
   if (!form.title) return ElMessage.warning('请填写标题')
+  // 超管创建必须指定学校（编辑分支不下发、不校验）
+  if (isPlatformAdminUser && !editing.value && !form.school_id) {
+    return ElMessage.warning('请选择学校')
+  }
   saving.value = true
   try {
+    // 显式构造载荷：只提交表单声明的字段
+    const payload = { title: form.title, plan_type: form.plan_type, content: form.content }
+    // 仅超管创建时下发 school_id；教师/校管不下发，后端按其 user.school_id 归属
+    if (isPlatformAdminUser && !editing.value) payload.school_id = form.school_id
     const isClass = tab.value === 'class'
     if (editing.value) {
       isClass
-        ? await planApi.updateClassPlan(editing.value.id, form)
-        : await planApi.updateTeacherPlan(editing.value.id, form)
+        ? await planApi.updateClassPlan(editing.value.id, payload)
+        : await planApi.updateTeacherPlan(editing.value.id, payload)
     } else {
-      isClass ? await planApi.createClassPlan(form) : await planApi.createTeacherPlan(form)
+      isClass ? await planApi.createClassPlan(payload) : await planApi.createTeacherPlan(payload)
     }
     ElMessage.success('保存成功')
     dialog.value = false
@@ -158,7 +195,11 @@ async function save() {
 }
 
 async function remove(row) {
-  await ElMessageBox.confirm('确定删除吗？', '提示', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm('确定删除吗？', '提示', { type: 'warning' })
+  } catch {
+    return // 用户取消确认框：静默返回，不弹任何提示
+  }
   tab.value === 'class'
     ? await planApi.removeClassPlan(row.id)
     : await planApi.removeTeacherPlan(row.id)

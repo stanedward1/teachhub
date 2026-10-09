@@ -33,7 +33,7 @@
         <el-switch v-model="form.is_dropped_out" active-text="已退学" inactive-text="在籍" />
         <div
           v-if="form.is_dropped_out"
-          style="color: #e6a23c; font-size: 12px; line-height: 1.5; margin-top: 4px"
+          style="color: var(--el-color-warning); font-size: 12px; line-height: 1.5; margin-top: 4px"
         >
           标记退学后，教师与管理员将无法再对该生进行成绩、考勤、积分等各项操作。
         </div>
@@ -52,8 +52,7 @@
  *
  * 从 Students.vue 原样搬出，保持表单字段、label-width、宽度与提示文案不变。
  * 通过 `student` prop 区分新增（null）与编辑：新增用固定初值 + 当前筛选班级，
- * 编辑用 Object.assign 把整行（含 id/avatar/class_name 等额外键）带入表单，
- * 保存时原样提交给后端，保留原有语义。
+ * 编辑时**只拷贝表单声明的字段**（不再把 id/avatar/class_name 等整行额外键注入）。
  */
 import { ref, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -99,8 +98,13 @@ watch(
 
 function init() {
   if (props.student) {
-    // 保留整行语义：额外键（id / avatar / class_name 等）一并带入并提交。
-    Object.assign(form, DEFAULTS, props.student)
+    // 只拷表单声明的字段：避免把整行的 id / avatar / class_name 等额外键动态注入
+    // reactive 并被 save() 一并提交（后端会拒绝或写入脏字段）
+    const picked = {}
+    for (const key of Object.keys(DEFAULTS)) {
+      if (props.student[key] !== undefined) picked[key] = props.student[key]
+    }
+    Object.assign(form, DEFAULTS, picked)
   } else {
     Object.assign(form, DEFAULTS, { class_id: props.defaultClassId })
   }
@@ -110,8 +114,11 @@ async function save() {
   if (!form.name || !form.student_no) return ElMessage.warning('请填写姓名和学号')
   saving.value = true
   try {
-    if (props.student) await studentApi.update(props.student.id, form)
-    else await studentApi.create(form)
+    // 显式构造载荷：只提交表单声明的字段
+    const payload = {}
+    for (const key of Object.keys(DEFAULTS)) payload[key] = form[key]
+    if (props.student) await studentApi.update(props.student.id, payload)
+    else await studentApi.create(payload)
     ElMessage.success('保存成功')
     emit('update:modelValue', false)
     emit('saved')

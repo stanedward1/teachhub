@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import {
   isStudent,
   isTeacher,
@@ -247,7 +246,21 @@ const routes = [
     ],
   },
 
-  { path: '/:pathMatch(.*)*', redirect: '/' },
+  // ============ 错误页 ============
+  // 403 无权限专页：不设 meta 门控 —— 能到这里的都是已登录用户（守卫 403 分支跳转），
+  // 路径不在 /admin、/m、学生端前缀内，不会与登录/角色门控形成死循环。
+  {
+    path: '/403',
+    name: 'forbidden',
+    component: () => import('../views/error/ForbiddenView.vue'),
+  },
+
+  // catch-all 必须保持在路由表末位：坏链接不再静默吞掉，而是落到 404 专页
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'not-found',
+    component: () => import('../views/error/NotFoundView.vue'),
+  },
 ]
 
 const router = createRouter({
@@ -304,8 +317,9 @@ router.beforeEach((to) => {
         isHeadTeacher: isTeacherHead(),
       })
       if (denied) {
-        ElMessage.warning('无权访问该页面，已返回数据看板')
-        return { path: '/admin/dashboard' }
+        // 跳 403 专页（仅 admin 区域会走到这里；mobile 区域不受影响）。
+        // /403 不在受控前缀内，守卫对其直接放行，不会形成重定向死循环。
+        return { path: '/403' }
       }
     }
   }

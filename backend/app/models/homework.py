@@ -19,7 +19,7 @@ class Assignment(Base):
     class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     short_name = Column(String(100))
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
     updated_at = Column(DateTime, onupdate=func.now())
 
     attachments = relationship(
@@ -66,7 +66,7 @@ class Submission(Base):
     content = Column(Text)
     filename = Column(String(255))
     filepath = Column(String(500))
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
     updated_at = Column(DateTime, onupdate=func.now())
 
 
@@ -83,7 +83,7 @@ class ExcellentWork(Base):
     # 入选来源：manual（教师手工评选）/ ai_recommended（AI 推荐后由教师确认或自动入库）。
     # 与 selected_by（NOT NULL，始终记「执行入库的人」）配合，既区分来源又保留责任可追溯。
     source = Column(String(20), nullable=False, default="manual", server_default="manual")
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
 class WorkComment(Base):
@@ -96,7 +96,7 @@ class WorkComment(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
 class SubmissionComment(Base):

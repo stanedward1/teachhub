@@ -6,8 +6,6 @@
 以兼容 `app/routers/mobile.py` 的既有引用。
 """
 from io import BytesIO
-import os
-import uuid
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -17,7 +15,6 @@ from sqlalchemy.orm import Session
 
 from app.audit import audit, batch_student_avatar_map, batch_user_map
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
-from app.config import settings
 from app.models import Classroom, ClassTeacher, School, Student, StudentBoardHistory, User
 from app.pagination import paginate
 from app.permissions import (
@@ -33,12 +30,10 @@ from app.permissions import (
     is_teacher_class_owner,
 )
 from app.schemas import StudentCreate, StudentUpdate
+from app.services.uploads_service import save_avatar
 from app.security import hash_password, validate_password_strength
-from app.utils import normalize_page, parse_date, to_dict
+from app.utils import normalize_page, parse_date_or_400, to_dict
 
-_AVATAR_DIR = settings.AVATAR_DIR
-_AVATAR_MAX_SIZE = 2 * 1024 * 1024
-_AVATAR_ALLOWED = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 
 
 def _students_out(db: Session, rows: list) -> list:
@@ -499,7 +494,7 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
         class_id=class_id,
         name=name,
         gender=payload.gender,
-        birth_date=parse_date(payload.birth_date),
+        birth_date=parse_date_or_400(payload.birth_date),
         student_no=student_no,
         major=payload.major,
         parent_name=payload.parent_name,
@@ -565,12 +560,14 @@ def update_student(db: Session, user: User, student_id: int, payload: StudentUpd
         "parent_name", "parent_phone", "student_type", "is_dropped_out",
     ):
         if f in data and data[f] is not None:
-            setattr(s, f, parse_date(data[f]) if f == "birth_date" else data[f])
+            setattr(s, f, parse_date_or_400(data[f]) if f == "birth_date" else data[f])
     # 记录寄宿/通学状态变更
     new_type = data.get("student_type")
     if new_type and new_type != old_type:
         db.add(StudentBoardHistory(
             student_id=s.id,
+            # 显式继承父资源（学生）的租户归属，避免超管上下文下 school_id 落 NULL
+            school_id=s.school_id,
             old_type=old_type,
             new_type=new_type,
             changed_by=user.id,
@@ -735,47 +732,15 @@ def upload_student_avatar(db: Session, user: User, student_id: int, file) -> dic
     # 退学/毕业限制
     ensure_student_operable(db, student_id)
 
-    original = file.filename or "avatar"
-    ext = os.path.splitext(original)[1].lower()
-    if ext not in _AVATAR_ALLOWED:
-        raise HTTPException(status_code=400, detail=f"仅支持图片格式：{'、'.join(sorted(_AVATAR_ALLOWED))}")
-
     student_user = get_student_account(db, s.class_id, s.name)
     if not student_user:
         raise HTTPException(status_code=404, detail="学生账号不存在，请先创建学生档案")
 
-    name = f"avatar_{student_user.id}_{uuid.uuid4().hex[:8]}{ext}"
-    os.makedirs(_AVATAR_DIR, exist_ok=True)
-    dest = os.path.join(_AVATAR_DIR, name)
-
-    size = 0
-    chunk_size = 1024 * 1024
-    try:
-        with open(dest, "wb") as f:
-            while True:
-                chunk = file.file.read(chunk_size)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > _AVATAR_MAX_SIZE:
-                    f.close()
-                    os.remove(dest)
-                    raise HTTPException(status_code=413, detail=f"头像文件不能超过 {_AVATAR_MAX_SIZE // (1024*1024)}MB")
-                f.write(chunk)
-    except HTTPException:
-        raise
-    except Exception:
-        if os.path.exists(dest):
-            os.remove(dest)
-        raise
-
-    if student_user.avatar:
-        old_name = student_user.avatar.rsplit("/", 1)[-1]
-        old_full = os.path.join(_AVATAR_DIR, old_name)
-        if os.path.exists(old_full):
-            os.remove(old_full)
-
-    student_user.avatar = f"/uploads/avatars/{name}"
+    # 落盘 / 校验 / 删旧头像统一走 save_avatar（与教师头像上传共用同一实现，
+    # 原内联实现已下沉，见 uploads_service.save_avatar）。注：原实现先校验
+    # 扩展名（400）再查账号（404），现先查账号——仅「扩展名非法且账号缺失」
+    # 同时发生时状态码由 400 变 404，其余路径行为逐字节等价。
+    student_user.avatar = save_avatar(file, user_id=student_user.id, old_path=student_user.avatar)
     audit(db, user, "upload_student_avatar", target=f"{s.name} ({s.student_no})", student_id=student_id)
     db.commit()
     return {"avatar": student_user.avatar}

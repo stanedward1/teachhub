@@ -3,7 +3,7 @@
 仅保留：路由声明、依赖注入、参数解析、调用 ``homework_service``、返回。
 业务逻辑与数据访问见 ``app/services/homework_service.py``。
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -23,10 +23,13 @@ router = APIRouter(prefix="/api/homework", tags=["作业提交平台"])
 @router.get("/assignments")
 def list_assignments(
     class_id: int | None = None,
+    page: int | None = Query(None, ge=1),
+    page_size: int | None = Query(None, ge=1),
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return homework_service.list_assignments(db, class_id, user)
+    # page/page_size 均缺省时走 service 层全量兼容路径（返回结构与历史完全一致）
+    return homework_service.list_assignments(db, class_id, user, page, page_size)
 
 
 @router.get("/assignments/{assignment_id}")
@@ -61,10 +64,13 @@ def delete_assignment(
 @router.get("/assignments/{assignment_id}/submissions")
 def list_submissions(
     assignment_id: int,
+    page: int | None = Query(None, ge=1),
+    page_size: int | None = Query(None, ge=1),
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return homework_service.list_submissions(db, assignment_id, user)
+    # page/page_size 均缺省时走 service 层全量兼容路径（返回结构与历史完全一致）
+    return homework_service.list_submissions(db, assignment_id, user, page, page_size)
 
 
 @router.get("/assignments/{assignment_id}/unsubmitted")
@@ -291,8 +297,9 @@ def companion_conversations(
 ):
     """列出**该作业下**本班学生的学伴会话（一个学生会话 = 一行，**不含消息内容**）。
 
-    权限口径 = 班主任 ∪ 科任（`get_teacher_class_ids` / `apply_teacher_student_filter`）；
-    非本班作业 ⇒ 403。列表审计 action = `companion_view_list`（传 class_id，不传 student_id）。
+    权限口径 = 班主任 ∪ 科任（`get_teacher_class_ids` / `apply_teacher_student_filter`），
+    作业级入口另放行**该作业创建者**（「创建者保留管理权」，2026-10-09）；
+    非本班且非创建者 ⇒ 403。列表审计 action = `companion_view_list`（传 class_id，不传 student_id）。
     """
     return ai_companion_teacher.list_companion_conversations(
         db, assignment_id, user, page, page_size
@@ -307,7 +314,7 @@ def companion_conversation_detail(
 ):
     """取单个会话的完整消息（含学生提问原文 + AI 全文）。
 
-    🔴 三重硬校验（§14.2，缺一不可）：① 会话存在；② 其作业本班可访问；③ 该会话
+    🔴 三重硬校验（§14.2，缺一不可）：① 会话存在；② 其作业本班可访问（或系该教师所创建）；③ 该会话
     `student_id` 落在教师可见班级范围内。任不满足 ⇒ **404**（不泄露会话存在性）。
     详情审计 action = `companion_view_detail`（传 student_id）。
     """

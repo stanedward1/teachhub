@@ -57,7 +57,7 @@ class AiGradingResult(Base):
     )
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
     # pending（已排队/进行中） / success / failed
-    status = Column(String(20), nullable=False, default="pending")
+    status = Column(String(20), nullable=False, default="pending", index=True)
     provider = Column(String(50))
     model = Column(String(100))
     # 0-100，与 SubmissionComment.score 同量纲便于对照；可为空（模型未给出）

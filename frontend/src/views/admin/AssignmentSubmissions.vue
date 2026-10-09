@@ -13,11 +13,12 @@
     </div>
 
     <div class="page-card">
+      <!-- 骨架屏占位列数按角色取值：教师含「学伴」列 = 7；管理员不渲染该列 = 6（与 :columns 一致） -->
       <StateView
         :loading="loading"
         :error="error"
         :empty="!items.length"
-        :columns="7"
+        :columns="canViewCompanion ? 7 : 6"
         empty-description="暂无提交记录"
         @retry="load"
       >
@@ -51,8 +52,9 @@
               <span v-else class="muted">未批改</span>
             </template>
           </el-table-column>
-          <!-- 学伴：展示轮数 / 是否有拒答，点击打开只读会话面板（设计 §14.6） -->
-          <el-table-column label="学伴" width="130">
+          <!-- 学伴：展示轮数 / 是否有拒答，点击打开只读会话面板（设计 §14.6）；
+               教师专属接口，非教师角色不展示该列 -->
+          <el-table-column v-if="canViewCompanion" label="学伴" width="130">
             <template #default="{ row }">
               <el-button
                 v-if="companionOf(row)"
@@ -86,8 +88,9 @@
                 link
                 type="primary"
                 :loading="aiGradingId === row.id"
+                :disabled="row.ai_grading_status === 'pending'"
                 @click="aiGrade(row)"
-                >{{ row.ai_grading_status === 'success' ? '重新批改' : 'AI 批改' }}</el-button
+                >{{ aiGradeText(row.ai_grading_status) }}</el-button
               >
               <el-button v-if="!row.is_excellent" link type="success" @click="mark(row)"
                 >选为优秀</el-button
@@ -105,6 +108,9 @@
         </el-table>
       </StateView>
     </div>
+
+    <!-- 提交列表分页（P1-3）：翻页 / 改每页条数由 PaginationBar 触发 load -->
+    <PaginationBar v-model:page="page" v-model:page-size="pageSize" :total="total" @change="load" />
 
     <el-dialog v-model="dialog" title="评选优秀作品" width="480px">
       <el-form label-width="80px">
@@ -126,12 +132,14 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import StateView from '../../components/StateView.vue'
+import PaginationBar from '../../components/PaginationBar.vue'
 import CompanionConversationPanel from '../../components/CompanionConversationPanel.vue'
 import { useCrudList } from '../../composables/useCrudList'
 import { homeworkApi } from '../../api'
+import { getUser } from '../../utils/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -143,26 +151,41 @@ const saving = ref(false) // 评选优秀提交中（防重复提交）
 const unmarkingId = ref(null) // 正在取消优秀的提交 id
 // 学伴：该作业下本班学生的会话列表（按 student_id 索引），与提交列表按学生对齐
 const companionMap = ref({})
+// 学伴会话为**教师专属**读接口（后端挂 require_teacher_only，admin 必 403）。
+// 本页对 school_admin / super_admin 同样可达（菜单「任务列表」无角色门控、路由只要求 isTeacher()），
+// 故必须按角色决定是否发起该请求 —— 否则管理员每次进页都会看到一条
+// 「无权限访问该资源」的红字弹窗（缺陷 D-403-1）。
+const canViewCompanion = getUser()?.role === 'teacher'
 const companionOpen = ref(false)
 const activeConversationId = ref(null)
 
-// 作业提交审阅：单个作业的「作业详情 + 全部提交」一次取回。非标准分页 CRUD，用 wrapper
-// 把两路请求收敛进 useCrudList，去掉手写 loading/error/items 样板（不改后端）。
-// 学伴会话列表为附加信息：拉取失败时降级为空（学伴列为空），不阻断提交列表展示。
-const { items, loading, error, load } = useCrudList(async (_params) => {
+// 作业提交审阅：单个作业的「作业详情 + 全部提交」一次取回。useCrudList 会把
+// page / page_size 传进 wrapper（P1-3 分页），透传给后端列表接口即可。
+// 学伴会话列表为附加信息：拉取失败时降级为空（学伴列为空），且非教师角色不发起该请求
+// （接口为教师专属），不阻断提交列表展示。
+const { items, page, pageSize, total, loading, error, load } = useCrudList(async (params) => {
   const [a, s] = await Promise.all([
     homeworkApi.assignment(route.params.id),
-    homeworkApi.submissions(route.params.id),
+    homeworkApi.submissions(route.params.id, {
+      page: params.page,
+      page_size: params.page_size,
+    }),
   ])
   assignment.value = a
   await loadCompanions()
-  return { items: s.items, total: s.items.length }
+  return { items: s.items, total: s.total }
 })
 
 /** 拉取本作业的学伴会话列表（教师只读，设计 §14.2），失败降级为空对象 */
 async function loadCompanions() {
+  // 非教师角色（school_admin / super_admin）无该接口权限，直接跳过，避免必然的 403 弹窗
+  if (!canViewCompanion) return
   try {
-    const res = await homeworkApi.companionConversations(route.params.id, { page: 1, page_size: 200 })
+    const res = await homeworkApi.companionConversations(
+      route.params.id,
+      { page: 1, page_size: 200 },
+      { _silent: true }
+    )
     const map = {}
     for (const c of res?.items || []) {
       map[c.student_id] = c
@@ -227,14 +250,42 @@ async function unmark(row) {
   }
 }
 
-// AI 批改：单份触发（已有结果则重跑覆盖）；未批改 / 失败的提交也可单独补批
+// AI 批改：单份触发（已有成功结果则重跑覆盖）；未批改 / 失败的提交也可单独补批
 const aiGradingId = ref(null)
 
+/** 单份批改按钮文案：正在批改中 / 已批改可重跑 / 尚未批改 */
+function aiGradeText(status) {
+  if (status === 'pending') return '批改中'
+  return status === 'success' ? '重新批改' : 'AI 批改'
+}
+
 async function aiGrade(row) {
+  // 兜底：状态尚未刷新时按钮可能未禁用，此处再挡一次（后端也会幂等空操作）
+  if (row.ai_grading_status === 'pending') {
+    ElMessage.info('该提交正在批改中，请稍候')
+    return
+  }
+  // 已成功的提交重跑会再次消耗一次 AI 额度：先二次确认，取消则直接返回
+  if (row.ai_grading_status === 'success') {
+    try {
+      await ElMessageBox.confirm(
+        '该份已批改，重新批改会再次消耗一次 AI 额度，确认继续？',
+        '确认重新批改',
+        { type: 'warning' }
+      )
+    } catch (e) {
+      return // 用户取消
+    }
+  }
   aiGradingId.value = row.id
   try {
-    await homeworkApi.aiGradeSubmission(row.id)
-    ElMessage.success('已发起 AI 批改，稍后刷新查看结果')
+    const res = await homeworkApi.aiGradeSubmission(row.id)
+    // 后端对「已在批改中」返回 200 + queued=0，这是信息而非错误
+    if (res && res.queued === 0 && res.reason) {
+      ElMessage.info(res.reason)
+    } else {
+      ElMessage.success('已发起 AI 批改，稍后刷新查看结果')
+    }
     // 批改在后台线程执行，稍作延迟再拉取，避免立刻刷新仍是「批改中」
     setTimeout(load, 1200)
   } catch (e) {

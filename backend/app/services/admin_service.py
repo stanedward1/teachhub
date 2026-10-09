@@ -635,45 +635,52 @@ def audit_log_stats(db: Session, days: int = 30, user: "User | None" = None) -> 
         raise HTTPException(status_code=403, detail="仅班主任或管理员可查看审计日志")
 
     since = datetime.now() - timedelta(days=days)
-    q = db.query(OperationLog).filter(OperationLog.created_at >= since)
+    # 聚合下推 SQL：改前把区间内日志全量拉回内存再计数，现按三个维度分别
+    # GROUP BY，命中 ix_operation_logs_created_at 只做索引范围扫描，不回表取整行。
+    # 过滤条件与改前逐条一致（学校/班级可见性口径不变）。
+    filters = [OperationLog.created_at >= since]
     if not is_platform_admin(user):
-        q = q.filter(OperationLog.school_id == user.school_id)
+        filters.append(OperationLog.school_id == user.school_id)
     if class_ids is not None:
-        q = q.filter(OperationLog.class_id.in_(class_ids))
+        filters.append(OperationLog.class_id.in_(class_ids))
 
-    rows = q.all()
-    total = len(rows)
-
-    by_teacher: dict = {}
-    by_action: dict = {}
-    by_day: dict = {}
-    for r in rows:
-        uname = r.username or "未知"
-        by_teacher[uname] = by_teacher.get(uname, 0) + 1
-        by_action[r.action] = by_action.get(r.action, 0) + 1
-        day = r.created_at.strftime("%Y-%m-%d") if r.created_at else ""
-        if day:
-            by_day[day] = by_day.get(day, 0) + 1
-
-    # 教师活跃度：按次数倒序，Top 20
-    teacher_list = sorted(
-        [{"username": k, "count": v} for k, v in by_teacher.items()],
-        key=lambda x: -x["count"],
-    )[:20]
-    # 操作分布：按次数倒序
-    action_list = sorted(
-        [{"action": k, "count": v} for k, v in by_action.items()],
-        key=lambda x: -x["count"],
+    # `username` 为 NULL 或空串时计入「未知」——与改前 `r.username or "未知"` 口径一致
+    teacher_expr = func.coalesce(func.nullif(OperationLog.username, ""), "未知")
+    teacher_rows = (
+        db.query(teacher_expr, func.count(OperationLog.id))
+        .filter(*filters)
+        .group_by(teacher_expr)
+        .order_by(func.count(OperationLog.id).desc())
+        .limit(20)  # 教师活跃度 Top 20（改前为内存排序后切片）
+        .all()
     )
-    # 日趋势：按日期升序
-    day_list = [{"date": k, "count": v} for k, v in sorted(by_day.items())]
+    action_rows = (
+        db.query(OperationLog.action, func.count(OperationLog.id))
+        .filter(*filters)
+        .group_by(OperationLog.action)
+        .order_by(func.count(OperationLog.id).desc())
+        .all()
+    )
+    # by_day：`created_at IS NULL` 的行在改前不计入 by_day（day 为空串被跳过），
+    # 这里由 `created_at >= since` 天然排除（NULL 比较为假）。
+    day_expr = func.date(OperationLog.created_at)
+    day_rows = (
+        db.query(day_expr, func.count(OperationLog.id))
+        .filter(*filters)
+        .group_by(day_expr)
+        .order_by(day_expr)  # 日趋势按日期升序（与改前 sorted 一致）
+        .all()
+    )
+    total = db.query(func.count(OperationLog.id)).filter(*filters).scalar() or 0
 
+    # by_day 改前为 strftime("%Y-%m-%d") 字符串；MySQL DATE() 返回 date 对象、
+    # SQLite date() 返回字符串，统一 str() 成 "YYYY-MM-DD" 保持返回结构不变。
     return {
         "total": total,
         "days": days,
-        "by_teacher": teacher_list,
-        "by_action": action_list,
-        "by_day": day_list,
+        "by_teacher": [{"username": r[0], "count": r[1]} for r in teacher_rows],
+        "by_action": [{"action": r[0], "count": r[1]} for r in action_rows],
+        "by_day": [{"date": str(r[0]), "count": r[1]} for r in day_rows],
     }
 
 

@@ -6,20 +6,23 @@
     direction="rtl"
     @update:model-value="onClose"
   >
-    <div v-if="loading" style="text-align: center; padding: 60px 0; color: #9ca3af;">
-      <el-icon class="is-loading" style="font-size: 28px;"><Loading /></el-icon>
-      <p style="margin-top: 12px;">加载中...</p>
+    <div v-if="loading" style="text-align: center; padding: 60px 0; color: #9ca3af">
+      <el-icon class="is-loading" style="font-size: 28px"><Loading /></el-icon>
+      <p style="margin-top: 12px">加载中...</p>
     </div>
 
     <div v-else-if="profile" class="student-card">
       <!-- 基本信息 -->
       <div class="sc-header">
-        <el-avatar :size="52" style="background: linear-gradient(135deg, #2563eb, #4f46e5); font-weight: 700;">
+        <el-avatar
+          :size="52"
+          style="background: linear-gradient(135deg, #2563eb, #4f46e5); font-weight: 700"
+        >
           {{ profile.student.name?.[0] }}
         </el-avatar>
-        <div style="flex: 1; min-width: 0;">
-          <div style="font-size: 16px; font-weight: 600;">{{ profile.student.name }}</div>
-          <div style="color: var(--text-tertiary); font-size: 12px; margin-top: 2px;">
+        <div style="flex: 1; min-width: 0">
+          <div style="font-size: 16px; font-weight: 600">{{ profile.student.name }}</div>
+          <div style="color: var(--text-tertiary); font-size: 12px; margin-top: 2px">
             {{ profile.student.student_no }} ｜ {{ profile.student.class_name }}
           </div>
         </div>
@@ -30,25 +33,36 @@
 
       <!-- 四维雷达 -->
       <div class="sc-radar">
-        <div ref="radarRef" style="width: 100%; height: 220px;"></div>
+        <div ref="radarRef" style="width: 100%; height: 220px"></div>
       </div>
 
       <!-- 关键指标 -->
       <div class="sc-stats">
         <div class="sc-stat">
-          <div class="sc-stat-val" style="color: #2563eb;">{{ profile.score_summary.avg || '—' }}</div>
+          <div class="sc-stat-val" style="color: #2563eb">
+            {{ profile.score_summary.avg || '—' }}
+          </div>
           <div class="sc-stat-label">成绩均分</div>
         </div>
         <div class="sc-stat">
-          <div class="sc-stat-val" :style="{ color: profile.point_summary.total >= 0 ? '#10b981' : '#ef4444' }">{{ profile.point_summary.total }}</div>
+          <div
+            class="sc-stat-val"
+            :style="{ color: profile.point_summary.total >= 0 ? '#10b981' : '#ef4444' }"
+          >
+            {{ profile.point_summary.total }}
+          </div>
           <div class="sc-stat-label">积分总计</div>
         </div>
         <div class="sc-stat">
-          <div class="sc-stat-val" style="color: #8b5cf6;">{{ Math.max(0, 100 - profile.leave_summary.total * 5) }}%</div>
+          <div class="sc-stat-val" style="color: #8b5cf6">
+            {{ Math.max(0, 100 - profile.leave_summary.total * 5) }}%
+          </div>
           <div class="sc-stat-label">出勤率</div>
         </div>
         <div class="sc-stat">
-          <div class="sc-stat-val" style="color: #f59e0b;">{{ profile.performance_summary.positive }}/{{ profile.performance_summary.negative }}</div>
+          <div class="sc-stat-val" style="color: #f59e0b">
+            {{ profile.performance_summary.positive }}/{{ profile.performance_summary.negative }}
+          </div>
           <div class="sc-stat-label">积极/消极</div>
         </div>
       </div>
@@ -56,8 +70,10 @@
       <!-- 标签 -->
       <div class="sc-section" v-if="profile.tags?.length">
         <div class="sc-section-title">个性化标签</div>
-        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
-          <el-tag v-for="t in profile.tags" :key="t.id" size="small" effect="plain">{{ t.tag }}</el-tag>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px">
+          <el-tag v-for="t in profile.tags" :key="t.id" size="small" effect="plain">{{
+            t.tag
+          }}</el-tag>
         </div>
       </div>
 
@@ -65,8 +81,14 @@
       <div class="sc-section" v-if="profile.performance_summary.recent?.length">
         <div class="sc-section-title">近期表现</div>
         <div class="sc-timeline">
-          <div v-for="(p, i) in profile.performance_summary.recent.slice(0, 5)" :key="i" class="sc-timeline-item">
-            <el-tag :type="p.ptype === '积极' ? 'success' : 'danger'" size="small" effect="plain">{{ p.ptype }}</el-tag>
+          <div
+            v-for="(p, i) in profile.performance_summary.recent.slice(0, 5)"
+            :key="i"
+            class="sc-timeline-item"
+          >
+            <el-tag :type="p.ptype === '积极' ? 'success' : 'danger'" size="small" effect="plain">{{
+              p.ptype
+            }}</el-tag>
             <span class="sc-timeline-content">{{ p.content }}</span>
             <span class="sc-timeline-date">{{ p.date }}</span>
           </div>
@@ -77,7 +99,11 @@
       <div class="sc-section" v-if="profile.leave_summary.recent?.length">
         <div class="sc-section-title">近期请假</div>
         <div class="sc-timeline">
-          <div v-for="(l, i) in profile.leave_summary.recent.slice(0, 5)" :key="i" class="sc-timeline-item">
+          <div
+            v-for="(l, i) in profile.leave_summary.recent.slice(0, 5)"
+            :key="i"
+            class="sc-timeline-item"
+          >
             <span class="sc-timeline-content">{{ l.reason }}</span>
             <span class="sc-timeline-date">{{ l.start }} ~ {{ l.end }}</span>
           </div>
@@ -87,19 +113,20 @@
       <!-- 操作 -->
       <div class="sc-footer">
         <el-button v-if="profile.student.parent_phone" link type="primary" @click="callParent">
-          <el-icon style="margin-right: 4px;"><Phone /></el-icon>联系家长 {{ profile.student.parent_phone }}
+          <el-icon style="margin-right: 4px"><Phone /></el-icon>联系家长
+          {{ profile.student.parent_phone }}
         </el-button>
         <div class="spacer"></div>
         <el-button type="primary" @click="goProfile">查看完整画像</el-button>
       </div>
     </div>
 
-    <div v-else style="text-align: center; padding: 60px 0; color: #9ca3af;">暂无学生信息</div>
+    <div v-else style="text-align: center; padding: 60px 0; color: #9ca3af">暂无学生信息</div>
   </el-drawer>
 </template>
 
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { studentApi } from '../api'
 import * as echarts from 'echarts/core'
@@ -110,7 +137,7 @@ echarts.use([RadarChart, RadarComponent, TooltipComponent, CanvasRenderer])
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
-  studentId: { type: [Number, String], default: null }
+  studentId: { type: [Number, String], default: null },
 })
 const emit = defineEmits(['update:visible'])
 
@@ -135,17 +162,22 @@ async function load(id) {
   profile.value = null
   try {
     profile.value = await studentApi.profile(id)
-    await nextTick()
-    renderRadar()
   } catch (e) {
   } finally {
     loading.value = false
   }
+  // 必须等 loading 复位、模板切出雷达容器后再渲染：否则雷达容器被 v-if 挡在
+  // loading 块之后、radarRef 仍为 null，renderRadar 直接 return，雷达永远空白
+  await nextTick()
+  renderRadar()
 }
 
 function renderRadar() {
   if (!radarRef.value || !profile.value) return
-  if (radarChart) { radarChart.dispose(); radarChart = null }
+  if (radarChart) {
+    radarChart.dispose()
+    radarChart = null
+  }
   radarChart = echarts.init(radarRef.value)
   const r = profile.value.radar
   radarChart.setOption({
@@ -159,18 +191,34 @@ function renderRadar() {
         { name: '出勤', max: 100 },
         { name: '技能', max: 100 },
       ],
-      axisName: { color: '#6b7280', fontSize: 11 }
+      axisName: { color: '#6b7280', fontSize: 11 },
     },
-    series: [{
-      type: 'radar',
-      data: [{ value: [r.academic, r.moral, r.attendance, r.skill], name: '综合评分', areaStyle: { color: 'rgba(37,99,235,0.12)' } }],
-      lineStyle: { color: '#2563eb', width: 2 },
-      itemStyle: { color: '#2563eb' },
-      symbol: 'circle',
-      symbolSize: 4,
-    }]
+    series: [
+      {
+        type: 'radar',
+        data: [
+          {
+            value: [r.academic, r.moral, r.attendance, r.skill],
+            name: '综合评分',
+            areaStyle: { color: 'rgba(37,99,235,0.12)' },
+          },
+        ],
+        lineStyle: { color: '#2563eb', width: 2 },
+        itemStyle: { color: '#2563eb' },
+        symbol: 'circle',
+        symbolSize: 4,
+      },
+    ],
   })
 }
+
+// 组件卸载时销毁 ECharts 实例，避免 canvas / 事件监听泄漏
+onBeforeUnmount(() => {
+  if (radarChart) {
+    radarChart.dispose()
+    radarChart = null
+  }
+})
 
 function onClose(v) {
   emit('update:visible', v)
@@ -258,5 +306,7 @@ function callParent() {
   border-top: 1px solid var(--border-light);
   padding-top: 12px;
 }
-.spacer { flex: 1; }
+.spacer {
+  flex: 1;
+}
 </style>

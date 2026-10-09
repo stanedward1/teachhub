@@ -34,7 +34,9 @@
 
         <div v-if="error" class="cc-error">{{ error }}</div>
 
-        <div v-else-if="!loading && !messages.length" class="cc-empty">该学生在本作业下暂无学伴对话</div>
+        <div v-else-if="!loading && !messages.length" class="cc-empty">
+          该学生在本作业下暂无学伴对话
+        </div>
 
         <div
           v-for="m in messages"

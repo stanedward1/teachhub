@@ -40,7 +40,7 @@ import { uploadFile } from '../api'
 const props = defineProps({
   modelValue: { type: String, default: '' },
   rows: { type: Number, default: 18 },
-  height: { type: String, default: '560px' }
+  height: { type: String, default: '560px' },
 })
 const emit = defineEmits(['update:modelValue'])
 

@@ -7,7 +7,9 @@ function loadPrefs() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     return raw ? JSON.parse(raw) : {}
-  } catch { return {} }
+  } catch {
+    return {}
+  }
 }
 
 function savePrefs(prefs) {

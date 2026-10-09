@@ -36,7 +36,9 @@
            remaining 为 null 时不展示，避免闪出错误值；仅显示剩余（不暴露上限/平台口径）。 -->
       <div v-if="remaining !== null" class="cp-quota">
         <el-icon><Timer /></el-icon>
-        <span>今日剩余 <b>{{ remaining }}</b> 次</span>
+        <span
+          >今日剩余 <b>{{ remaining }}</b> 次</span
+        >
       </div>
 
       <!-- 消息区 -->
@@ -62,7 +64,11 @@
           class="cp-row"
           :class="m.role === 'user' ? 'cp-row-user' : 'cp-row-ai'"
         >
-          <el-avatar :size="28" class="cp-avatar" :class="m.role === 'user' ? 'cp-av-user' : 'cp-av-ai'">
+          <el-avatar
+            :size="28"
+            class="cp-avatar"
+            :class="m.role === 'user' ? 'cp-av-user' : 'cp-av-ai'"
+          >
             {{ m.role === 'user' ? '我' : 'AI' }}
           </el-avatar>
           <div class="cp-bubble-col">
@@ -91,7 +97,9 @@
                 </div>
               </template>
             </div>
-            <div v-if="m.role === 'assistant' && m.truncated" class="cp-truncated">回答较长，已截断</div>
+            <div v-if="m.role === 'assistant' && m.truncated" class="cp-truncated">
+              回答较长，已截断
+            </div>
             <div v-if="m.createdAt" class="cp-time">{{ m.createdAt }}</div>
           </div>
         </div>
@@ -331,8 +339,10 @@ function retry(index) {
   }
   const question = failedQuestion.value
   if (!question) return
-  // 移除失败气泡，避免与重试后的回答重复堆积
-  messages.value.splice(index, 1)
+  // 提问气泡 + 失败回答气泡一起移除，交由 send 重建，避免提问重复
+  // （仅删失败回答会让 send 再 push 一条新的用户气泡，原提问留在列表里）
+  const hasPrevUser = index > 0 && messages.value[index - 1]?.role === 'user'
+  messages.value.splice(hasPrevUser ? index - 1 : index, hasPrevUser ? 2 : 1)
   send(question)
 }
 

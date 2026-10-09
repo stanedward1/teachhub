@@ -72,8 +72,19 @@
         </el-form-item>
 
         <el-form-item label="每日调用上限">
-          <el-input-number v-model="aiForm.daily_limit" :min="1" :max="100000" :disabled="aiLoading" />
-          <el-button type="primary" plain style="margin-left: 12px" :loading="aiSaving" @click="saveAiGrading">
+          <el-input-number
+            v-model="aiForm.daily_limit"
+            :min="1"
+            :max="100000"
+            :disabled="aiLoading"
+          />
+          <el-button
+            type="primary"
+            plain
+            style="margin-left: 12px"
+            :loading="aiSaving"
+            @click="saveAiGrading"
+          >
             保存
           </el-button>
           <div class="hint">总开关为平台级，这里是唯一的成本刹车；超限当日自动停止批改。</div>
@@ -111,11 +122,19 @@
             :max="100000"
             :disabled="aiLoading"
           />
-          <el-button type="primary" plain style="margin-left: 12px" :loading="aiSaving" @click="saveAiGrading">
+          <el-button
+            type="primary"
+            plain
+            style="margin-left: 12px"
+            :loading="aiSaving"
+            @click="saveAiGrading"
+          >
             保存
           </el-button>
           <div class="hint">
-            <b>全平台</b>每日学伴总次数上限（成本保护，跨所有学生合计）；超限当日所有学生都无法继续提问。缺省 6000。
+            <b>全平台</b
+            >每日学伴总次数上限（成本保护，跨所有学生合计）；超限当日所有学生都无法继续提问。缺省
+            6000。
           </div>
         </el-form-item>
 
@@ -126,11 +145,18 @@
             :max="100000"
             :disabled="aiLoading"
           />
-          <el-button type="primary" plain style="margin-left: 12px" :loading="aiSaving" @click="saveAiGrading">
+          <el-button
+            type="primary"
+            plain
+            style="margin-left: 12px"
+            :loading="aiSaving"
+            @click="saveAiGrading"
+          >
             保存
           </el-button>
           <div class="hint">
-            <b>每个学生</b>每日可用 AI 学伴的次数上限（各自独立、互不影响）；学生端会实时显示「今日剩余 N 次」。缺省 20。
+            <b>每个学生</b>每日可用 AI
+            学伴的次数上限（各自独立、互不影响）；学生端会实时显示「今日剩余 N 次」。缺省 20。
           </div>
         </el-form-item>
 
@@ -138,7 +164,9 @@
           <el-tag v-if="!aiForm.configured" type="warning" size="small">凭证未配置</el-tag>
           <el-tag v-else-if="aiForm.enabled" type="success" size="small">运行中</el-tag>
           <el-tag v-else type="info" size="small">已关闭</el-tag>
-          <span class="usage">今日已用 {{ aiForm.today_call_count }} / {{ aiForm.daily_limit }} 次</span>
+          <span class="usage"
+            >今日已用 {{ aiForm.today_call_count }} / {{ aiForm.daily_limit }} 次</span
+          >
         </el-form-item>
       </el-form>
 
@@ -173,7 +201,8 @@
             @change="onVisionChange"
           />
           <div class="hint">
-            deepseek-flash 原生支持图片输入（仅 JPEG/PNG/GIF/WebP），建议开启；关闭后图片会被静默跳过。
+            deepseek-flash 原生支持图片输入（仅
+            JPEG/PNG/GIF/WebP），建议开启；关闭后图片会被静默跳过。
             所配模型支持多模态时才开启；关闭时图片附件会标注「未参与批改」。
           </div>
         </el-form-item>
@@ -181,7 +210,9 @@
           <el-switch v-model="credForm.enabled" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :loading="credSaving" @click="saveCredential">保存凭证</el-button>
+          <el-button type="primary" :loading="credSaving" @click="saveCredential"
+            >保存凭证</el-button
+          >
           <el-button :loading="testing" @click="testCredential">测试连接</el-button>
         </el-form-item>
       </el-form>

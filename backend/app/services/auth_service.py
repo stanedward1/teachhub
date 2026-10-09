@@ -33,7 +33,7 @@ from app.security import (
 )
 from app.utils import gen_student_no, to_dict
 
-# 登录失败锁定策略（语义不变：连续失败 5 次锁定 15 分钟）
+# 登录失败锁定策略（连续失败 15 次锁定 15 分钟）
 # 提示文案刻意中性：不出现「已锁定」字样，也不区分「账号是否存在」——避免变相成为账号枚举 oracle
 MAX_FAILED_ATTEMPTS = 15
 LOCK_DURATION_MINUTES = 15
@@ -181,16 +181,27 @@ def _new_refresh_token(
     return plain, row
 
 
-def _load_refresh_token(db: Session, token_plain: str) -> RefreshToken | None:
-    """按摘要检索刷新令牌；显式跳过租户过滤（刷新请求通常无有效 access token）。"""
+def _load_refresh_token(
+    db: Session, token_plain: str, *, for_update: bool = False
+) -> RefreshToken | None:
+    """按摘要检索刷新令牌；显式跳过租户过滤（刷新请求通常无有效 access token）。
+
+    ``for_update=True`` 时对命中的行加排他锁（``SELECT ... FOR UPDATE``）——用于
+    ``refresh`` 的**一次性轮换**：并发使用同一 refresh_token 时串行化，避免「先查后改」
+    竞态下两个请求都读到未撤销的同一行、各自签发一枚新令牌（旧实现无锁）。
+    该查询按唯一索引 ``token_hash`` 定位单行，可安全加锁（与 ``ai_grading.reserve_quota``
+    等处的 ``.with_for_update()`` 同范式；SQLite 方言会忽略 FOR UPDATE，不影响单机测试）。
+    """
     if not token_plain:
         return None
-    return (
+    q = (
         db.query(RefreshToken)
         .execution_options(skip_tenant_filter=True)
         .filter(RefreshToken.token_hash == hash_refresh_token(token_plain))
-        .first()
     )
+    if for_update:
+        q = q.with_for_update()
+    return q.first()
 
 
 def invalidate_user_sessions(db: Session, user: User) -> None:
@@ -436,7 +447,8 @@ def refresh(
     - 旧行置 `revoked_at` 并将 `replaced_by` 指向新令牌摘要；
     - 否则一律 401 `{"detail": "登录已过期，请重新登录"}`。
     """
-    row = _load_refresh_token(db, refresh_token)
+    # 加锁读取：并发用同一 refresh_token 刷新时串行化，保证「一次性轮换」语义
+    row = _load_refresh_token(db, refresh_token, for_update=True)
     now = _utcnow()
     if (
         row is None

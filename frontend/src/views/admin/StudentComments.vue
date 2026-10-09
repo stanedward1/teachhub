@@ -67,7 +67,7 @@
             >
               <el-icon style="margin-right: 4px"><MagicStick /></el-icon>AI 生成草稿
             </el-button>
-            <span style="font-size: 12px; color: #909399"
+            <span style="font-size: 12px; color: var(--el-color-info)"
               >根据该生成绩、表现、考勤、积分自动生成，可再编辑</span
             >
           </div>
@@ -133,7 +133,8 @@ function openCreate() {
 
 function openEdit(row) {
   editing.value = row
-  Object.assign(form, row)
+  // 只拷贝表单声明的字段，避免整行的 student_name / created_at 等额外键被注入
+  Object.assign(form, { student_id: row.student_id, content: row.content })
   dialog.value = true
 }
 
@@ -141,8 +142,10 @@ async function save() {
   if (!form.student_id) return ElMessage.warning('请选择学生')
   saving.value = true
   try {
-    if (editing.value) await studentCommentApi.update(editing.value.id, form)
-    else await studentCommentApi.create(form)
+    // 显式构造载荷：只提交表单声明的字段
+    const payload = { student_id: form.student_id, content: form.content }
+    if (editing.value) await studentCommentApi.update(editing.value.id, payload)
+    else await studentCommentApi.create(payload)
     ElMessage.success('保存成功')
     dialog.value = false
     load()

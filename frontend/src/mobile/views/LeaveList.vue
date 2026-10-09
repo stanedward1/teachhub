@@ -15,7 +15,13 @@
           :label="`${l.reason || '未填写'} · ${l.start_date || ''} ~ ${l.end_date || ''}`"
         >
           <template #value>
-            <van-button v-if="l.status !== '已销假'" size="small" type="primary" plain @click.stop="approve(l)">
+            <van-button
+              v-if="l.status !== '已销假'"
+              size="small"
+              type="primary"
+              plain
+              @click.stop="approve(l)"
+            >
               销假
             </van-button>
             <van-tag v-else type="success" size="small">已销假</van-tag>
@@ -93,7 +99,13 @@ const refreshing = ref(false)
 // 新增请假
 const showCreate = ref(false)
 const saving = ref(false)
-const form = reactive({ student_id: null, student_name: '', reason: '', start_date: '', end_date: '' })
+const form = reactive({
+  student_id: null,
+  student_name: '',
+  reason: '',
+  start_date: '',
+  end_date: '',
+})
 const showStudentPicker = ref(false)
 const pickKeyword = ref('')
 const pickList = ref([])
@@ -126,12 +138,17 @@ async function approve(l) {
     await leaveApi.update(l.id, { status: '已销假' })
     showSuccessToast('已销假')
     load()
-  } catch (e) {
-  }
+  } catch (e) {}
 }
 
 function openCreate() {
-  Object.assign(form, { student_id: null, student_name: '', reason: '', start_date: '', end_date: '' })
+  Object.assign(form, {
+    student_id: null,
+    student_name: '',
+    reason: '',
+    start_date: '',
+    end_date: '',
+  })
   showCreate.value = true
 }
 
@@ -139,8 +156,7 @@ async function loadPicker() {
   try {
     const res = await mobileApi.students({ keyword: pickKeyword.value })
     pickList.value = res.items || []
-  } catch (e) {
-  }
+  } catch (e) {}
 }
 
 function chooseStudent(s) {
@@ -174,7 +190,7 @@ async function submit() {
       student_id: form.student_id,
       reason: form.reason.trim(),
       start_date: form.start_date,
-      end_date: form.end_date
+      end_date: form.end_date,
     })
     showSuccessToast('新增成功')
     showCreate.value = false

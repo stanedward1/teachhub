@@ -70,9 +70,7 @@ export function useCrudList(listApi, options = {}) {
    * @returns {boolean} 是否属于取消
    */
   function isCanceled(e) {
-    return (
-      axios.isCancel?.(e) === true || e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError'
-    )
+    return axios.isCancel?.(e) === true || e?.code === 'ERR_CANCELED' || e?.name === 'CanceledError'
   }
 
   async function load() {

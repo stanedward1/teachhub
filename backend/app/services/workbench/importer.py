@@ -89,49 +89,54 @@ def run_import(
 
     contents = file.file.read()
     wb = load_workbook(BytesIO(contents))
-    ws = wb.active
+    try:
+        ws = wb.active
 
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
-    if not rows:
-        raise HTTPException(status_code=400, detail="文件中没有数据行")
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        if not rows:
+            raise HTTPException(status_code=400, detail="文件中没有数据行")
 
-    all_errors: list[str] = []
-    success = 0
-    total = 0
+        all_errors: list[str] = []
+        success = 0
+        total = 0
 
-    for row_num, row in enumerate(rows, start=2):
-        if not any(row):
-            continue
-        total += 1
+        for row_num, row in enumerate(rows, start=2):
+            if not any(row):
+                continue
+            total += 1
 
-        try:
-            # SAVEPOINT：本行写入失败只回滚本行，此前已成功的行完整保留
-            # （旧实现在此处 db.rollback() 会回滚整个事务，导致前序成功行静默丢失）
-            with db.begin_nested():
-                status, errors = handle_row(db, row, row_num)
-            if status == ROW_OK:
-                success += 1
-            if errors:
-                all_errors.extend(errors)
-        except Exception as e:  # noqa: BLE001 - 单行失败不应中断整批导入
-            # 系统异常必须落盘，否则只能看到前端一句 str(e) 而查不到堆栈
-            logger.exception("[import:%s] 第 %s 行处理失败", import_type, row_num)
-            all_errors.append(f"第{row_num}行：导入失败 - {str(e)}")
+            try:
+                # SAVEPOINT：本行写入失败只回滚本行，此前已成功的行完整保留
+                # （旧实现在此处 db.rollback() 会回滚整个事务，导致前序成功行静默丢失）
+                with db.begin_nested():
+                    status, errors = handle_row(db, row, row_num)
+                if status == ROW_OK:
+                    success += 1
+                if errors:
+                    all_errors.extend(errors)
+            except Exception as e:  # noqa: BLE001 - 单行失败不应中断整批导入
+                # 系统异常必须落盘，否则只能看到前端一句 str(e) 而查不到堆栈
+                logger.exception("[import:%s] 第 %s 行处理失败", import_type, row_num)
+                all_errors.append(f"第{row_num}行：导入失败 - {str(e)}")
 
-    db.commit()
-    audit(db, user, audit_action, target=f"{file.filename or ''} 成功{success}条")
+        audit(db, user, audit_action, target=f"{file.filename or ''} 成功{success}条")
 
-    db.add(
-        ImportHistory(
-            import_type=import_type,
-            filename=file.filename or "",
-            total_rows=total,
-            success_rows=success,
-            error_rows=len(all_errors),
-            errors=json.dumps(all_errors[:100], ensure_ascii=False),
-            user_id=user.id,
+        db.add(
+            ImportHistory(
+                import_type=import_type,
+                filename=file.filename or "",
+                total_rows=total,
+                success_rows=success,
+                error_rows=len(all_errors),
+                errors=json.dumps(all_errors[:100], ensure_ascii=False),
+                user_id=user.id,
+            )
         )
-    )
-    db.commit()
+        # 单次提交：导入数据与导入历史在同一事务内落库，消除「数据已入库但导入历史缺失」
+        # 的中间态（原实现先提交数据、再单独提交历史，两次 commit 之间进程中断即产生不一致）。
+        db.commit()
+    finally:
+        # 无论成功/失败都释放工作簿资源（原实现从不关闭，可能长期占用文件句柄/内存）
+        wb.close()
 
     return {"success": success, "total": total, "errors": all_errors[:50]}

@@ -6,7 +6,9 @@
     <el-row :gutter="16">
       <el-col :span="12">
         <div class="page-card">
-          <h3 class="sec-title"><el-icon><Monitor /></el-icon> 推荐 OJ 平台</h3>
+          <h3 class="sec-title">
+            <el-icon><Monitor /></el-icon> 推荐 OJ 平台
+          </h3>
           <div class="link-list">
             <a v-for="o in data.oj" :key="o.name" :href="o.url" target="_blank" class="link-item">
               <div>
@@ -20,9 +22,17 @@
       </el-col>
       <el-col :span="12">
         <div class="page-card">
-          <h3 class="sec-title"><el-icon><Reading /></el-icon> C 语言入门教程</h3>
+          <h3 class="sec-title">
+            <el-icon><Reading /></el-icon> C 语言入门教程
+          </h3>
           <div class="link-list">
-            <a v-for="t in data.tutorials" :key="t.name" :href="t.url" target="_blank" class="link-item">
+            <a
+              v-for="t in data.tutorials"
+              :key="t.name"
+              :href="t.url"
+              target="_blank"
+              class="link-item"
+            >
               <div>
                 <div class="l-name">{{ t.name }}</div>
                 <div class="l-desc">{{ t.desc }}</div>

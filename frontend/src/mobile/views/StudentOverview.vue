@@ -25,7 +25,10 @@
 
     <!-- 关键指标 -->
     <van-cell-group inset title="关键指标">
-      <van-cell title="成绩平均分" :value="`${data.score_summary.avg} 分（${data.score_summary.total} 次）`" />
+      <van-cell
+        title="成绩平均分"
+        :value="`${data.score_summary.avg} 分（${data.score_summary.total} 次）`"
+      />
       <van-cell title="积分总计" :value="`${data.point_summary.total} 分`" />
       <van-cell title="积极表现" :value="`${data.performance_summary.positive} 次`" />
       <van-cell title="请假记录" :value="`${data.leave_summary.total} 次`" />
@@ -82,8 +85,7 @@ async function load() {
     data.value = await mobileApi.overview(route.params.id)
     await nextTick()
     renderRadar()
-  } catch (e) {
-  }
+  } catch (e) {}
 }
 
 function renderRadar() {
@@ -98,9 +100,9 @@ function renderRadar() {
         { name: '学业', max: 100 },
         { name: '品德', max: 100 },
         { name: '出勤', max: 100 },
-        { name: '技能', max: 100 }
+        { name: '技能', max: 100 },
       ],
-      radius: '65%'
+      radius: '65%',
     },
     series: [
       {
@@ -111,18 +113,21 @@ function renderRadar() {
             name: '画像',
             areaStyle: { color: 'rgba(37,99,235,0.25)' },
             lineStyle: { color: '#2563eb' },
-            itemStyle: { color: '#2563eb' }
-          }
-        ]
-      }
-    ]
+            itemStyle: { color: '#2563eb' },
+          },
+        ],
+      },
+    ],
   })
 }
 
 onMounted(load)
 
 onBeforeUnmount(() => {
-  if (chart) { chart.dispose(); chart = null }
+  if (chart) {
+    chart.dispose()
+    chart = null
+  }
 })
 </script>
 

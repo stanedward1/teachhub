@@ -28,10 +28,7 @@
       <div class="spacer"></div>
       <el-button @click="downloadTemplate">下载模板</el-button>
       <el-button type="success" @click="openImport">批量导入</el-button>
-      <el-button
-        type="warning"
-        :disabled="!selected.length"
-        @click="openBatchPassword"
+      <el-button type="warning" :disabled="!selected.length" @click="openBatchPassword"
         >批量改密{{ selected.length ? ` (${selected.length})` : '' }}</el-button
       >
       <el-button @click="exportExcel">导出花名册</el-button>
@@ -54,7 +51,12 @@
           <el-button type="primary" @click="openCreate">添加学生</el-button>
           <el-button @click="openImport">批量导入</el-button>
         </template>
-        <el-table :data="items" v-loading="loading" style="width: 100%" @selection-change="onSelectionChange">
+        <el-table
+          :data="items"
+          v-loading="loading"
+          style="width: 100%"
+          @selection-change="onSelectionChange"
+        >
           <el-table-column type="selection" width="46" :selectable="isRowSelectable" />
           <el-table-column prop="student_no" label="学号" width="120" />
           <el-table-column label="头像" width="70">

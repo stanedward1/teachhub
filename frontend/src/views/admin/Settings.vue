@@ -47,6 +47,8 @@ import { isPlatformAdmin } from '../../utils/auth'
 
 const schoolName = ref('')
 const semester = ref('')
+// 保存设置的重入锁：校内设置分两条 setSetting 写入，防双击造成重复提交
+const savingSettings = ref(false)
 // 平台超管：本页的校内设置表单对其隐藏（见模板注释与后端 set_setting 的 400 守卫）
 const isPlatformUser = isPlatformAdmin()
 // 年级升级忙碌标记：升级是不可逆的破坏性操作，双击会连升两级
@@ -67,9 +69,15 @@ onMounted(async () => {
 })
 
 async function saveSettings() {
-  await adminApi.setSetting('school_name', schoolName.value)
-  await adminApi.setSetting('semester', semester.value)
-  ElMessage.success('设置已保存')
+  if (savingSettings.value) return // 防双击：两条设置写入在途时忽略重复触发
+  savingSettings.value = true
+  try {
+    await adminApi.setSetting('school_name', schoolName.value)
+    await adminApi.setSetting('semester', semester.value)
+    ElMessage.success('设置已保存')
+  } finally {
+    savingSettings.value = false
+  }
 }
 
 async function upgrade() {

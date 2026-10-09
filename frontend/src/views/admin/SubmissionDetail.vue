@@ -53,8 +53,15 @@
           >
             采纳为优秀作品
           </el-button>
-          <el-button link type="primary" size="small" :loading="aiRunning" @click="runAiGrading">
-            {{ ai ? '重新批改' : 'AI 批改' }}
+          <el-button
+            link
+            type="primary"
+            size="small"
+            :loading="aiRunning"
+            :disabled="ai?.status === 'pending'"
+            @click="runAiGrading"
+          >
+            {{ aiStateText }}
           </el-button>
         </div>
         <div class="ai-tip">AI 生成，仅供参考，以教师评语为准</div>
@@ -195,7 +202,7 @@ async function submitComment() {
   saving.value = true
   try {
     await homeworkApi.addSubmissionComment(route.params.submissionId, {
-      content: form.content,
+      content: form.content.trim(),
       score: form.score,
     })
     ElMessage.success('点评成功')
@@ -209,7 +216,11 @@ async function submitComment() {
 }
 
 async function removeComment(c) {
-  await ElMessageBox.confirm('确定删除这条点评吗？', '提示', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm('确定删除这条点评吗？', '提示', { type: 'warning' })
+  } catch {
+    return // 用户取消确认框：静默返回，不弹任何提示
+  }
   await homeworkApi.deleteSubmissionComment(route.params.submissionId, c.id)
   ElMessage.success('已删除')
   load()
@@ -220,6 +231,11 @@ async function removeComment(c) {
 const ai = computed(() => submission.value?.ai_grading || null)
 const aiRunning = ref(false)
 const accepting = ref(false) // 采纳 AI 推荐提交中（防重复提交）
+// 单份批改按钮文案：正在批改中 / 已批改可重跑 / 尚未批改
+const aiStateText = computed(() => {
+  if (ai.value?.status === 'pending') return '批改中'
+  return ai.value ? '重新批改' : 'AI 批改'
+})
 
 function aiStatusText(status) {
   if (status === 'success') return '已批改'
@@ -234,10 +250,32 @@ function aiStatusType(status) {
 }
 
 async function runAiGrading() {
+  // 兜底：状态尚未刷新时按钮可能未禁用，此处再挡一次（后端也会幂等空操作）
+  if (ai.value?.status === 'pending') {
+    ElMessage.info('该提交正在批改中，请稍候')
+    return
+  }
+  // 已成功的提交重跑会再次消耗一次 AI 额度：先二次确认，取消则直接返回
+  if (ai.value?.status === 'success') {
+    try {
+      await ElMessageBox.confirm(
+        '该份已批改，重新批改会再次消耗一次 AI 额度，确认继续？',
+        '确认重新批改',
+        { type: 'warning' }
+      )
+    } catch (e) {
+      return // 用户取消
+    }
+  }
   aiRunning.value = true
   try {
-    await homeworkApi.aiGradeSubmission(route.params.submissionId)
-    ElMessage.success('已发起 AI 批改，稍后刷新查看结果')
+    const res = await homeworkApi.aiGradeSubmission(route.params.submissionId)
+    // 后端对「已在批改中」返回 200 + queued=0，这是信息而非错误
+    if (res && res.queued === 0 && res.reason) {
+      ElMessage.info(res.reason)
+    } else {
+      ElMessage.success('已发起 AI 批改，稍后刷新查看结果')
+    }
     // 批改在后台线程执行，延迟刷新以拿到最新状态
     setTimeout(load, 1500)
   } catch (e) {
