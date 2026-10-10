@@ -825,10 +825,7 @@ def ask(db: Session, assignment_id: int, question: str, user: User) -> dict:
 
     # 4a. 每生配额（公平语义）：尽 ⇒ 个人文案
     if per_student_remaining_quota(db, student.id) <= 0:
-        raise HTTPException(
-            status_code=429,
-            detail=_MSG_QUOTA_PER_STUDENT,
-        )
+        raise HTTPException(status_code=429, detail=_MSG_QUOTA_PER_STUDENT)
 
     # 4b. 学校闸（校级开关 + 校级池，docs/DESIGN-AI校级能力.md §3 D4.1）：
     #     开关关 ⇒ 403（管理性不可用，与平台开关关同类）；池尽 ⇒ 429（与平台池
@@ -844,46 +841,31 @@ def ask(db: Session, assignment_id: int, question: str, user: User) -> dict:
         school_limit is not None
         and school_companion_today_call_count(db, student.school_id) >= school_limit
     ):
-        raise HTTPException(
-            status_code=429,
-            detail=_MSG_QUOTA_BUSY,
-        )
+        raise HTTPException(status_code=429, detail=_MSG_QUOTA_BUSY)
 
     # 4c. 平台池（成本语义）：尽 ⇒ 平台文案（不向学生泄露平台成本口径）
     if companion_remaining_quota(db) <= 0:
-        raise HTTPException(
-            status_code=429,
-            detail=_MSG_QUOTA_BUSY,
-        )
+        raise HTTPException(status_code=429, detail=_MSG_QUOTA_BUSY)
 
     # 步骤 5：**原子预留**（三闸门，在上下文/外呼之前，C9）
     # 5a. 先预留每生配额：拿不到 ⇒ 个人文案（并发下每生额度被抢空）
     per_take = reserve_per_student_quota(db, student.id, student.school_id, 1)
     if per_take <= 0:
-        raise HTTPException(
-            status_code=429,
-            detail=_MSG_QUOTA_PER_STUDENT,
-        )
+        raise HTTPException(status_code=429, detail=_MSG_QUOTA_PER_STUDENT)
 
     # 5b. 再预留学伴校级池：拿不到 ⇒ 429（与平台池共用「太忙」文案）。
     # 🔴 此时每生配额**已扣且不退还**（S21 只增不减的**有意**语义：宁可少答，不可超支）。
     #    校级池未配置（limit is None）时本调用零锁零写入直接放行（回归承诺）。
     school_take = reserve_school_companion_quota(db, student.school_id, 1)
     if school_take <= 0:
-        raise HTTPException(
-            status_code=429,
-            detail=_MSG_QUOTA_BUSY,
-        )
+        raise HTTPException(status_code=429, detail=_MSG_QUOTA_BUSY)
 
     # 5c. 最后预留平台池：拿不到 ⇒ 平台文案。
     # 🔴 此时每生配额与校级池**均已扣且不退还**（S21 只增不减的**有意**语义：宁可少答，
     #    不可超支）。该方向已由设计 §8.3 第 5 条明确认可，勿「顺手退还」以免破坏 S21。
     take = reserve_companion_quota(db, 1)
     if take <= 0:
-        raise HTTPException(
-            status_code=429,
-            detail=_MSG_QUOTA_BUSY,
-        )
+        raise HTTPException(status_code=429, detail=_MSG_QUOTA_BUSY)
 
     # 步骤 6：取上下文（后端自取，D2）
     ctx = _load_context(db, assignment, cred)

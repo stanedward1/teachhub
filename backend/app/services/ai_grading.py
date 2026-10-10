@@ -1445,7 +1445,7 @@ def request_grading(
     # 平台池预留上限取学校池已给到的量（min 截断）。无校级配置（limit=None）时
     # `reserve_school_quota` 零锁零写入原样放行，行为与单池时代完全一致。
     take_school = reserve_school_quota(db, school_id, len(gradeable_ids))
-    if take_school <= 0 and gradeable_ids:
+    if take_school <= 0:
         # 竞态兜底：can_grade 通过后、预留前校池被并发占满（或显式上限 0）
         return _reject(_school_pool_exhausted_reason(db, school_id))
 

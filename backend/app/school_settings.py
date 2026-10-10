@@ -142,13 +142,7 @@ def _is_school_switch_on(value: str | None) -> bool:
 
 
 def is_school_ai_grading_enabled(db: Session, school_id: int | None) -> bool:
-    """本校 AI 批改开关（缺省**开** = 跟随平台闸）。
-
-    - `school_id` 为 None（历史脏数据作业）→ True（不放大管控，跟随平台池）；
-    - 无 school 级行 → True（跟随平台闸，D1「缺省开」语义）；
-    - 行存在且值为假值集（`0/false/no/off`）→ False（显式关）；
-    - 其余取值 → True。
-    """
+    """本校 AI 批改开关（缺省**开** = 跟随平台闸）。判定表见 `_is_school_switch_on`。"""
     if school_id is None:
         return True
     return _is_school_switch_on(
@@ -180,14 +174,7 @@ def _as_school_limit(value: str | None) -> int | None:
 
 
 def get_school_ai_daily_limit(db: Session, school_id: int | None) -> int | None:
-    """本校批改每日调用次数上限；**None = 不限（未配置校级池）**。
-
-    - `school_id` 为 None（历史脏数据）→ None（不放大管控，跟随平台池）；
-    - 无 school 级行 / 值为空串 → None（不限，「缺省开」语义的池侧一半）；
-    - 值为正整数 → 该上限；
-    - 值为 `"0"` → 0（合法配置：今日 0 次，与开关独立且冗余但无害）；
-    - 值非法（非数字 / 负数）→ None（fail-open：配错不停摆）。
-    """
+    """本校批改每日调用次数上限；**None = 不限（未配置校级池）**。判定表见 `_as_school_limit`。"""
     if school_id is None:
         return None
     return _as_school_limit(
