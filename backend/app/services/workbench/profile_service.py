@@ -2,17 +2,10 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.config import BASE_POINTS
-from app.models import (
-    ExcellentWork,
-    Leave,
-    Performance,
-    Score,
-    Student,
-    StudentProfileTag,
-    Submission,
-)
+from app.models import StudentProfileTag
+from app.permissions import ensure_student_visible
 from app.schemas import StudentTagCreate
+from app.services.student_stats import compute_student_stats
 from app.services.students_service import _student_out
 from app.services.workbench._common import (
     audit,
@@ -22,79 +15,63 @@ from app.services.workbench._common import (
     student_name,
     to_dict,
 )
-from app.utils import clamp_score
 
 
 def get_student_profile(db: Session, user, student_id: int) -> dict:
     """获取学生综合数字画像数据。"""
-    student = db.get(Student, student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="学生不存在")
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
-        raise HTTPException(status_code=403, detail="无权查看该学生画像")
+    student = ensure_student_visible(
+        db, user, student_id, detail_403="无权查看该学生画像", check_operable=False
+    )
 
-    scores = db.query(Score).filter(Score.student_id == student_id).order_by(Score.created_at).all()
+    # 共享统计核心：一次查询派生成绩/表现/积分/请假/优秀率/雷达原始统计，
+    # 桌面端与移动端（mobile_service）共用同一公式；响应结构冻结。
+    stats = compute_student_stats(db, student_id)
+
     score_summary = {
-        "total": len(scores),
-        "avg": round(sum(s.score for s in scores) / len(scores), 1) if scores else 0,
-        "max": max((s.score for s in scores), default=0),
-        "min": min((s.score for s in scores), default=0),
+        "total": stats["score_count"],
+        "avg": stats["score_avg"],
+        "max": stats["score_max"],
+        "min": stats["score_min"],
         "by_subject": {},
         "trend": [],
     }
-    for s in scores:
-        score_summary["by_subject"].setdefault(s.subject, []).append({"score": s.score, "exam": s.exam_name or "", "date": str(s.created_at)[:10]})
-        score_summary["trend"].append({"subject": s.subject, "score": s.score, "exam": s.exam_name or "", "date": str(s.created_at)[:10]})
+    for row in stats["score_rows"]:  # asc（created_at 升序，与原 order_by 一致）
+        score_summary["by_subject"].setdefault(row["subject"], []).append(
+            {"score": row["score"], "exam": row["exam"], "date": row["date"]}
+        )
+        score_summary["trend"].append(
+            {"subject": row["subject"], "score": row["score"], "exam": row["exam"], "date": row["date"]}
+        )
 
-    performances = db.query(Performance).filter(Performance.student_id == student_id).all()
-    sorted_perfs = sorted(performances, key=lambda x: x.created_at, reverse=True)
-    point_delta = sum((p.points or 0) for p in performances)
     point_summary = {
-        "total": BASE_POINTS + point_delta,
-        "positive": sum(v for v in ((p.points or 0) for p in performances) if v > 0),
-        "negative": sum(v for v in ((p.points or 0) for p in performances) if v < 0),
-        "count": len(performances),
-        "timeline": [
-            {"points": p.points or 0, "reason": p.content or "", "date": str(p.created_at)[:10]}
-            for p in sorted_perfs[:20]
-        ],
+        "total": stats["point_total"],
+        "positive": stats["point_positive"],
+        "negative": stats["point_negative"],
+        "count": stats["point_count"],
+        "timeline": stats["point_timeline"][:20],
     }
     performance_summary = {
-        "positive": sum(1 for p in performances if p.ptype == "积极"),
-        "negative": sum(1 for p in performances if p.ptype == "消极"),
-        "total": len(performances),
-        "recent": [{"ptype": p.ptype, "content": p.content, "date": str(p.created_at)[:10]} for p in sorted_perfs[:10]],
+        "positive": stats["perf_positive"],
+        "negative": stats["perf_negative"],
+        "total": stats["point_count"],
+        "recent": stats["perf_recent"][:10],
     }
 
-    leaves = db.query(Leave).filter(Leave.student_id == student_id).all()
     leave_summary = {
-        "total": len(leaves),
-        "recent": [{"reason": l.reason, "start": l.start_date, "end": l.end_date, "status": l.status} for l in leaves[:10]],
+        "total": stats["leave_total"],
+        "recent": stats["leave_rows"][:10],
     }
 
-    submissions = db.query(Submission).filter(Submission.student_id == student_id).all()
-    excellent_ids = {
-        ew.submission_id
-        for ew in db.query(ExcellentWork.submission_id)
-        .filter(ExcellentWork.submission_id.in_([s.id for s in submissions]))
-        .all()
-    }
-    excellent_count = sum(1 for s in submissions if s.id in excellent_ids)
     submission_summary = {
-        "total": len(submissions),
-        "excellent": excellent_count,
-        "rate": round(excellent_count / len(submissions) * 100, 1) if submissions else 0,
+        "total": stats["submission_total"],
+        "excellent": stats["excellent_count"],
+        "rate": stats["excellent_rate"],
     }
 
     tags = db.query(StudentProfileTag).filter(StudentProfileTag.student_id == student_id).all()
     tag_list = [{"id": t.id, "tag": t.tag, "category": t.category} for t in tags]
 
-    radar = {
-        "academic": clamp_score(round(score_summary["avg"] if scores else 50, 1)),
-        "moral": clamp_score(round(50 + point_delta * 2, 1)) if performances else 50,
-        "attendance": clamp_score(round(100 - leave_summary["total"] * 5, 1)),
-        "skill": clamp_score(round(submission_summary["rate"], 1)),
-    }
+    radar = stats["radar"]
 
     radar_basis = [
         {
@@ -160,7 +137,8 @@ def get_student_profile(db: Session, user, student_id: int) -> dict:
 
 def add_student_tag(db: Session, user, student_id: int, payload: StudentTagCreate) -> dict:
     """为学生新增画像标签。"""
-    ensure_student_operable(db, student_id)
+    # 复用返回的 Student 以继承其 school_id（父资源租户归属）
+    student = ensure_student_operable(db, student_id)
     if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
         raise HTTPException(status_code=403, detail="无权为该学生添加标签")
     tag = payload.tag.strip()
@@ -168,6 +146,9 @@ def add_student_tag(db: Session, user, student_id: int, payload: StudentTagCreat
         student_id=student_id,
         tag=tag,
         category=payload.category,
+        # 显式继承学生档案的租户归属：超管上下文下 before_flush 不回填，
+        # 落 NULL 会导致该标签对所有租户都不可见。
+        school_id=student.school_id,
     )
     db.add(t)
     audit(db, user, "add_student_tag", target=f"标签-{student_name(db, student_id)}", student_id=student_id)

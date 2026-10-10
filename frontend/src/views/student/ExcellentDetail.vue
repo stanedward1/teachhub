@@ -60,7 +60,7 @@
           </div>
         </div>
       </div>
-      <div v-else class="empty">还没有评论，快来抢沙发～</div>
+      <div v-else class="empty-state empty-state--compact">还没有评论，快来抢沙发～</div>
     </div>
   </div>
 </template>
@@ -229,9 +229,7 @@ async function submit() {
   color: #111827;
   margin-top: 2px;
 }
-.empty {
-  color: #9ca3af;
-  text-align: center;
+.empty-state--compact {
   padding: 30px 0;
 }
 </style>

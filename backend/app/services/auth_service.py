@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.audit import audit
 from app.config import settings
 from app.models import Classroom, RefreshToken, School, Student, User
-from app.permissions import get_head_class_ids, get_student_account
+from app.permissions import get_head_class_ids, get_student_account, get_student_by_account
 from app.platform_settings import is_registration_allowed, is_student_single_device_enabled
 from app.security import (
     create_access_token,
@@ -300,7 +300,7 @@ def login(
     # 🔴 锁定检查必须早于密码校验。否则锁定期内的响应会被劈成两半：
     #   错口令 → 401（失败分支），对口令 → 423（才走到这里）。
     # 状态码差异即成为「口令是否正确」的 oracle —— 攻击者可无限次试探，
-    # 5 次失败锁定形同虚设。
+    # 失败次数达 MAX_FAILED_ATTEMPTS 的锁定机制形同虚设。
     # 注意：`_resolve_login_user` 可能返回 user=None（不存在 / 需先选学校），
     # 此时不判锁，保持既有「401 + 原 err_msg 文案」的响应不变。
     if user:
@@ -328,11 +328,11 @@ def login(
         cls = db.get(Classroom, user.class_id)
         if cls and cls.is_graduated:
             raise HTTPException(status_code=403, detail="该班级已毕业，无法登录")
-        stu = (
-            db.query(Student)
-            .filter(Student.class_id == user.class_id, Student.name == user.name)
-            .first()
-        )
+        # 学生档案定位复用 `app/permissions.py::get_student_by_account`：硬外键
+        # `user.student_id` 优先（不受改名影响），未回填的历史账号回落
+        # (class_id, name) 软匹配 —— 与权限层同一口径。硬外键命中后不再重复软匹配；
+        # 只有档案确认 `is_dropped_out` 才 403，无档案/未命中维持放行。
+        stu = get_student_by_account(db, user)
         if stu and stu.is_dropped_out:
             raise HTTPException(status_code=403, detail="该学生已退学，无法登录")
 
@@ -466,6 +466,11 @@ def refresh(
     )
     if user is None:
         raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+
+    # 租户校验：停用学校的账号禁止续签会话（与 login 的 `_ensure_school_active`
+    # 同一闸门、同一文案；`school_id is None` 的平台超管跳过）。否则停用学校用户
+    # 可凭未过期的 refresh token 无限轮换出新 access token，绕过登录与鉴权层的拦截。
+    _ensure_school_active(db, user)
 
     # 轮换：签发新令牌并撤销旧令牌，新摘要写入旧行的 replaced_by
     new_plain, new_row = _new_refresh_token(db, user, user_agent=user_agent)

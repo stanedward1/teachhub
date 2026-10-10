@@ -46,6 +46,7 @@ import { useLogout } from '../composables/useLogout'
 import AdminSidebar from './admin/AdminSidebar.vue'
 import AdminHeader from './admin/AdminHeader.vue'
 import { MENU, filterMenuByRole, resolveActiveMenu, resolveBreadcrumb } from './admin/menuConfig.js'
+import { isStaffRole, ROLE_LABELS } from '../utils/roles'
 
 document.title = 'TeachHub'
 
@@ -58,10 +59,8 @@ const isAdmin = computed(() => auth.isSchoolAdmin || auth.isPlatformAdmin)
 const isPlatform = computed(() => auth.isPlatformAdmin)
 const roleText = computed(() => {
   const r = auth.user?.role
-  if (r === 'super_admin') return '平台超管'
-  if (r === 'school_admin') return '学校管理员'
-  if (r === 'teacher') return '教师'
-  return '管理员'
+  // 管理端头部：仅识别三种教职角色，学生/未知角色回退「管理员」（与原实现逐字一致）
+  return isStaffRole(r) ? ROLE_LABELS[r] : '管理员'
 })
 
 const collapsed = ref(false)

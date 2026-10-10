@@ -69,6 +69,7 @@ def run_import(
     import_type: str,
     audit_action: str,
     handle_row: Callable[[Session, tuple, int], tuple[int, list[str]]],
+    resolve_school_id: Callable[[], int | None] | None = None,
 ) -> dict:
     """执行 Excel 批量导入的公共流程。
 
@@ -79,6 +80,9 @@ def run_import(
         import_type: 导入历史记录的类别标识（如 ``"student"`` / ``"score"``）。
         audit_action: 审计动作名（如 ``"import_students"``）。
         handle_row: 单行处理器，见 :class:`RowHandler`。
+        resolve_school_id: 可选，导入结束时解析本次导入的租户归属（父资源 school_id）。
+            超管上下文（user.school_id 为 None）下若不提供，导入历史行会落 NULL、
+            对所有租户不可见。调用方用闭包从导入行捕获锚（如目标班级/学生）的 school_id。
 
     Returns:
         ``{"success": 成功条数, "total": 有效数据行数, "errors": 错误列表(前 50 条)}``
@@ -121,6 +125,13 @@ def run_import(
 
         audit(db, user, audit_action, target=f"{file.filename or ''} 成功{success}条")
 
+        # 导入历史必须显式继承父资源的租户归属：超管（school_id=None）上下文下
+        # before_flush 不会回填，落 NULL 会导致该历史行对所有租户都不可见。
+        # 优先用调用方从导入行捕获的锚（目标班级/学生），退回当前用户所属学校。
+        import_school_id = resolve_school_id() if resolve_school_id else None
+        if import_school_id is None:
+            import_school_id = getattr(user, "school_id", None)
+
         db.add(
             ImportHistory(
                 import_type=import_type,
@@ -130,6 +141,7 @@ def run_import(
                 error_rows=len(all_errors),
                 errors=json.dumps(all_errors[:100], ensure_ascii=False),
                 user_id=user.id,
+                school_id=import_school_id,
             )
         )
         # 单次提交：导入数据与导入历史在同一事务内落库，消除「数据已入库但导入历史缺失」

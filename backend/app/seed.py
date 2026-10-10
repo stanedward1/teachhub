@@ -272,7 +272,10 @@ def seed_all():
                 has_file = random.random() < 0.3
                 sub = Submission(
                     assignment_id=a.id,
-                    student_id=user.id,
+                    # submissions.student_id 指向 students.id（学生档案），而非登录账号 users.id。
+                    # 此处 s 即学生档案对象；此前误写 user.id（账号 id），导致提交挂到错误的
+                    # 学生（甚至不存在的档案）名下。
+                    student_id=s.id,
                     content=content,
                     filename=f"{s.name}_作业_{a.short_name}.zip" if has_file else None,
                     filepath=f"uploads/demo_{a.short_name}_{s.student_no}.zip" if has_file else None,
@@ -582,13 +585,25 @@ def seed_all():
         db.commit()
 
         # ===== 系统设置 =====
+        # ⚠️ 本段处在 `set_tenant(school.id)` 上下文内，`before_flush` 会把未赋值
+        # `school_id` 的行**回填成该校**（实测：原先 5 行全部落成 school_id=1）。
+        # 因此「校内设置」与「平台级开关」必须分开写：
+        # - 校内设置（school_name / semester / grade / max_upload_size）：显式带
+        #   school_id（与 `settings` 表的 (school_id, key) 隔离口径一致，显式赋值也是
+        #   项目铁律，不依赖回填）。
+        # - 平台级开关（allow_registration）：`platform_settings.get_global_setting` 只认
+        #   `school_id IS NULL` 的行，若写在租户上下文里会被回填成校内行 ⇒ 该值**永远读不到**
+        #   （默认值 True 让行为恰好一致，纯属巧合）。故必须显式切到平台上下文写入。
         db.add_all([
-            Setting(key="grade", value="一年级"),
-            Setting(key="school_name", value=school.name),
-            Setting(key="semester", value="2025-2026 学年第一学期"),
-            Setting(key="max_upload_size", value="20971520"),
+            Setting(school_id=school.id, key="grade", value="一年级"),
+            Setting(school_id=school.id, key="school_name", value=school.name),
+            Setting(school_id=school.id, key="semester", value="2025-2026 学年第一学期"),
+            Setting(school_id=school.id, key="max_upload_size", value="20971520"),
         ])
         db.commit()
+        with tenant_scope(None):
+            db.add(Setting(key="allow_registration", value="1"))
+            db.commit()
 
         # ===== 统计输出 =====
         print("=" * 50)

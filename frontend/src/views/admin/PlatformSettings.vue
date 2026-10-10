@@ -440,20 +440,25 @@ async function loadCredential() {
   }
 }
 
+// 凭证写载荷：保存与试连两处同构的六字段 trim 映射，收敛为一处
+function credPayload() {
+  return {
+    provider: credForm.provider.trim() || 'deepseek',
+    base_url: credForm.base_url.trim(),
+    model: credForm.model.trim(),
+    api_key: credForm.api_key.trim() || null,
+    vision_enabled: credForm.vision_enabled,
+    enabled: credForm.enabled,
+  }
+}
+
 async function saveCredential() {
   if (!credForm.base_url.trim() || !credForm.model.trim()) {
     return ElMessage.warning('请填写服务地址与模型名称')
   }
   credSaving.value = true
   try {
-    const res = await adminApi.setAiCredential({
-      provider: credForm.provider.trim() || 'deepseek',
-      base_url: credForm.base_url.trim(),
-      model: credForm.model.trim(),
-      api_key: credForm.api_key.trim() || null,
-      vision_enabled: credForm.vision_enabled,
-      enabled: credForm.enabled,
-    })
+    const res = await adminApi.setAiCredential(credPayload())
     credMasked.value = res.api_key_masked || ''
     credForm.api_key = ''
     ElMessage.success('凭证已保存')
@@ -470,17 +475,7 @@ async function testCredential() {
   testing.value = true
   try {
     // 表单填了地址与模型就用未保存的配置试连；否则回退到已存凭证
-    const body =
-      credForm.base_url.trim() && credForm.model.trim()
-        ? {
-            provider: credForm.provider.trim() || 'deepseek',
-            base_url: credForm.base_url.trim(),
-            model: credForm.model.trim(),
-            api_key: credForm.api_key.trim() || null,
-            vision_enabled: credForm.vision_enabled,
-            enabled: credForm.enabled,
-          }
-        : null
+    const body = credForm.base_url.trim() && credForm.model.trim() ? credPayload() : null
     const res = await adminApi.testAiCredential(body)
     if (res.ok) {
       ElMessage.success(`连接成功（${res.elapsed_ms} ms）`)

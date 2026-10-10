@@ -255,7 +255,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts/core'
@@ -271,6 +271,8 @@ echarts.use([
   CanvasRenderer,
 ])
 import { studentApi } from '../../api'
+import { useEChart } from '../../composables/useEChart'
+import { buildRadarOption } from '../../utils/radarOption'
 import StateView from '../../components/StateView.vue'
 
 const route = useRoute()
@@ -282,8 +284,10 @@ const boardCurrent = ref(null)
 const boardPeriods = ref([])
 const radarRef = ref(null)
 const trendRef = ref(null)
-let radarChart = null
-let trendChart = null
+// 双实例各自经 useEChart 自动挂 onBeforeUnmount 清理：卸载时按 radar → trend
+// 的注册顺序 dispose，与原单个 onBeforeUnmount 内的 dispose 顺序一致
+const radarChart = useEChart(radarRef)
+const trendChart = useEChart(trendRef)
 
 const tagDialog = ref(false)
 const tagSaving = ref(false)
@@ -343,89 +347,54 @@ async function load() {
   setTimeout(() => renderCharts(), 0)
 }
 
-onBeforeUnmount(() => {
-  if (radarChart) {
-    radarChart.dispose()
-    radarChart = null
-  }
-  if (trendChart) {
-    trendChart.dispose()
-    trendChart = null
-  }
-})
-
 function renderCharts() {
   if (radarRef.value && profile.value) {
-    if (radarChart) radarChart.dispose()
-    radarChart = echarts.init(radarRef.value)
     const r = profile.value.radar
-    radarChart.setOption({
-      tooltip: {
-        formatter: (params) => {
-          const p = profile.value
-          const dims = [
-            {
-              name: '学业',
-              val: r.academic,
-              basis: `数据来源：${p.score_summary.total} 次考试成绩\n计算方法：成绩均分 = ${p.score_summary.avg} 分\n指标：最高 ${p.score_summary.max} / 最低 ${p.score_summary.min}`,
-            },
-            {
-              name: '品德',
-              val: r.moral,
-              basis: `数据来源：${p.point_summary.count} 条积分记录\n计算方法：50 + 积分总计(${p.point_summary.total}) × 2\n指标：正分 ${p.point_summary.positive} / 负分 ${p.point_summary.negative}`,
-            },
-            {
-              name: '出勤',
-              val: r.attendance,
-              basis: `数据来源：${p.leave_summary.total} 次请假记录\n计算方法：100 - 请假次数(${p.leave_summary.total}) × 5`,
-            },
-            {
-              name: '技能',
-              val: r.skill,
-              basis: `数据来源：${p.submission_summary.total} 次作业提交\n计算方法：优秀率 = ${p.submission_summary.rate}%\n指标：优秀 ${p.submission_summary.excellent} / 总提交 ${p.submission_summary.total}`,
-            },
-          ]
-          const d = dims.find((d) => d.name === params.name)
-          return d
-            ? `<b>${d.name}</b>：${d.val} 分<br/><br/>${d.basis.replace(/\n/g, '<br/>')}`
-            : ''
-        },
-      },
-      radar: {
-        center: ['50%', '50%'],
-        radius: '65%',
-        indicator: [
-          { name: '学业', max: 100 },
-          { name: '品德', max: 100 },
-          { name: '出勤', max: 100 },
-          { name: '技能', max: 100 },
-        ],
+    radarChart.init().setOption(
+      buildRadarOption({
+        value: [r.academic, r.moral, r.attendance, r.skill],
+        dataName: '综合评分',
+        areaColor: 'rgba(37,99,235,0.15)',
+        symbolSize: 5,
         axisName: { color: '#4b5563', fontSize: 12 },
-      },
-      series: [
-        {
-          type: 'radar',
-          data: [
-            {
-              value: [r.academic, r.moral, r.attendance, r.skill],
-              name: '综合评分',
-              areaStyle: { color: 'rgba(37,99,235,0.15)' },
-            },
-          ],
-          lineStyle: { color: '#2563eb', width: 2 },
-          itemStyle: { color: '#2563eb' },
-          symbol: 'circle',
-          symbolSize: 5,
+        tooltip: {
+          formatter: (params) => {
+            const p = profile.value
+            const dims = [
+              {
+                name: '学业',
+                val: r.academic,
+                basis: `数据来源：${p.score_summary.total} 次考试成绩\n计算方法：成绩均分 = ${p.score_summary.avg} 分\n指标：最高 ${p.score_summary.max} / 最低 ${p.score_summary.min}`,
+              },
+              {
+                name: '品德',
+                val: r.moral,
+                basis: `数据来源：${p.point_summary.count} 条积分记录\n计算方法：50 + 积分总计(${p.point_summary.total}) × 2\n指标：正分 ${p.point_summary.positive} / 负分 ${p.point_summary.negative}`,
+              },
+              {
+                name: '出勤',
+                val: r.attendance,
+                basis: `数据来源：${p.leave_summary.total} 次请假记录\n计算方法：100 - 请假次数(${p.leave_summary.total}) × 5`,
+              },
+              {
+                name: '技能',
+                val: r.skill,
+                basis: `数据来源：${p.submission_summary.total} 次作业提交\n计算方法：优秀率 = ${p.submission_summary.rate}%\n指标：优秀 ${p.submission_summary.excellent} / 总提交 ${p.submission_summary.total}`,
+              },
+            ]
+            const d = dims.find((d) => d.name === params.name)
+            return d
+              ? `<b>${d.name}</b>：${d.val} 分<br/><br/>${d.basis.replace(/\n/g, '<br/>')}`
+              : ''
+          },
         },
-      ],
-    })
+      })
+    )
   }
 
   if (trendRef.value && hasTrend.value) {
-    if (trendChart) trendChart.dispose()
-    trendChart = echarts.init(trendRef.value)
     const trend = profile.value.score_summary.trend
-    trendChart.setOption({
+    trendChart.init().setOption({
       tooltip: { trigger: 'axis' },
       grid: { left: 40, right: 20, top: 20, bottom: 30 },
       xAxis: {

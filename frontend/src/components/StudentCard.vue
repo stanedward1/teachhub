@@ -126,9 +126,11 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { studentApi } from '../api'
+import { useEChart } from '../composables/useEChart'
+import { buildRadarOption } from '../utils/radarOption'
 import * as echarts from 'echarts/core'
 import { RadarChart } from 'echarts/charts'
 import { RadarComponent, TooltipComponent } from 'echarts/components'
@@ -145,7 +147,7 @@ const router = useRouter()
 const profile = ref(null)
 const loading = ref(false)
 const radarRef = ref(null)
-let radarChart = null
+const radar = useEChart(radarRef)
 
 watch(
   () => [props.visible, props.studentId],
@@ -174,51 +176,18 @@ async function load(id) {
 
 function renderRadar() {
   if (!radarRef.value || !profile.value) return
-  if (radarChart) {
-    radarChart.dispose()
-    radarChart = null
-  }
-  radarChart = echarts.init(radarRef.value)
+  const chart = radar.init()
   const r = profile.value.radar
-  radarChart.setOption({
-    tooltip: {},
-    radar: {
-      center: ['50%', '50%'],
-      radius: '65%',
-      indicator: [
-        { name: '学业', max: 100 },
-        { name: '品德', max: 100 },
-        { name: '出勤', max: 100 },
-        { name: '技能', max: 100 },
-      ],
+  chart.setOption(
+    buildRadarOption({
+      value: [r.academic, r.moral, r.attendance, r.skill],
+      dataName: '综合评分',
+      areaColor: 'rgba(37,99,235,0.12)',
+      symbolSize: 4,
       axisName: { color: '#6b7280', fontSize: 11 },
-    },
-    series: [
-      {
-        type: 'radar',
-        data: [
-          {
-            value: [r.academic, r.moral, r.attendance, r.skill],
-            name: '综合评分',
-            areaStyle: { color: 'rgba(37,99,235,0.12)' },
-          },
-        ],
-        lineStyle: { color: '#2563eb', width: 2 },
-        itemStyle: { color: '#2563eb' },
-        symbol: 'circle',
-        symbolSize: 4,
-      },
-    ],
-  })
+    })
+  )
 }
-
-// 组件卸载时销毁 ECharts 实例，避免 canvas / 事件监听泄漏
-onBeforeUnmount(() => {
-  if (radarChart) {
-    radarChart.dispose()
-    radarChart = null
-  }
-})
 
 function onClose(v) {
   emit('update:visible', v)

@@ -42,6 +42,7 @@ from app.models import (
     Submission,
     User,
 )
+from app.models.ai import STATUS_FAILED, STATUS_PENDING, STATUS_SUCCESS
 from app.platform_settings import (
     get_ai_auto_publish_owner,
     get_ai_daily_limit,
@@ -60,8 +61,13 @@ from app.services.ai_attachments import (
 )
 from app.services.ai_client import AiClientError, chat_completion
 from app.tenant import tenant_scope
+from app.utils import db_today as _db_today
 
 logger = logging.getLogger("teachhub.ai")
+
+# 「AI 凭证未配置」的统一文案：`can_grade`（触发前闸门）与 `grade_submission`
+# （批改执行时的凭证缺失兜底）必须逐字一致 —— 由同一常量保证，改一处即两处同步。
+_CRED_NOT_CONFIGURED_REASON = "AI 凭证未配置、未启用或密钥不可用"
 
 # 后台批改线程数：批改是 I/O 密集（等模型返回），2 个并发足以消化一个班的提交量，
 # 又不会把上游服务打爆或抢占太多连接。
@@ -213,19 +219,6 @@ def active_credential(db: Session) -> AiCredential | None:
     if not decrypt_secret(cred.api_key_encrypted):
         return None
     return cred
-
-
-def _db_today(db: Session) -> date:
-    """取**数据库时钟**下的当天日期。
-
-    额度统计必须与 `created_at` 用同一时间基准，否则会出现「进程本地凌晨 = 数据库
-    前一天」的错位（SQLite 存 UTC、MySQL 存库本地时区，而 Python 取进程本地日期）。
-    SQLite 的 `CURRENT_DATE` 返回字符串，MySQL 返回 `date`，这里统一成 `date`。
-    """
-    raw = db.execute(select(func.current_date())).scalar()
-    if isinstance(raw, date):
-        return raw
-    return date.fromisoformat(str(raw)[:10])
 
 
 def today_call_count(db: Session) -> int:
@@ -392,7 +385,7 @@ def can_grade(db: Session, school_id: int | None = None) -> tuple[bool, str]:
         # 教师是内部用户，可直说「本校」（设计 D4 定稿）
         return False, "本校已停用 AI 批改功能"
     if active_credential(db) is None:
-        return False, "AI 凭证未配置、未启用或密钥不可用"
+        return False, _CRED_NOT_CONFIGURED_REASON
     school_limit = get_school_ai_daily_limit(db, school_id)
     if school_limit is not None:
         school_used = school_today_call_count(db, school_id)
@@ -801,7 +794,7 @@ def _maybe_auto_publish(db: Session, result: AiGradingResult, submission: Submis
 
 def _publish_excellent(db: Session, result: AiGradingResult, submission: Submission) -> None:
     """自动入库的实际动作；异常由 `_maybe_auto_publish` 统一兜底。"""
-    if result.status != "success" or not result.is_excellent_candidate:
+    if result.status != STATUS_SUCCESS or not result.is_excellent_candidate:
         return
     if not is_ai_auto_publish_enabled(db):
         return
@@ -1016,8 +1009,8 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
             db,
             submission_id,
             school_id=owner_school_id,
-            status="failed",
-            error="AI 凭证未配置、未启用或密钥不可用",
+            status=STATUS_FAILED,
+            error=_CRED_NOT_CONFIGURED_REASON,
         )
         db.commit()
         return result
@@ -1082,10 +1075,10 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     total = 0
     dropped = 0
     for url in images:
-        total += len(url)
-        if total > settings.AI_IMAGE_MAX_TOTAL_BYTES:
+        if total + len(url) > settings.AI_IMAGE_MAX_TOTAL_BYTES:
             dropped += 1
             continue
+        total += len(url)
         kept_images.append(url)
     images = kept_images
 
@@ -1111,7 +1104,7 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         result = _upsert_result(
             db,
             submission_id,
-            status="failed",
+            status=STATUS_FAILED,
             error=error,
             school_id=owner_school_id,
         )
@@ -1151,7 +1144,7 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     result = _upsert_result(
         db,
         submission_id,
-        status="pending",
+        status=STATUS_PENDING,
         provider=cred.provider,
         model=cred.model,
         attachment_used=note,
@@ -1166,7 +1159,7 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         )
     except AiClientError as exc:
         # 降级：提交早已成功，这里只把失败原因记给教师看
-        result.status = "failed"
+        result.status = STATUS_FAILED
         result.error = str(exc)
         if images:
             # 带图调用失败时，最常见的原因是所配模型不支持图片输入。给出可操作提示，
@@ -1185,11 +1178,16 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     # 记 failed 让教师看到「需重新批改」，而不是把结果贴到它从未批过的新内容上。
     if _submission_changed(db, submission, content_fingerprint):
         logger.info("提交内容在批改期间已更新，丢弃本次结果 submission=%s", submission_id)
+        # 显式带归属（同 cred-None / 空短路 / 诚实性守卫分支口径）：重交会把 pending
+        # 结果行删掉（`_discard_ai_grading`），此处是 INSERT 而非 UPDATE —— 租户上下文
+        # 为 None（平台超管触发）时 ORM 自动填充是空操作，不显式传 school_id 会落成
+        # 对所有租户不可见的 NULL 行。
         result = _upsert_result(
             db,
             submission_id,
-            status="failed",
+            status=STATUS_FAILED,
             error="提交内容在批改期间已更新，本次结果已作废，请重新批改",
+            school_id=owner_school_id,
         )
         db.commit()
         return result
@@ -1202,7 +1200,7 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         result = _upsert_result(
             db,
             submission_id,
-            status="failed",
+            status=STATUS_FAILED,
             raw_response=response["content"],
             error=(
                 "模型输出被截断（超出单次调用上限），未生成完整批改，请调高平台设置中的"
@@ -1221,7 +1219,7 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
         )
         return result
 
-    result.status = "success"
+    result.status = STATUS_SUCCESS
     result.error = None
     result.summary = parsed["summary"] or None
     result.strengths = parsed["strengths"] or None
@@ -1272,7 +1270,7 @@ def _run_grading(submission_id: int, school_id: int | None) -> None:
                     .filter(AiGradingResult.submission_id == submission_id)
                     .first()
                 )
-                if row is not None and row.status == "success":
+                if row is not None and row.status == STATUS_SUCCESS:
                     logger.info(
                         "批改结果已是 success（异常发生在收尾步骤），保留成功结果 submission=%s",
                         submission_id,
@@ -1284,7 +1282,7 @@ def _run_grading(submission_id: int, school_id: int | None) -> None:
                     db,
                     submission_id,
                     school_id=school_id,
-                    status="failed",
+                    status=STATUS_FAILED,
                     error="批改任务内部错误",
                 )
                 db.commit()
@@ -1324,7 +1322,7 @@ def _apply_prewrite(
     claimed: list[int] = []
     for sid in submission_ids:
         row = existing.get(sid)
-        if row is not None and row.status == "pending":
+        if row is not None and row.status == STATUS_PENDING:
             # 已在进行中（可能是并发请求刚占位）→ 本次不认领，避免重复外呼
             continue
         if row is None:
@@ -1336,7 +1334,7 @@ def _apply_prewrite(
         # （2026-09-22 线上事故）。仅在为空时回填，绝不覆盖已有归属。
         if school_id is not None and row.school_id is None:
             row.school_id = school_id
-        row.status = "pending"
+        row.status = STATUS_PENDING
         row.provider = cred.provider if cred else None
         row.model = cred.model if cred else None
         row.error = None
@@ -1385,9 +1383,17 @@ def request_grading(
         ``{queued, skipped, reason}``：实际投递数、因额度不足被截断的份数、
         以及完全无法批改时的原因（可批改时为空串）。
     """
+    def _reject(reason: str, *, queued: int = 0, skipped: int | None = None) -> dict:
+        """统一返回形状：各调用点 queued/skipped 不同，reason 之外的值由调用点给出。"""
+        return {
+            "queued": queued,
+            "skipped": len(submission_ids) if skipped is None else skipped,
+            "reason": reason,
+        }
+
     allowed, reason = can_grade(db, school_id)
     if not allowed:
-        return {"queued": 0, "skipped": len(submission_ids), "reason": reason}
+        return _reject(reason)
 
     # 前置过滤「确实无可评内容」的提交：正文与 filepath 均为空（真正的空壳提交）。
     # 必须放在**预留额度之前**：额度预留即占用且不退还（S21），放过去等于白吃额度。
@@ -1416,19 +1422,21 @@ def request_grading(
                 db,
                 sid,
                 school_id=school_id,
-                status="failed",
+                status=STATUS_FAILED,
                 error="未提交可评内容（正文与附件均为空），未调用模型",
             )
         db.commit()
     blank_set = set(blank_ids)
-    gradeable_ids = [sid for sid in submission_ids if sid not in blank_set]
+    # 🔴 只保留**实存**的提交 id：`submission_ids` 里可能混入数据库里已不存在的 id
+    # （前端拿着过期列表触发批量批改）。`blank_ids` 只收实存行的空壳，若不在此处
+    # 过滤，幽灵 id 会流入 gradeable_ids → 预留额度 + 预写 pending 行，在 MySQL 上
+    # 撞 submissions 外键直接 500。`rows` 的键即一次性查回的实存 id 集合。
+    gradeable_ids = [
+        sid for sid in submission_ids if sid in rows and sid not in blank_set
+    ]
     if not gradeable_ids:
         # 不要返回 `_school_pool_exhausted_reason`：那是误导（额度根本没动）。
-        return {
-            "queued": 0,
-            "skipped": len(submission_ids),
-            "reason": "提交无可评内容（正文与附件均为空）",
-        }
+        return _reject("提交无可评内容（正文与附件均为空）")
 
     # 🔴 先**原子预留**额度，再按预留到的数量投递：把「查额度 → 截断 → 投递」三步
     # 合成一个原子操作，消除并发批量触发各自按同一份剩余额度满额投递导致的超发
@@ -1439,11 +1447,7 @@ def request_grading(
     take_school = reserve_school_quota(db, school_id, len(gradeable_ids))
     if take_school <= 0 and gradeable_ids:
         # 竞态兜底：can_grade 通过后、预留前校池被并发占满（或显式上限 0）
-        return {
-            "queued": 0,
-            "skipped": len(submission_ids),
-            "reason": _school_pool_exhausted_reason(db, school_id),
-        }
+        return _reject(_school_pool_exhausted_reason(db, school_id))
 
     # 平台池预留（上限为学校池已给到的量）。并发导致平台池实给不足时，学校池多扣
     # 的 (take_school - take) 次**不退还**（S21：宁可少批，不可超发，勿顺手退还）。
@@ -1452,11 +1456,9 @@ def request_grading(
         # 平台池在 `can_grade` 通过后、预留前被并发吃空：必须给准确原因，否则路由层
         # 拿空 reason 抛 400「无法发起批改」，与真实原因（额度耗尽）不符。
         # 文案与 `can_grade` 的平台池分支保持一致；学校池已扣份额按 S21 不退还。
-        return {
-            "queued": 0,
-            "skipped": len(submission_ids),
-            "reason": f"今日调用已达上限（{today_call_count(db)}/{get_ai_daily_limit(db)}）",
-        }
+        return _reject(
+            f"今日调用已达上限（{today_call_count(db)}/{get_ai_daily_limit(db)}）"
+        )
     queued = gradeable_ids[:take]
 
     # 投递前预写 pending：进程重启/重载时，尚未开跑的排队任务若一行痕迹都没有，
@@ -1479,18 +1481,16 @@ def request_grading(
         # 必须给出准确原因 —— 否则路由层 `homework_service.ai_grade_*` 会拿空 reason
         # 抛 400「无法发起批改」，误导教师（真实原因是「其余提交正在批改中」）。
         # 🔴 已预留的额度**按 S21 不退还**（宁可少批，不可重复外呼）—— 不要顺手退还。
-        return {
-            "queued": 0,
-            "skipped": len(submission_ids),
-            "reason": "其余提交正在批改中，请稍候",
-        }
+        return _reject("其余提交正在批改中，请稍候")
 
     for submission_id in claimed:
         trigger_grading(submission_id, school_id)
     logger.info(
         "AI 批改已投递 %s 份（跳过 %s 份）", len(claimed), len(submission_ids) - len(claimed)
     )
-    return {"queued": len(claimed), "skipped": len(submission_ids) - len(claimed), "reason": ""}
+    return _reject(
+        "", queued=len(claimed), skipped=len(submission_ids) - len(claimed)
+    )
 
 
 def progress_for_submissions(db: Session, submission_ids: list[int]) -> dict:
@@ -1513,15 +1513,17 @@ def progress_for_submissions(db: Session, submission_ids: list[int]) -> dict:
         `ungraded` 为尚无结果行的提交数（负数兜 0）；`done` = success + failed。
     """
     total = len(submission_ids)
+    # 零值骨架提前建好：空列表直接返回它；非空路径只 update 状态计数，避免两份同形 dict
+    progress = {
+        "total": total,
+        "success": 0,
+        "failed": 0,
+        "pending": 0,
+        "ungraded": 0,
+        "done": 0,
+    }
     if total == 0:
-        return {
-            "total": 0,
-            "success": 0,
-            "failed": 0,
-            "pending": 0,
-            "ungraded": 0,
-            "done": 0,
-        }
+        return progress
 
     rows = (
         db.query(AiGradingResult.status, func.count(AiGradingResult.id))
@@ -1537,14 +1539,10 @@ def progress_for_submissions(db: Session, submission_ids: list[int]) -> dict:
     ungraded = total - success - failed - pending
     if ungraded < 0:
         ungraded = 0
-    return {
-        "total": total,
-        "success": success,
-        "failed": failed,
-        "pending": pending,
-        "ungraded": ungraded,
-        "done": done,
-    }
+    progress.update(
+        {"success": success, "failed": failed, "pending": pending, "ungraded": ungraded, "done": done}
+    )
+    return progress
 
 
 # ---------------- 启动兜底：清理中断的 pending ----------------
@@ -1592,14 +1590,14 @@ def reconcile_stale_pending(db: Session, older_than_seconds: int = 600) -> int:
         rows = (
             db.query(AiGradingResult)
             .execution_options(skip_tenant_filter=True)
-            .filter(AiGradingResult.status == "pending")
+            .filter(AiGradingResult.status == STATUS_PENDING)
             .all()
         )
         count = 0
         for row in rows:
             ts = _parse_db_datetime(row.updated_at) or _parse_db_datetime(row.created_at)
             if ts is not None and ts < cutoff:
-                row.status = "failed"
+                row.status = STATUS_FAILED
                 row.error = "批改中断（服务重启），请重新发起批改"
                 count += 1
         if count:

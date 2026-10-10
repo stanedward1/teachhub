@@ -66,6 +66,8 @@ const localClassId = ref(props.classId)
 const selectedCache = ref([])
 const resolvedIds = new Set()
 let searchTimer = null
+// 远程搜索竞态守卫：慢的旧关键字响应晚到时丢弃，避免覆盖新关键字结果
+let searchSeq = 0
 
 // 展示选项 = 回显缓存 + 当前搜索结果（按 id 去重，缓存优先）
 const mergedOptions = computed(() => {
@@ -118,7 +120,10 @@ function onRemoteSearch(query) {
   }
   if (searchTimer) clearTimeout(searchTimer)
   searchTimer = setTimeout(async () => {
-    students.value = await fetchStudents(buildParams(kw))
+    const seq = ++searchSeq
+    const list = await fetchStudents(buildParams(kw))
+    if (seq !== searchSeq) return
+    students.value = list
   }, SEARCH_DEBOUNCE_MS)
 }
 

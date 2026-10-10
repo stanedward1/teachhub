@@ -68,7 +68,7 @@
     </StateView>
 
     <!-- 新增/编辑对话框 -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑学校' : '开通学校'" width="520px">
+    <el-dialog v-model="dialog" :title="isEdit ? '编辑学校' : '开通学校'" width="520px">
       <el-form :model="form" label-width="110px">
         <el-form-item label="学校名称" required>
           <el-input v-model="form.name" placeholder="如：XX 职业技术学校" />
@@ -96,7 +96,7 @@
         </template>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button @click="dialog = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="saveSchool">保存</el-button>
       </template>
     </el-dialog>
@@ -197,7 +197,7 @@ const saving = ref(false)
 // 启用/停用学校的状态锁：防双击造成重复切换（写入在途时忽略重复触发）
 const togglingStatus = ref(false)
 const overview = ref({})
-const dialogVisible = ref(false)
+const dialog = ref(false)
 const isEdit = ref(false)
 const editId = ref(null)
 
@@ -212,21 +212,21 @@ const emptyForm = () => ({
 })
 const form = reactive(emptyForm())
 
-// 学校全量列表 + 平台概览两路请求合并取回；wrapper 合成 total，保持原行为等价。
-const { items, loading, error, load } = useCrudList(async (params) => {
-  const rest = { ...params }
-  delete rest.page
-  delete rest.page_size
-  const [s, o] = await Promise.all([schoolApi.list(rest), adminApi.platformOverview()])
-  overview.value = o
-  return { items: s.items || [], total: (s.items || []).length }
-})
+// 学校全量列表 + 平台概览两路请求合并取回；全量不分页（paginated:false），保持原行为等价。
+const { items, loading, error, load } = useCrudList(
+  async (params) => {
+    const [s, o] = await Promise.all([schoolApi.list(params), adminApi.platformOverview()])
+    overview.value = o
+    return { items: s.items || [], total: (s.items || []).length }
+  },
+  { paginated: false }
+)
 
 function openCreate() {
   isEdit.value = false
   editId.value = null
   Object.assign(form, emptyForm())
-  dialogVisible.value = true
+  dialog.value = true
 }
 
 function openEdit(row) {
@@ -241,7 +241,7 @@ function openEdit(row) {
     admin_name: '',
     admin_password: '',
   })
-  dialogVisible.value = true
+  dialog.value = true
 }
 
 async function saveSchool() {
@@ -259,7 +259,7 @@ async function saveSchool() {
       await schoolApi.create(form)
       ElMessage.success('学校已开通')
     }
-    dialogVisible.value = false
+    dialog.value = false
     load()
   } catch (e) {
   } finally {

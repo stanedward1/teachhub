@@ -34,6 +34,7 @@ from app.models import (
     User,
     WorkComment,
 )
+from app.models.ai import STATUS_PENDING, STATUS_SUCCESS
 from app.permissions import (
     is_any_admin,
     ensure_class_operable,
@@ -249,7 +250,7 @@ def ai_grade_submission(db: Session, submission_id: int, user: User) -> dict:
         .filter(AiGradingResult.submission_id == submission_id)
         .first()
     )
-    if row is not None and row.status == "pending":
+    if row is not None and row.status == STATUS_PENDING:
         return {
             "queued": 0,
             "skipped": 1,
@@ -265,6 +266,30 @@ def ai_grade_submission(db: Session, submission_id: int, user: User) -> dict:
     audit(db, user, "ai_grade_submission", target=f"提交#{submission_id}")
     db.commit()
     return outcome
+
+
+def _assignment_submission_ids(db: Session, assignment_id: int) -> list[int]:
+    """取某作业下全部提交 id（按 id 升序），批量批改与进度查询共用。"""
+    return [
+        sid
+        for (sid,) in db.query(Submission.id)
+        .filter(Submission.assignment_id == assignment_id)
+        .order_by(Submission.id)
+        .all()
+    ]
+
+
+def _paginate_or_all(db: Session, q, page: int | None, page_size: int | None):
+    """列表分页双路径：传了 page/page_size 走分页，否则保持原全量行为。"""
+    if page is not None or page_size is not None:
+        # 分页路径：规范参数（page_size 上限 200，防 `?page_size=100000` 放大查询）
+        page, page_size = normalize_page(page, page_size)
+        rows, total = paginate(db, q, page, page_size)
+    else:
+        # 兼容路径：不传 page/page_size 时保持原全量行为与返回结构不变
+        rows = q.all()
+        total = len(rows)
+    return rows, total
 
 
 def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
@@ -283,13 +308,7 @@ def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
         raise HTTPException(status_code=404, detail="任务不存在")
     _check_teacher_assignment_access(db, user, a)
 
-    submission_ids = [
-        sid
-        for (sid,) in db.query(Submission.id)
-        .filter(Submission.assignment_id == assignment_id)
-        .order_by(Submission.id)
-        .all()
-    ]
+    submission_ids = _assignment_submission_ids(db, assignment_id)
     if not submission_ids:
         return {"queued": 0, "skipped": 0, "already_graded": 0, "reason": "该作业暂无提交"}
 
@@ -306,11 +325,11 @@ def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
         .execution_options(skip_tenant_filter=True)
         .filter(
             AiGradingResult.submission_id.in_(submission_ids),
-            AiGradingResult.status.in_(("success", "pending")),
+            AiGradingResult.status.in_((STATUS_SUCCESS, STATUS_PENDING)),
         )
         .all()
     ):
-        (graded_ids if status == "success" else inflight_ids).add(sid)
+        (graded_ids if status == STATUS_SUCCESS else inflight_ids).add(sid)
     pending_ids = [
         sid
         for sid in submission_ids
@@ -369,13 +388,7 @@ def ai_grade_progress(db: Session, assignment_id: int, user: User) -> dict:
         raise HTTPException(status_code=404, detail="任务不存在")
     _check_teacher_assignment_access(db, user, a)
 
-    submission_ids = [
-        sid
-        for (sid,) in db.query(Submission.id)
-        .filter(Submission.assignment_id == assignment_id)
-        .order_by(Submission.id)
-        .all()
-    ]
+    submission_ids = _assignment_submission_ids(db, assignment_id)
     progress = ai_grading.progress_for_submissions(db, submission_ids)
     progress["finished"] = progress["pending"] == 0
     return progress
@@ -409,14 +422,7 @@ def list_assignments(
     q = q.options(selectinload(Assignment.attachments)).order_by(
         Assignment.created_at.desc(), Assignment.id.desc()
     )
-    if page is not None or page_size is not None:
-        # 分页路径：规范参数（page_size 上限 200，防 `?page_size=100000` 放大查询）
-        page, page_size = normalize_page(page, page_size)
-        rows, total = paginate(db, q, page, page_size)
-    else:
-        # 兼容路径：不传 page/page_size 时保持原全量行为与返回结构不变
-        rows = q.all()
-        total = len(rows)
+    rows, total = _paginate_or_all(db, q, page, page_size)
 
     # 批量查询：班级名 / 创建者名 / 各作业提交数 / 当前学生已提交的作业，消除逐行 db.get 与 count
     assign_ids = [a.id for a in rows]
@@ -500,7 +506,8 @@ def create_assignment(db: Session, payload: dict, user: User) -> dict:
     if not title or not content:
         raise HTTPException(status_code=400, detail="标题和内容不能为空")
     class_id = payload.get("class_id")
-    if not class_id or not db.get(Classroom, class_id):
+    cls_row = db.get(Classroom, class_id)
+    if not class_id or not cls_row:
         raise HTTPException(status_code=400, detail="请选择下发班级")
     # 毕业限制：毕业班级不可再布置作业
     ensure_class_operable(db, class_id)
@@ -515,6 +522,9 @@ def create_assignment(db: Session, payload: dict, user: User) -> dict:
         deadline=payload.get("deadline"),
         created_by=user.id,
         class_id=class_id,
+        # 租户归属必须显式继承班级：超管（school_id=None）上下文 before_flush
+        # 不回填，落 NULL 会导致该作业对所有租户都不可见。
+        school_id=cls_row.school_id,
         short_name=payload.get("short_name") or title,
     )
     _sync_attachments(a, payload.get("attachments"))
@@ -589,14 +599,7 @@ def list_submissions(
             return {"items": [], "total": 0}
         q = q.filter(Submission.student_id == stu.id)
     q = q.order_by(Submission.created_at.desc(), Submission.id.desc())
-    if page is not None or page_size is not None:
-        # 分页路径：规范参数（page_size 上限 200，防 `?page_size=100000` 放大查询）
-        page, page_size = normalize_page(page, page_size)
-        rows, total = paginate(db, q, page, page_size)
-    else:
-        # 兼容路径：不传 page/page_size 时保持原全量行为与返回结构不变
-        rows = q.all()
-        total = len(rows)
+    rows, total = _paginate_or_all(db, q, page, page_size)
     # 批量查询，避免 N+1（姓名/学号 + 头像各一次）
     stu_map = batch_student_map(db, [s.student_id for s in rows])
     avatar_map = batch_student_avatar_map(db, [s.student_id for s in rows])

@@ -42,6 +42,16 @@ def resolve_school_id_or_400(db: Session, user, requested_school_id: int | None)
     return user.school_id
 
 
+def _raise_if_student_inoperable(db: Session, student: Student) -> None:
+    """退学/毕业封禁校验（内部共用）：命中即抛 403，文案与 ensure_student_operable 一致。"""
+    if student.is_dropped_out:
+        raise HTTPException(status_code=403, detail="该学生已退学，无法进行操作")
+    if student.class_id:
+        cls = db.get(Classroom, student.class_id)
+        if cls and cls.is_graduated:
+            raise HTTPException(status_code=403, detail="该学生所在班级已毕业，无法进行操作")
+
+
 def ensure_student_operable(db: Session, student_id: int) -> Student:
     """校验学生是否可被教师/管理员操作。
 
@@ -55,12 +65,41 @@ def ensure_student_operable(db: Session, student_id: int) -> Student:
     student = db.get(Student, student_id)
     if not student:
         raise HTTPException(status_code=404, detail="学生不存在")
-    if student.is_dropped_out:
-        raise HTTPException(status_code=403, detail="该学生已退学，无法进行操作")
-    if student.class_id:
-        cls = db.get(Classroom, student.class_id)
-        if cls and cls.is_graduated:
-            raise HTTPException(status_code=403, detail="该学生所在班级已毕业，无法进行操作")
+    _raise_if_student_inoperable(db, student)
+    return student
+
+
+def ensure_student_visible(
+    db: Session,
+    user: User,
+    student_id: int,
+    *,
+    detail_403: str = "无权操作该学生的记录",
+    check_operable: bool = True,
+    operable_first: bool = True,
+) -> Student:
+    """学生域权限样板收口：校验学生存在、封禁状态与「教师是否带班」，返回 Student。
+
+    统一语义（与既有各调用点逐字一致）：
+    - 学生不存在 -> 404 "学生不存在"
+    - ``check_operable=True`` 时叠加退学/毕业封禁校验（文案同 ``ensure_student_operable``）
+    - 非管理员且教师不带班 -> 403 ``detail_403``（管理员放行）
+
+    ``operable_first`` 控制封禁校验与带班校验**同时命中**时先抛哪个：
+    workbench 增删改及 classlog 先 ``ensure_student_operable`` 再查带班（True，默认）；
+    students_service 的删除/改密/头像则先查带班再查封禁（False）。
+    收口要求触发顺序逐字保持，故以关键字参数承接这两种既有顺序。
+    """
+    if check_operable and operable_first:
+        student = ensure_student_operable(db, student_id)
+    else:
+        student = db.get(Student, student_id)
+        if not student:
+            raise HTTPException(status_code=404, detail="学生不存在")
+    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
+        raise HTTPException(status_code=403, detail=detail_403)
+    if check_operable and not operable_first:
+        _raise_if_student_inoperable(db, student)
     return student
 
 

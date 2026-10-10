@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Classroom, Score, Student
 from app.pagination import paginate
+from app.permissions import ensure_student_visible
 from app.schemas import ScoreCreate, ScoreUpdate
 from app.services.workbench._common import (
     active_student_id_query,
@@ -205,9 +206,7 @@ def score_analysis(
 def create_score(db: Session, user, payload: ScoreCreate) -> dict:
     """新增成绩。"""
     # 复用返回的 Student 以继承其 school_id（父资源租户归属）
-    student = ensure_student_operable(db, payload.student_id)
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload.student_id):
-        raise HTTPException(status_code=403, detail="无权为该学生创建成绩")
+    student = ensure_student_visible(db, user, payload.student_id, detail_403="无权为该学生创建成绩")
     s = Score(
         student_id=payload.student_id,
         # 显式继承学生档案的租户归属：超管（school_id=None）上下文下 before_flush 不回填，
@@ -229,18 +228,21 @@ def update_score(db: Session, user, score_id: int, payload: ScoreUpdate) -> dict
     s = db.get(Score, score_id)
     if not s:
         raise HTTPException(status_code=404, detail="记录不存在")
-    ensure_student_operable(db, s.student_id)
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, s.student_id):
-        raise HTTPException(status_code=403, detail="无权修改该成绩")
+    ensure_student_visible(db, user, s.student_id, detail_403="无权修改该成绩")
     data = payload.model_dump(exclude_unset=True)
     for f in ("student_id", "subject", "score", "exam_name"):
         if f in data and data[f] is not None:
+            new_student = None
             if f == "student_id" and not is_any_admin(user):
                 if not is_student_in_teacher_classes(db, user.id, data[f]):
                     raise HTTPException(status_code=403, detail="无权将成绩转移到该学生")
             if f == "student_id" and data[f] != s.student_id:
-                ensure_student_operable(db, data[f])
+                new_student = ensure_student_operable(db, data[f])
             setattr(s, f, data[f])
+            # 成绩转移到另一学生时，租户归属必须随新学生走，否则跨校转移后
+            # 该成绩仍挂在原校（或落 NULL）下，目标校看不到、原校看到脏数据。
+            if new_student is not None:
+                s.school_id = new_student.school_id
     audit(db, user, "update_score", target=f"成绩#{score_id}-{student_name(db, s.student_id)}", student_id=s.student_id)
     db.commit()
     db.refresh(s)
@@ -252,9 +254,7 @@ def delete_score(db: Session, user, score_id: int) -> dict:
     s = db.get(Score, score_id)
     if not s:
         raise HTTPException(status_code=404, detail="记录不存在")
-    ensure_student_operable(db, s.student_id)
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, s.student_id):
-        raise HTTPException(status_code=403, detail="无权删除该成绩")
+    ensure_student_visible(db, user, s.student_id, detail_403="无权删除该成绩")
     db.delete(s)
     audit(db, user, "delete_score", target=f"成绩#{score_id}-{student_name(db, s.student_id)}", student_id=s.student_id)
     db.commit()
@@ -357,6 +357,9 @@ def import_scores(db: Session, user, file) -> dict:
 
     student_map = {s.student_no: s for s in db.query(Student).all()}
 
+    # 从首个成功导入的行捕获租户锚（学生档案 school_id），供导入历史继承
+    first_school: list[int | None] = [None]
+
     def handle_row(session: Session, row: tuple, row_num: int) -> tuple[int, list[str]]:
         data = {
             "student_no": str(row[0] or "").strip(),
@@ -393,6 +396,8 @@ def import_scores(db: Session, user, file) -> dict:
             score=float(data["score"]),
             exam_name=data["exam_name"],
         ))
+        if first_school[0] is None:
+            first_school[0] = student.school_id
         return ROW_OK, []
 
     return run_import(
@@ -402,4 +407,5 @@ def import_scores(db: Session, user, file) -> dict:
         import_type="score",
         audit_action="import_scores",
         handle_row=handle_row,
+        resolve_school_id=lambda: first_school[0],
     )

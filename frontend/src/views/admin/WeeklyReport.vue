@@ -293,6 +293,13 @@ async function loadHistory() {
 function viewReport(row) {
   reportTitle.value = row.title
   reportContent.value = row.content || ''
+  // 回填该报告的班级 / 周期 / 数据快照：否则随后点「保存报告」会用当前表单的
+  // classId / dateRange / weeklyData 覆盖出一份与所看报告错位的存档。
+  // 缺字段时防御为 null（保持后端契约不变，仍允许保存）。
+  classId.value = row.class_id ?? null
+  dateRange.value = row.week_start && row.week_end ? [row.week_start, row.week_end] : null
+  // 列表接口把 data_snapshot 解析后放在 snapshot 字段（reports_service.list_reports）
+  weeklyData.value = row.snapshot || null
   historyDialog.value = false
 }
 

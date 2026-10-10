@@ -326,11 +326,6 @@ async function aiGrade(row) {
   max-width: 200px;
   max-height: 150px;
 }
-.empty {
-  text-align: center;
-  color: #9ca3af;
-  padding: 40px 0;
-}
 .muted {
   color: #9ca3af;
   font-size: 13px;

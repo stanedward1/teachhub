@@ -28,9 +28,12 @@ router = APIRouter(prefix="/api/auth", tags=["认证"])
 # 便于按部署规模调整而无需改代码。
 # ⚠️ 阈值刻意**放得比较宽**：校园网 / 机房 / 企业出口是 NAT 共享 IP，几十上百人从同一
 #    IP 登录会互相挤占配额；阈值过小会让后登录的人无辜收到 429「操作过于频繁」。
-#    防爆破的主力是**账号维度**的失败锁定（5 次错口令锁 15 分钟），IP 限流只兜底
+#    防爆破的主力是**账号维度**的失败锁定（失败次数达 `MAX_FAILED_ATTEMPTS` 锁定
+#    `LOCK_DURATION_MINUTES` 分钟，常量见 `app/services/auth_service.py`，注释不写死
+#    数字以免阈值调整后漂移），IP 限流只兜底
 #    「同一出口高频轮询 / 分布式 IP 撞同一个账号」的场景。
-# 注意：limiter 实例在 main.py 中创建并挂到 app.state，这里复用同一个实例
+# 注意：limiter 实例在本模块下方创建（`limiter = Limiter(key_func=_client_key)`），
+# main.py 通过 `app.state.limiter = auth.limiter` 复用这里的实例
 # （slowapi 要求所有路由共享同一个 Limiter 实例才能正确累计计数）。
 def _client_key(request: Request) -> str:
     """限流键：默认取直连对端 IP；仅当显式开启 `TRUST_PROXY_HEADERS` 时才采信 XFF。

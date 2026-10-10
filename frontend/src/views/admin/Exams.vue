@@ -143,6 +143,7 @@ import { useSort } from '../../composables/useSort'
 import { useCrudList } from '../../composables/useCrudList'
 import { examApi, schoolApi } from '../../api'
 import { isPlatformAdmin } from '../../utils/auth'
+import { downloadExcel } from '../../composables/useDownload'
 
 const { order, useSorted } = useSort('exams')
 const keyword = useDebouncedRef('', 300)
@@ -248,17 +249,11 @@ async function doUpload() {
   }
 }
 
-// 下载
+// 下载：统一走 useDownload（延迟 revoke 语义已收敛到公共件）
 async function downloadFile(row) {
   try {
     const blob = await examApi.download(row.id)
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = row.filename || row.title
-    a.click()
-    // 延迟回收：部分浏览器异步读取 blob，紧随 click 立即 revoke 可能中断下载
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    downloadExcel(blob, row.filename || row.title)
   } catch (e) {
     ElMessage.error('下载失败')
   }

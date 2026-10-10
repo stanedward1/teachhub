@@ -162,10 +162,9 @@ def purge_user_data(db: Session, user_id: int) -> None:
             .filter(Submission.assignment_id.in_(assignment_ids))
             .all()
         ]
-
-    # 3.1 最底层：work_comments（引用 excellent_works.id 或 users.id）
-    #     先删「该用户发布的评论」+「挂在将被删除的 excellent_works 下的评论」
-    excellent_ids_to_del = set(selected_excellent_ids)
+    # 挂在这些提交下的优秀作品 id（3.1 / 3.2 两段对同一 sub_ids 的查询逐字相同，
+    # 只查一次共用）
+    ew_by_sub = []
     if sub_ids:
         ew_by_sub = [
             r[0]
@@ -173,7 +172,11 @@ def purge_user_data(db: Session, user_id: int) -> None:
             .filter(ExcellentWork.submission_id.in_(sub_ids))
             .all()
         ]
-        excellent_ids_to_del.update(ew_by_sub)
+
+    # 3.1 最底层：work_comments（引用 excellent_works.id 或 users.id）
+    #     先删「该用户发布的评论」+「挂在将被删除的 excellent_works 下的评论」
+    excellent_ids_to_del = set(selected_excellent_ids)
+    excellent_ids_to_del.update(ew_by_sub)
     wc_cond = WorkComment.user_id == user_id
     if excellent_ids_to_del:
         wc_cond = or_(wc_cond, WorkComment.excellent_id.in_(list(excellent_ids_to_del)))
@@ -181,14 +184,7 @@ def purge_user_data(db: Session, user_id: int) -> None:
 
     # 3.2 excellent_works：删「该教师评选的」+「挂在将被删 submissions 下的」
     ew_ids = set(selected_excellent_ids)
-    if sub_ids:
-        ew_by_sub = [
-            r[0]
-            for r in db.query(ExcellentWork.id)
-            .filter(ExcellentWork.submission_id.in_(sub_ids))
-            .all()
-        ]
-        ew_ids.update(ew_by_sub)
+    ew_ids.update(ew_by_sub)
     if ew_ids:
         db.query(ExcellentWork).filter(ExcellentWork.id.in_(list(ew_ids))).delete(
             synchronize_session=False

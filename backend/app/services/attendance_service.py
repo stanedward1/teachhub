@@ -6,7 +6,7 @@ from app.audit import audit
 from app.models import Attendance, Student, User
 from app.permissions import ensure_class_operable, is_any_admin, is_teacher_class_owner
 from app.schemas import AttendanceCheckin
-from app.utils import parse_date
+from app.utils import parse_date_or_400
 
 ATTENDANCE_STATUS = ("出勤", "缺勤", "请假", "迟到")
 
@@ -48,10 +48,7 @@ def checkin(db: Session, user: User, payload: AttendanceCheckin) -> dict:
     records = payload.records
     if not class_id or not date or not records:
         raise HTTPException(status_code=400, detail="请提供班级、日期和点名记录")
-    try:
-        date = parse_date(date)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD")
+    date = parse_date_or_400(date)
 
     # 毕业班级不可再点名（复用返回的 Classroom 以继承其 school_id）
     classroom = ensure_class_operable(db, class_id)
@@ -133,12 +130,12 @@ def attendance_summary(
         .all()
     )
 
-    status_count = {"出勤": 0, "缺勤": 0, "请假": 0, "迟到": 0}
+    status_count = dict.fromkeys(ATTENDANCE_STATUS, 0)
     trend_map = {}
     for r in records:
         if r.status in status_count:
             status_count[r.status] += 1
-        day = trend_map.setdefault(r.date, {"出勤": 0, "缺勤": 0, "请假": 0, "迟到": 0})
+        day = trend_map.setdefault(r.date, dict.fromkeys(ATTENDANCE_STATUS, 0))
         if r.status in day:
             day[r.status] += 1
 

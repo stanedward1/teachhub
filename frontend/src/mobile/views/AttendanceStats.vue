@@ -57,11 +57,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { attendanceApi, studentApi } from '../../api'
+import { onMounted, ref } from 'vue'
+import { attendanceApi } from '../../api'
+import { formatDate } from '../../utils/date'
+import { useClassOptions } from '../composables/useClassOptions'
 
-const classId = ref(null)
-const classOptions = ref([])
+const { classId, classOptions, loadClasses } = useClassOptions(load)
 const range = ref('7')
 const summary = ref(null)
 const loading = ref(false)
@@ -73,18 +74,11 @@ const statusList = [
   { name: '迟到', color: '#2563eb' },
 ]
 
-function fmt(d) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
 function rangeDates() {
   const end = new Date()
   const start = new Date()
   start.setDate(start.getDate() - (Number(range.value) - 1))
-  return { start_date: fmt(start), end_date: fmt(end) }
+  return { start_date: formatDate(start), end_date: formatDate(end) }
 }
 
 function rateColor(rate) {
@@ -93,26 +87,21 @@ function rateColor(rate) {
   return '#dc2626'
 }
 
-async function loadClasses() {
-  try {
-    const res = await studentApi.classrooms({ graduated: 'false' })
-    classOptions.value = (res.items || []).map((c) => ({ text: c.name, value: c.id }))
-    if (classOptions.value.length && !classId.value) {
-      classId.value = classOptions.value[0].value
-      await load()
-    }
-  } catch (e) {}
-}
+// 竞态守卫：班级/区间切换并发在途时，旧响应晚到不覆盖新数据
+let loadSeq = 0
 
 async function load() {
   if (!classId.value) return
+  const seq = ++loadSeq
   loading.value = true
   try {
     const { start_date, end_date } = rangeDates()
-    summary.value = await attendanceApi.summary({ class_id: classId.value, start_date, end_date })
+    const res = await attendanceApi.summary({ class_id: classId.value, start_date, end_date })
+    if (seq !== loadSeq) return
+    summary.value = res
   } catch (e) {
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

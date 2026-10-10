@@ -16,10 +16,9 @@
   等不支持格式**绝不送入模型**，而是精确说明原因；未开启多模态则标注跳过（不报错）；
 - 其它（.zip/.doc/.xls 等二进制格式）→ 标注暂不支持。
 
-此外见 :func:`extract_inline_images` —— 学生用富文本编辑器「上传图片」时，图片会被写成
-``submissions.content`` 里的一行 Markdown（形如 ``![图片](/uploads/xxx.png)``），
-**不会**落到 ``submissions.filepath``。只读附件字段的批改流程因此完全看不到这张图，
-模型只能对着一个无法访问的 URL 猜内容（历史缺陷）。
+此外见 :func:`extract_inline_images`：学生用富文本编辑器插入的图片写在
+``submissions.content`` 里、``filepath`` 为空，须从正文单独抽取 —— 缺陷背景
+（模型只见无法访问的 URL）见 `ai_grading` 调用点注释。
 
 依赖延迟导入：解析库缺失只影响对应格式，不影响服务启动与其它格式解析。
 """
@@ -59,15 +58,14 @@ UNSUPPORTED_IMAGE_EXTS = {".bmp", ".heic", ".heif", ".avif", ".tif", ".tiff"}
 
 
 def _unsupported_image_reason(ext: str) -> str:
-    """不受支持图片扩展名对应的中文说明（教师可见）。"""
-    return {
-        ".bmp": "BMP 不受模型支持，请转为 JPEG/PNG",
-        ".heic": "HEIC 不受模型支持，请转为 JPEG/PNG",
-        ".heif": "HEIF 不受模型支持，请转为 JPEG/PNG",
-        ".avif": "AVIF 不受模型支持，请转为 JPEG/PNG",
-        ".tif": "TIFF 不受模型支持，请转为 JPEG/PNG",
-        ".tiff": "TIFF 不受模型支持，请转为 JPEG/PNG",
-    }.get(ext, f"{ext} 不受模型支持，请转为 JPEG/PNG")
+    """不受支持图片扩展名对应的中文说明（教师可见）。
+
+    两个调用点（`extract_inline_images` / `_extract_attachment_impl`）都先经
+    ``ext in UNSUPPORTED_IMAGE_EXTS`` 守卫，``ext`` 必为集合六成员之一；
+    ``.tif``/``.tiff`` 统一展示为 ``TIFF``（与历史文案逐字节一致）。
+    """
+    label = "TIFF" if ext in (".tif", ".tiff") else ext.lstrip(".").upper()
+    return f"{label} 不受模型支持，请转为 JPEG/PNG"
 
 # PDF 最多解析页数（避免超长文档拖垮调用）
 _PDF_MAX_PAGES = 20
@@ -249,9 +247,8 @@ def extract_inline_images(
 ) -> InlineImagePayload:
     """抽取正文里内嵌的图片引用，转成可送入多模态的 data URL。
 
-    为什么需要它：学生在提交页用富文本编辑器「上传图片」，图片会被写成 ``content``
-    里的一行 Markdown（``![图片](/uploads/xxx.png)``），而 ``submissions.filepath``
-    仍为空。只读附件字段的批改流程因此完全看不到图片。
+    为什么需要它：富文本编辑器插入的图片写在 ``content`` 里、``filepath`` 为空，
+    只读附件字段的流程看不到 —— 缺陷背景与抽取动机见 `ai_grading` 调用点注释。
 
     行为：
       - 命中本地上传图片 → 读盘转 data URL（受 ``AI_MAX_IMAGE_BYTES`` 限制），并把引用

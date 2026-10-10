@@ -24,13 +24,14 @@
  * 取数改为本组件负责，通过 watch 监听 classId 变化（immediate）触发加载；同时对外
  * 暴露 reload()，供父组件在保存学生后主动刷新图表（等价于原 loadBoardTypeStats 调用）。
  */
-import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import * as echarts from 'echarts/core'
 import { PieChart } from 'echarts/charts'
 import { TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 echarts.use([PieChart, TooltipComponent, LegendComponent, CanvasRenderer])
 import { studentApi } from '../../../api'
+import { useEChart } from '../../../composables/useEChart'
 
 const props = defineProps({
   /** 当前筛选班级 id（为空时不渲染本组件，由父组件 v-if 控制） */
@@ -38,7 +39,7 @@ const props = defineProps({
 })
 
 const chartRef = ref(null)
-let chartInstance = null
+const chartInstance = useEChart(chartRef)
 const detailDialog = ref(false)
 const detailTitle = ref('')
 const detailList = ref([])
@@ -56,8 +57,7 @@ async function load() {
 
 function renderChart(stats) {
   if (!chartRef.value) return
-  if (chartInstance) chartInstance.dispose()
-  chartInstance = echarts.init(chartRef.value)
+  const instance = chartInstance.init()
 
   const option = {
     tooltip: {
@@ -93,10 +93,10 @@ function renderChart(stats) {
     ],
   }
 
-  chartInstance.setOption(option)
+  instance.setOption(option)
 
   // 点击图表跳转明细
-  chartInstance.on('click', (params) => {
+  instance.on('click', (params) => {
     if (params.name === '通学生') {
       detailTitle.value = '通学生名单'
       detailList.value = stats.day || []
@@ -110,13 +110,6 @@ function renderChart(stats) {
 
 // classId 变化（含首次挂载）即加载统计
 watch(() => props.classId, load, { immediate: true })
-
-onBeforeUnmount(() => {
-  if (chartInstance) {
-    chartInstance.dispose()
-    chartInstance = null
-  }
-})
 
 // 供父组件在保存学生后主动刷新图表
 defineExpose({ reload: load })

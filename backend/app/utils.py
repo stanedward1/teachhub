@@ -3,6 +3,8 @@ import uuid
 from datetime import date, datetime
 
 from fastapi import HTTPException
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 
 def gen_student_no(db, student_model) -> str:
@@ -103,3 +105,16 @@ def safe_filename(name: str) -> str:
     name = re.sub(r"[^\w.\-\u4e00-\u9fff]", "_", name or "")
     name = name.strip("._")
     return name or "file"
+
+
+def db_today(db: Session) -> date:
+    """取**数据库时钟**下的当天日期。
+
+    额度统计必须与 `created_at` 用同一时间基准，否则会出现「进程本地凌晨 = 数据库
+    前一天」的错位（SQLite 存 UTC、MySQL 存库本地时区，而 Python 取进程本地日期）。
+    SQLite 的 `CURRENT_DATE` 返回字符串，MySQL 返回 `date`，这里统一成 `date`。
+    """
+    raw = db.execute(select(func.current_date())).scalar()
+    if isinstance(raw, date):
+        return raw
+    return date.fromisoformat(str(raw)[:10])

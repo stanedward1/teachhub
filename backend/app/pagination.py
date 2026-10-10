@@ -24,6 +24,8 @@
 """
 from sqlalchemy import func, select
 
+from app.utils import normalize_page
+
 __all__ = ["paginate"]
 
 
@@ -33,16 +35,9 @@ def paginate(db, stmt, page: int, page_size: int):
     :param db: SQLAlchemy Session
     :param stmt: 已带过滤/排序的 ``select()``（不含 offset/limit）
     :param page: 页码，从 1 开始
-    :param page_size: 每页条数
+    :param page_size: 每页条数（钳位 1..200）
     """
-    try:
-        page = max(1, int(page or 1))
-    except (TypeError, ValueError):
-        page = 1
-    try:
-        page_size = max(1, int(page_size or 20))
-    except (TypeError, ValueError):
-        page_size = 20
+    page, page_size = normalize_page(page, page_size)
 
     total_col = func.count().over().label("total_rows")
     paged = stmt.add_columns(total_col).offset((page - 1) * page_size).limit(page_size)

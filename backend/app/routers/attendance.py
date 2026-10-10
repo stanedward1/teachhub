@@ -22,7 +22,7 @@ def list_attendance(
     return attendance_service.list_attendance(db, user, class_id, date)
 
 
-@router.post("/attendance/checkin", status_code=201)
+@router.post("/attendance/checkin")
 def checkin(payload: AttendanceCheckin, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """批量提交点名结果（存在则更新，不存在则新增）。"""
     return attendance_service.checkin(db, user, payload)

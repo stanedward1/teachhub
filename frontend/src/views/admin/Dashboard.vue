@@ -235,6 +235,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 echarts.use([LineChart, PieChart, GridComponent, TooltipComponent, TitleComponent, CanvasRenderer])
 import { adminApi } from '../../api'
 import { isPlatformAdmin } from '../../utils/auth'
+import { useEChart } from '../../composables/useEChart'
 import StateView from '../../components/StateView.vue'
 
 const router = useRouter()
@@ -254,9 +255,14 @@ const trendRef = ref(null)
 const distRef = ref(null)
 const attRef = ref(null)
 const selectedExam = ref('')
-let trendChart = null
-let distChart = null
-let attChart = null
+// 三块图表实例统一走 useEChart 收敛「重建式 init / dispose」样板（句柄沿用
+// 原实例名，避免与 renderCharts 块内的局部 const dist / const att 遮蔽冲突）。
+// resize 监听是三实例共享的单一防抖 timer（含卸载 clearTimeout 移除），
+// 且卸载顺序为 removeListener → clearTimeout → dispose×3，为保持原语义
+// 不拆成 composable 内置监听，故三处均关闭自动卸载清理、保留原 onBeforeUnmount。
+const trendChart = useEChart(trendRef, { disposeOnUnmount: false })
+const distChart = useEChart(distRef, { disposeOnUnmount: false })
+const attChart = useEChart(attRef, { disposeOnUnmount: false })
 let resizeTimer = null
 
 // 考试名称列表（用于下拉选择）
@@ -271,55 +277,16 @@ const currentDist = computed(() => {
   return data.value.score_dist || {}
 })
 
+// 8 张卡片的渐变背景收敛为语义化 CSS 变量（值与原内联 hex 逐像素等价，见 scoped 样式）
 const statCards = [
-  {
-    icon: 'User',
-    bg: 'linear-gradient(135deg, #2563eb, #4f46e5)',
-    key: 'student',
-    route: '/admin/students',
-  },
-  {
-    icon: 'School',
-    bg: 'linear-gradient(135deg, #0ea5e9, #0284c7)',
-    key: 'class',
-    route: '/admin/classrooms',
-  },
-  {
-    icon: 'Document',
-    bg: 'linear-gradient(135deg, #8b5cf6, #7c3aed)',
-    key: 'assignment',
-    route: '/admin/homework',
-  },
-  {
-    icon: 'Upload',
-    bg: 'linear-gradient(135deg, #f59e0b, #d97706)',
-    key: 'submission',
-    route: '/admin/homework',
-  },
-  {
-    icon: 'Calendar',
-    bg: 'linear-gradient(135deg, #ef4444, #dc2626)',
-    key: 'leave',
-    route: '/admin/leaves',
-  },
-  {
-    icon: 'Folder',
-    bg: 'linear-gradient(135deg, #10b981, #059669)',
-    key: 'resource',
-    route: '/admin/resources',
-  },
-  {
-    icon: 'Tickets',
-    bg: 'linear-gradient(135deg, #f43f5e, #e11d48)',
-    key: 'exam',
-    route: '/admin/exams',
-  },
-  {
-    icon: 'Bell',
-    bg: 'linear-gradient(135deg, #64748b, #475569)',
-    key: 'today_leave',
-    route: '/admin/leaves',
-  },
+  { icon: 'User', bg: 'var(--grad-blue)', key: 'student', route: '/admin/students' },
+  { icon: 'School', bg: 'var(--grad-sky)', key: 'class', route: '/admin/classrooms' },
+  { icon: 'Document', bg: 'var(--grad-violet)', key: 'assignment', route: '/admin/homework' },
+  { icon: 'Upload', bg: 'var(--grad-amber)', key: 'submission', route: '/admin/homework' },
+  { icon: 'Calendar', bg: 'var(--grad-red)', key: 'leave', route: '/admin/leaves' },
+  { icon: 'Folder', bg: 'var(--grad-emerald)', key: 'resource', route: '/admin/resources' },
+  { icon: 'Tickets', bg: 'var(--grad-rose)', key: 'exam', route: '/admin/exams' },
+  { icon: 'Bell', bg: 'var(--grad-slate)', key: 'today_leave', route: '/admin/leaves' },
 ]
 
 const stats = computed(() => {
@@ -393,34 +360,23 @@ async function load() {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resize)
   clearTimeout(resizeTimer)
-  if (trendChart) {
-    trendChart.dispose()
-    trendChart = null
-  }
-  if (distChart) {
-    distChart.dispose()
-    distChart = null
-  }
-  if (attChart) {
-    attChart.dispose()
-    attChart = null
-  }
+  trendChart.dispose()
+  distChart.dispose()
+  attChart.dispose()
 })
 
 function resize() {
   clearTimeout(resizeTimer)
   resizeTimer = setTimeout(() => {
-    trendChart?.resize()
-    distChart?.resize()
-    attChart?.resize()
+    trendChart.get()?.resize()
+    distChart.get()?.resize()
+    attChart.get()?.resize()
   }, 100)
 }
 
 function renderCharts() {
   if (trendRef.value) {
-    if (trendChart) trendChart.dispose()
-    trendChart = echarts.init(trendRef.value)
-    trendChart.setOption({
+    trendChart.init().setOption({
       tooltip: { trigger: 'axis' },
       grid: { left: 40, right: 20, top: 20, bottom: 30 },
       xAxis: {
@@ -452,15 +408,13 @@ function renderCharts() {
   }
 
   if (distRef.value) {
-    if (distChart) distChart.dispose()
-    distChart = echarts.init(distRef.value)
     const dist = currentDist.value || {}
     const distData = Object.entries(dist).map(([name, val]) => ({
       name,
       value: val.count || 0,
       percent: val.percent || 0,
     }))
-    distChart.setOption({
+    distChart.init().setOption({
       title: selectedExam.value
         ? {
             text: selectedExam.value,
@@ -492,10 +446,8 @@ function renderCharts() {
   }
 
   if (attRef.value) {
-    if (attChart) attChart.dispose()
-    attChart = echarts.init(attRef.value)
     const att = data.value.attendance || {}
-    attChart.setOption({
+    attChart.init().setOption({
       tooltip: {
         trigger: 'axis',
         formatter: (p) => `${p[0].axisValue}<br/>出勤率：${p[0].value}%`,
@@ -549,6 +501,15 @@ function renderCharts() {
   transition: all var(--transition-fast);
   cursor: pointer;
   margin-bottom: 16px;
+  /* 8 张统计卡图标的渐变语义变量（值与收敛前的内联 hex 逐像素等价） */
+  --grad-blue: linear-gradient(135deg, #2563eb, #4f46e5);
+  --grad-sky: linear-gradient(135deg, #0ea5e9, #0284c7);
+  --grad-violet: linear-gradient(135deg, #8b5cf6, #7c3aed);
+  --grad-amber: linear-gradient(135deg, #f59e0b, #d97706);
+  --grad-red: linear-gradient(135deg, #ef4444, #dc2626);
+  --grad-emerald: linear-gradient(135deg, #10b981, #059669);
+  --grad-rose: linear-gradient(135deg, #f43f5e, #e11d48);
+  --grad-slate: linear-gradient(135deg, #64748b, #475569);
 }
 .stat-card:hover {
   box-shadow: var(--shadow-md);

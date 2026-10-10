@@ -41,6 +41,8 @@ export function useCrudList(listApi, options = {}) {
     removeSuccessText = '删除成功',
     /** 初始每页条数 */
     defaultPageSize = 20,
+    /** 是否分页：false 时不注入 page/page_size，total 取 items.length（全量列表页用） */
+    paginated = true,
   } = options
 
   const items = ref([])
@@ -79,15 +81,14 @@ export function useCrudList(listApi, options = {}) {
     error.value = false
     try {
       const params = {
-        page: page.value,
-        page_size: pageSize.value,
+        ...(paginated ? { page: page.value, page_size: pageSize.value } : {}),
         ...(buildParams ? buildParams() : {}),
       }
       const res = await listApi(params)
       // 已有更新的请求发出：本次结果已过期，直接丢弃（不覆盖新数据）
       if (my !== seq) return
       items.value = res.items
-      total.value = res.total
+      total.value = paginated ? res.total : res.items.length
       if (onLoaded) onLoaded(res)
     } catch (e) {
       // 主动取消的请求不算错误，不改动 error（§3.4）

@@ -17,6 +17,13 @@ from sqlalchemy.sql import func
 from app.database import Base
 
 
+# AI 批改结果的规范状态值（与 DB / API 契约逐字节一致；服务层一律引用这些常量，
+# 避免散落的字面量拼错 —— 写错一个字母查询/判等就会静默失配）。
+STATUS_PENDING = "pending"
+STATUS_SUCCESS = "success"
+STATUS_FAILED = "failed"
+
+
 class AiCredential(Base):
     """平台级 AI 服务凭证（兼容 OpenAI Chat Completions 协议的服务）。
 
@@ -56,8 +63,8 @@ class AiGradingResult(Base):
         unique=True,
     )
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
-    # pending（已排队/进行中） / success / failed
-    status = Column(String(20), nullable=False, default="pending", index=True)
+    # 取值见上方 STATUS_PENDING / STATUS_SUCCESS / STATUS_FAILED 常量
+    status = Column(String(20), nullable=False, default=STATUS_PENDING, index=True)
     provider = Column(String(50))
     model = Column(String(100))
     # 0-100，与 SubmissionComment.score 同量纲便于对照；可为空（模型未给出）

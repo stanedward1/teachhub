@@ -321,19 +321,25 @@ function onFilterChange() {
   load()
 }
 
+// 「最后一次请求胜出」序号：快速翻页/切筛选时丢弃过期响应（同 useCrudList.load 的守卫）
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   error.value = false
   try {
     const params = { page: page.value, page_size: pageSize.value }
     if (classId.value) params.class_id = classId.value
     const res = await homeworkApi.assignments(params)
+    if (seq !== loadSeq) return // 期间又发起了更新的请求：丢弃本次过期结果
     items.value = res.items
     total.value = res.total
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = true
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

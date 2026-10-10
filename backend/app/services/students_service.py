@@ -21,6 +21,7 @@ from app.permissions import (
     ensure_class_operable,
     ensure_same_school,
     ensure_student_operable,
+    ensure_student_visible,
     filter_classrooms_by_teacher,
     get_student_account,
     get_teacher_class_ids,
@@ -531,12 +532,10 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
 
 def update_student(db: Session, user: User, student_id: int, payload: StudentUpdate) -> dict:
     """更新学生信息（含寄宿状态变更留痕）。"""
-    s = db.get(Student, student_id)
-    if not s:
-        raise HTTPException(status_code=404, detail="学生不存在")
-    # 教师只能修改自己负责班级的学生
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
-        raise HTTPException(status_code=403, detail="无权修改该学生")
+    # 仅校验存在性与带班可见性；退学/毕业限制走下方自定义规则（允许改回在籍重新激活）
+    s = ensure_student_visible(
+        db, user, student_id, detail_403="无权修改该学生", check_operable=False
+    )
     # 退学/毕业限制：已毕业班级的学生不可修改；已退学学生仅允许改回在籍（重新激活）
     if s.class_id:
         cls = db.get(Classroom, s.class_id)
@@ -580,14 +579,10 @@ def update_student(db: Session, user: User, student_id: int, payload: StudentUpd
 
 def delete_student(db: Session, user: User, student_id: int) -> dict:
     """删除学生及其业务数据、登录账号与头像。"""
-    s = db.get(Student, student_id)
-    if not s:
-        raise HTTPException(status_code=404, detail="学生不存在")
-    # 教师只能删除自己负责班级的学生
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
-        raise HTTPException(status_code=403, detail="无权删除该学生")
-    # 退学/毕业限制
-    ensure_student_operable(db, student_id)
+    # 与原实现一致：先带班校验，后退学/毕业封禁（触发顺序逐字保持）
+    s = ensure_student_visible(
+        db, user, student_id, detail_403="无权删除该学生", operable_first=False
+    )
 
     # 级联清理：删除该学生全部业务数据（成绩/考勤/表现/提交等），避免孤儿数据
     purge_student_data(db, student_id)
@@ -612,13 +607,10 @@ def delete_student(db: Session, user: User, student_id: int) -> dict:
 
 def reset_student_password(db: Session, student_id: int, payload: dict, user: User) -> dict:
     """教师重置/修改学生密码（默认 123456）。"""
-    s = db.get(Student, student_id)
-    if not s:
-        raise HTTPException(status_code=404, detail="学生不存在")
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
-        raise HTTPException(status_code=403, detail="无权重置该学生密码")
-    # 退学/毕业限制
-    ensure_student_operable(db, student_id)
+    # 与原实现一致：先带班校验，后退学/毕业封禁（触发顺序逐字保持）
+    s = ensure_student_visible(
+        db, user, student_id, detail_403="无权重置该学生密码", operable_first=False
+    )
     new_pwd = payload.get("password") or "123456"
     # 弱密码标记首次登录强制改密
     must_change = validate_password_strength(new_pwd) is not None
@@ -724,13 +716,10 @@ def batch_reset_student_passwords(db: Session, payload, user: User) -> dict:
 
 def upload_student_avatar(db: Session, user: User, student_id: int, file) -> dict:
     """教师为学生上传头像。"""
-    s = db.get(Student, student_id)
-    if not s:
-        raise HTTPException(status_code=404, detail="学生不存在")
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
-        raise HTTPException(status_code=403, detail="无权为该学生上传头像")
-    # 退学/毕业限制
-    ensure_student_operable(db, student_id)
+    # 与原实现一致：先带班校验，后退学/毕业封禁（触发顺序逐字保持）
+    s = ensure_student_visible(
+        db, user, student_id, detail_403="无权为该学生上传头像", operable_first=False
+    )
 
     student_user = get_student_account(db, s.class_id, s.name)
     if not student_user:

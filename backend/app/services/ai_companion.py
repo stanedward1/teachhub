@@ -25,7 +25,6 @@ import os
 import re
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -56,7 +55,7 @@ from app.services.ai_attachments import (
 )
 from app.services.ai_client import AiClientError, chat_completion
 from app.services.ai_grading import active_credential
-from app.utils import stringify_dates
+from app.utils import db_today as _db_today, stringify_dates
 
 logger = logging.getLogger("teachhub.ai")
 
@@ -70,6 +69,17 @@ MAX_ATTACHMENT_CHARS = 2400      # 附件要点（多附件按升序累加至该
 MAX_HISTORY_CHARS = 1600         # 历史（最近 4 轮 user+assistant 合计）
 HISTORY_TURNS = 4                # 保留的历史轮数
 MAX_COMPANION_TOKENS = 1024      # 引导式短答，1024 足够；2048 会推高「给答案」概率
+
+# 题干正文预算：MAX_SYSTEM_CHARS(4000) - 规则段(≈1200 固定，永不裁剪) 的余量。
+# 与 `_build_system_prompt` 内按 overhead 动态派生的 `body_budget` 是同一预算的两个
+# 出处（本常量是 `_load_context` 预裁剪用的保守上界，实际派生值与其相等）。
+_QUESTION_BODY_BUDGET = 2800
+
+# 429 / 403 错误文案（多处 raise 复用，逐字保持原样；校池/平台池共用「太忙」文案是
+# 设计意图 —— 不向学生泄露是学校额度还是平台额度）。
+_MSG_NO_STUDENT_PROFILE = "未找到学生档案"
+_MSG_QUOTA_PER_STUDENT = "你今天使用 AI 学伴的次数已用完，明天再来吧"
+_MSG_QUOTA_BUSY = "AI 学伴今天实在太忙了，明天再来试试吧"
 
 # 学生提问分隔符（防注入 A1）；A4 会转义提问里出现的分隔符
 _QUESTION_OPEN = "<<<STUDENT_QUESTION"
@@ -100,22 +110,6 @@ V1_REFUSAL_ANSWER = (
 
 
 # ---------------- 学伴独立额度四原语（与 ai_grading 同构，严守 S19–S21） ----------------
-def _db_today(db: Session):
-    """取**数据库时钟**下的当天日期（与写时间戳同一基准）。
-
-    🔴 **不要用 Python 的 ``date.today()``**：额度统计必须与 ``created_at`` 用同一时间
-    基准，否则会出现「进程本地凌晨 = 数据库前一天」的错位（SQLite 存 UTC、MySQL 存库
-    本地时区，而 Python 取进程本地日期）。SQLite 的 ``CURRENT_DATE`` 返回字符串，
-    MySQL 返回 ``date``，这里统一成 ``date``。
-    """
-    from datetime import date
-
-    raw = db.execute(select(func.current_date())).scalar()
-    if isinstance(raw, date):
-        return raw
-    return date.fromisoformat(str(raw)[:10])
-
-
 def companion_today_call_count(db: Session) -> int:
     """当日已**预留**的学伴外呼次数（平台级口径，跨租户统计）。
 
@@ -401,6 +395,8 @@ def reserve_school_companion_quota(db: Session, school_id: int | None, n: int) -
         row.call_count = used + take
         db.commit()
     return take
+
+
 def _clip(text: str | None, limit: int, mark: str = "") -> str:
     """把文本裁剪到 ``limit`` 字符；被裁剪时追加 ``mark`` 说明。"""
     body = (text or "").strip()
@@ -466,7 +462,7 @@ def _load_context(db: Session, assignment: Assignment, cred) -> dict:
 
     # 题干正文裁剪：system 预算给题干的部分 = MAX_SYSTEM_CHARS - 规则段(≈1200)。
     # 规则段实际长度由 `_build_system_prompt` 决定，这里用一个保守的题干上限。
-    body_limit = 2800
+    body_limit = _QUESTION_BODY_BUDGET
     content_clipped = _clip(body, body_limit, "\n（题干过长已截断）")
 
     has_material = bool(title or description or body or attachment_text)
@@ -704,14 +700,7 @@ def _get_or_create_conversation(
     🔴 查询**不手写** ``school_id`` 条件（由 ORM ``do_orm_execute`` 自动注入，S2）；
     ``school_id`` 由 ``tenant.py::before_flush`` 自动回填，**不手工赋值**。
     """
-    conv = (
-        db.query(AiCompanionConversation)
-        .filter(
-            AiCompanionConversation.student_id == student_id,
-            AiCompanionConversation.assignment_id == assignment_id,
-        )
-        .first()
-    )
+    conv = _find_conversation(db, student_id, assignment_id)
     if conv is not None:
         return conv
 
@@ -725,14 +714,7 @@ def _get_or_create_conversation(
         return conv
     except IntegrityError:
         # 并发下已由另一个请求创建：回滚 SAVEPOINT 后重读
-        conv = (
-            db.query(AiCompanionConversation)
-            .filter(
-                AiCompanionConversation.student_id == student_id,
-                AiCompanionConversation.assignment_id == assignment_id,
-            )
-            .first()
-        )
+        conv = _find_conversation(db, student_id, assignment_id)
         if conv is None:
             raise
         return conv
@@ -784,7 +766,7 @@ def _resolve_student(db: Session, user: User):
     """把学生登录账号（User）定位到学生档案（Student）；不存在则 403。"""
     stu = homework_service.get_student_by_account(db, user)
     if stu is None:
-        raise HTTPException(status_code=403, detail="未找到学生档案")
+        raise HTTPException(status_code=403, detail=_MSG_NO_STUDENT_PROFILE)
     return stu
 
 
@@ -839,13 +821,13 @@ def ask(db: Session, assignment_id: int, question: str, user: User) -> dict:
     #   自身抛 403）。若走到这里 student 仍为 None（角色异常），禁用每生配额会落到
     #   `student_id=0`（把所有异常算到同一「学生 0」头上）——故此处硬抛 403，见 §6 表 6.4。
     if student is None:
-        raise HTTPException(status_code=403, detail="未找到学生档案")
+        raise HTTPException(status_code=403, detail=_MSG_NO_STUDENT_PROFILE)
 
     # 4a. 每生配额（公平语义）：尽 ⇒ 个人文案
     if per_student_remaining_quota(db, student.id) <= 0:
         raise HTTPException(
             status_code=429,
-            detail="你今天使用 AI 学伴的次数已用完，明天再来吧",
+            detail=_MSG_QUOTA_PER_STUDENT,
         )
 
     # 4b. 学校闸（校级开关 + 校级池，docs/DESIGN-AI校级能力.md §3 D4.1）：
@@ -864,14 +846,14 @@ def ask(db: Session, assignment_id: int, question: str, user: User) -> dict:
     ):
         raise HTTPException(
             status_code=429,
-            detail="AI 学伴今天实在太忙了，明天再来试试吧",
+            detail=_MSG_QUOTA_BUSY,
         )
 
     # 4c. 平台池（成本语义）：尽 ⇒ 平台文案（不向学生泄露平台成本口径）
     if companion_remaining_quota(db) <= 0:
         raise HTTPException(
             status_code=429,
-            detail="AI 学伴今天实在太忙了，明天再来试试吧",
+            detail=_MSG_QUOTA_BUSY,
         )
 
     # 步骤 5：**原子预留**（三闸门，在上下文/外呼之前，C9）
@@ -880,7 +862,7 @@ def ask(db: Session, assignment_id: int, question: str, user: User) -> dict:
     if per_take <= 0:
         raise HTTPException(
             status_code=429,
-            detail="你今天使用 AI 学伴的次数已用完，明天再来吧",
+            detail=_MSG_QUOTA_PER_STUDENT,
         )
 
     # 5b. 再预留学伴校级池：拿不到 ⇒ 429（与平台池共用「太忙」文案）。
@@ -890,7 +872,7 @@ def ask(db: Session, assignment_id: int, question: str, user: User) -> dict:
     if school_take <= 0:
         raise HTTPException(
             status_code=429,
-            detail="AI 学伴今天实在太忙了，明天再来试试吧",
+            detail=_MSG_QUOTA_BUSY,
         )
 
     # 5c. 最后预留平台池：拿不到 ⇒ 平台文案。
@@ -900,7 +882,7 @@ def ask(db: Session, assignment_id: int, question: str, user: User) -> dict:
     if take <= 0:
         raise HTTPException(
             status_code=429,
-            detail="AI 学伴今天实在太忙了，明天再来试试吧",
+            detail=_MSG_QUOTA_BUSY,
         )
 
     # 步骤 6：取上下文（后端自取，D2）
@@ -1035,7 +1017,7 @@ def quota(db: Session, assignment_id: int, user: User) -> dict:
     if user.role == "student":
         student = _resolve_student(db, user)
     if student is None:
-        raise HTTPException(status_code=403, detail="未找到学生档案")
+        raise HTTPException(status_code=403, detail=_MSG_NO_STUDENT_PROFILE)
 
     # 开关 = 「平台 AND 学校」合并值（docs/DESIGN-AI校级能力.md §3 D6）；
     # 学校闸用 student.school_id（学生所在学校），为 None 时校闸函数恒 True（不放大管控）。

@@ -194,6 +194,17 @@ class ScoreUpdate(BaseModel):
 
 
 # ============ 请假 ============
+# 合法状态全集（models/workbench.py Leave.status 注释 + 前端 Leaves.vue/LeaveList.vue
+# 实际使用 + seed.py）：仅「登记 / 已销假」两个值。只校验入参，不改历史数据。
+LEAVE_STATUS = ("登记", "已销假")
+
+
+def _check_leave_status(v: str | None) -> str | None:
+    if v is not None and v not in LEAVE_STATUS:
+        raise ValueError("请假状态仅支持：登记、已销假")
+    return v
+
+
 class LeaveCreate(BaseModel):
     student_id: int = Field(..., gt=0)
     reason: str | None = None
@@ -202,6 +213,11 @@ class LeaveCreate(BaseModel):
     status: str = "登记"
     image: str | None = None
 
+    @field_validator("status")
+    @classmethod
+    def _status_in_whitelist(cls, v):
+        return _check_leave_status(v)
+
 
 class LeaveUpdate(BaseModel):
     reason: str | None = None
@@ -209,6 +225,11 @@ class LeaveUpdate(BaseModel):
     end_date: str | None = None
     status: str | None = None
     image: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def _status_in_whitelist(cls, v):
+        return _check_leave_status(v)
 
 
 # ============ 学生 ============

@@ -102,10 +102,17 @@ const previewContent = ref('')
 // 平台超管：计划无父资源可继承 school_id，创建时须显式选校（非超管不渲染该项、不下发）
 const isPlatformAdminUser = isPlatformAdmin()
 const schools = ref([])
-const form = reactive({ title: '', plan_type: '计划', content: '', school_id: null })
+// 表单初始值工厂：reactive 初始化与 openCreate 复用同一份字面量（plan_type 跟随当前筛选）
+const emptyForm = () => ({
+  title: '',
+  plan_type: planType.value || '计划',
+  content: '',
+  school_id: null,
+})
+const form = reactive(emptyForm())
 
-// 班级/教师计划总结共用一套列表：按 tab 切换两个接口；无分页，wrapper 合成 total。
-// 客户端排序仍由 useSort 处理（items 取 useCrudList 返回的原始列表）。
+// 班级/教师计划总结共用一套列表：按 tab 切换两个接口；全量返回不分页（paginated:false，
+// useCrudList 不注入分页参数、total 取 items.length）。客户端排序仍由 useSort 处理。
 const {
   items: rawItems,
   loading,
@@ -113,16 +120,10 @@ const {
   load,
   reload,
 } = useCrudList(
-  async (params) => {
-    const rest = { ...params }
-    delete rest.page
-    delete rest.page_size
-    const res =
-      tab.value === 'class' ? await planApi.classPlans(rest) : await planApi.teacherPlans(rest)
-    return { items: res.items, total: res.items.length }
-  },
+  (params) => (tab.value === 'class' ? planApi.classPlans(params) : planApi.teacherPlans(params)),
   {
     buildParams: () => ({ plan_type: planType.value }),
+    paginated: false,
   }
 )
 
@@ -133,12 +134,7 @@ onMounted(load)
 
 function openCreate() {
   editing.value = null
-  Object.assign(form, {
-    title: '',
-    plan_type: planType.value || '计划',
-    content: '',
-    school_id: null,
-  })
+  Object.assign(form, emptyForm())
   if (isPlatformAdminUser) loadSchools()
   dialog.value = true
 }

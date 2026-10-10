@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Leave
 from app.pagination import paginate
+from app.permissions import ensure_student_visible
 from app.schemas import LeaveCreate, LeaveUpdate
 from app.services.workbench._common import (
     active_student_id_query,
@@ -12,7 +13,6 @@ from app.services.workbench._common import (
     apply_teacher_student_filter,
     attach_student,
     audit,
-    ensure_student_operable,
     is_any_admin,
     is_student_in_teacher_classes,
     normalize_page,
@@ -57,9 +57,7 @@ def list_leaves(
 def create_leave(db: Session, user, payload: LeaveCreate) -> dict:
     """新增请假记录。"""
     # 复用返回的 Student 以继承其 school_id（见下方 school_id 说明）
-    student = ensure_student_operable(db, payload.student_id)
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload.student_id):
-        raise HTTPException(status_code=403, detail="无权为该学生创建请假")
+    student = ensure_student_visible(db, user, payload.student_id, detail_403="无权为该学生创建请假")
     x = Leave(
         student_id=payload.student_id,
         # 显式继承父资源（学生档案）的租户归属：超管（school_id=None）上下文下
@@ -83,9 +81,7 @@ def update_leave(db: Session, user, leave_id: int, payload: LeaveUpdate) -> dict
     x = db.get(Leave, leave_id)
     if not x:
         raise HTTPException(status_code=404, detail="记录不存在")
-    ensure_student_operable(db, x.student_id)
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, x.student_id):
-        raise HTTPException(status_code=403, detail="无权修改该请假")
+    ensure_student_visible(db, user, x.student_id, detail_403="无权修改该请假")
     data = payload.model_dump(exclude_unset=True)
     for f in ("reason", "start_date", "end_date", "status", "image"):
         if f in data and data[f] is not None:
@@ -101,9 +97,7 @@ def delete_leave(db: Session, user, leave_id: int) -> dict:
     x = db.get(Leave, leave_id)
     if not x:
         raise HTTPException(status_code=404, detail="记录不存在")
-    ensure_student_operable(db, x.student_id)
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, x.student_id):
-        raise HTTPException(status_code=403, detail="无权删除该请假")
+    ensure_student_visible(db, user, x.student_id, detail_403="无权删除该请假")
     db.delete(x)
     audit(db, user, "delete_leave", target=f"请假#{leave_id}-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"事由：{x.reason or '未填写'}")
     db.commit()

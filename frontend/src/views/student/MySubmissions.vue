@@ -80,11 +80,6 @@ onMounted(load)
 </script>
 
 <style scoped>
-.empty {
-  text-align: center;
-  color: #9ca3af;
-  padding: 40px 0;
-}
 .muted {
   color: #9ca3af;
 }

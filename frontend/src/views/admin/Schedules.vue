@@ -9,7 +9,7 @@
     </div>
 
     <div class="page-card">
-      <div v-if="!classId" class="empty">请先选择班级</div>
+      <div v-if="!classId" class="empty-state empty-state--tall">请先选择班级</div>
       <!-- 说明：刻意不传 :empty —— 空课表本身就是「点 + 号添加课程」的交互区，不能换成空态占位 -->
       <StateView
         v-else
@@ -82,17 +82,12 @@ const editing = ref(null)
 const saving = ref(false)
 const form = reactive({ day_of_week: 1, period: 1, subject: '', teacher_name: '' })
 
-// 单个班级课表：全量返回（网格渲染，非分页列表）。class_id 经 buildParams 注入，
-// wrapper 去掉 useCrudList 注入的分页参数并合成 total，保持原行为不变。
-const { items, loading, error, load, reload } = useCrudList(
-  (params) => {
-    const rest = { ...params }
-    delete rest.page
-    delete rest.page_size
-    return scheduleApi.list(rest).then((r) => ({ items: r.items, total: r.items.length }))
-  },
-  { buildParams: () => ({ class_id: classId.value }) }
-)
+// 单个班级课表：全量返回（网格渲染，非分页列表）。class_id 经 buildParams 注入；
+// paginated:false 时 useCrudList 不注入分页参数、total 取 items.length，保持原行为不变。
+const { items, loading, error, load, reload } = useCrudList(scheduleApi.list, {
+  buildParams: () => ({ class_id: classId.value }),
+  paginated: false,
+})
 
 onMounted(async () => {
   // 管理员看全部，教师只看自己负责的班级
@@ -189,9 +184,7 @@ async function remove() {
 .plus {
   color: #cbd5e1;
 }
-.empty {
-  text-align: center;
-  color: #9ca3af;
+.empty-state--tall {
   padding: 60px 0;
 }
 </style>

@@ -158,7 +158,7 @@
       </div>
     </div>
 
-    <div v-else-if="!loading" class="empty">提交不存在或已被删除</div>
+    <div v-else-if="!loading" class="empty-state empty-state--tall">提交不存在或已被删除</div>
   </div>
 </template>
 
@@ -402,9 +402,7 @@ async function acceptAiExcellent() {
   margin-top: 12px;
   align-items: center;
 }
-.empty {
-  text-align: center;
-  color: #9ca3af;
+.empty-state--tall {
   padding: 60px 0;
 }
 /* AI 批改区块：与教师点评（蓝色）在视觉上明确区分，强调「仅供参考」 */

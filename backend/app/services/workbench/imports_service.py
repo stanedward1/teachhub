@@ -66,6 +66,10 @@ def import_students(db: Session, user, file) -> dict:
     class_school = {c.id: c.school_id for c in class_objs}
     graduated_class_ids = {c.id for c in class_objs if c.is_graduated}
 
+    # 导入历史的租户归属锚：取第一条成功写入行的目标班级 school_id
+    # （超管上下文 before_flush 不回填，不显式锚定会落 NULL 全租户不可见）。
+    first_school: list[int | None] = [None]
+
     def handle_row(session: Session, row: tuple, row_num: int) -> tuple[int, list[str]]:
         data = {
             "student_no": str(row[0] or "").strip(),
@@ -96,6 +100,9 @@ def import_students(db: Session, user, file) -> dict:
 
         if teacher_class_ids is not None and class_id not in teacher_class_ids:
             return ROW_FAIL, [f"第{row_num}行：教师只能导入到自己负责的班级「{data['class_name']}」"]
+
+        if first_school[0] is None:
+            first_school[0] = class_school.get(class_id)
 
         session.add(Student(
             student_no=data["student_no"],
@@ -130,6 +137,7 @@ def import_students(db: Session, user, file) -> dict:
         import_type="student",
         audit_action="import_students",
         handle_row=handle_row,
+        resolve_school_id=lambda: first_school[0],
     )
 
 

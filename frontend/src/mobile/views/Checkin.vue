@@ -71,13 +71,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { showToast, showSuccessToast } from 'vant'
-import { attendanceApi, studentApi } from '../../api'
+import { attendanceApi } from '../../api'
+import { formatDate } from '../../utils/date'
+import { useClassOptions } from '../composables/useClassOptions'
 
-const classId = ref(null)
-const classOptions = ref([])
-const date = ref(fmt(new Date()))
+const { classId, classOptions, loadClasses } = useClassOptions(load)
+const date = ref(formatDate(new Date()))
 const students = ref([])
 const loading = ref(false)
 const saving = ref(false)
@@ -99,33 +100,20 @@ function statusType(status) {
   return { 出勤: 'success', 缺勤: 'danger', 请假: 'warning', 迟到: 'primary' }[status] || 'default'
 }
 
-function fmt(d) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
-async function loadClasses() {
-  try {
-    const res = await studentApi.classrooms({ graduated: 'false' })
-    classOptions.value = (res.items || []).map((c) => ({ text: c.name, value: c.id }))
-    if (classOptions.value.length && !classId.value) {
-      classId.value = classOptions.value[0].value
-      await load()
-    }
-  } catch (e) {}
-}
+// 竞态守卫：班级/日期切换并发在途时，旧响应晚到不覆盖新数据
+let loadSeq = 0
 
 async function load() {
   if (!classId.value) return
+  const seq = ++loadSeq
   loading.value = true
   try {
     const res = await attendanceApi.list({ class_id: classId.value, date: date.value })
+    if (seq !== loadSeq) return
     students.value = res.items || []
   } catch (e) {
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -158,7 +146,7 @@ function onSelectStatus(action) {
 }
 
 function onDateConfirm(d) {
-  date.value = fmt(d)
+  date.value = formatDate(d)
   showCalendar.value = false
   load()
 }

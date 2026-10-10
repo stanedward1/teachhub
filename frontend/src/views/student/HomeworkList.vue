@@ -108,9 +108,4 @@ function go(id) {
   align-items: center;
   gap: 4px;
 }
-.empty {
-  text-align: center;
-  color: #9ca3af;
-  padding: 60px 0;
-}
 </style>

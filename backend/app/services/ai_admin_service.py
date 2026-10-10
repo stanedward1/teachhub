@@ -431,22 +431,20 @@ def set_school_ai_setting(db: Session, school_id: int, payload: SchoolAiSetting,
 
     # 2) 再统一写入（不 commit），并记录变更 key 列表
     changed: list[str] = []
-    if "grading_enabled" in fields_set:
-        value = payload.grading_enabled
-        # 显式 null ⇒ 删行（恢复跟随平台闸）；显式 true/false ⇒ 写 "1"/"0"。
-        # 🔴 勿写 `"1" if value else "0"`：None 也是 falsy，会把显式 null 误写成 "0"。
-        set_school_setting(
-            db, school_id, SCHOOL_AI_GRADING_ENABLED_KEY,
-            None if value is None else ("1" if value else "0"),
-        )
-        changed.append("grading_enabled")
-    if "companion_enabled" in fields_set:
-        value = payload.companion_enabled
-        set_school_setting(
-            db, school_id, SCHOOL_AI_COMPANION_ENABLED_KEY,
-            None if value is None else ("1" if value else "0"),
-        )
-        changed.append("companion_enabled")
+    # 开关字段（grading_enabled / companion_enabled）仅 key 不同，走同一分支：
+    # 显式 null ⇒ 删行（恢复跟随平台闸）；显式 true/false ⇒ 写 "1"/"0"。
+    # 🔴 勿写 `"1" if value else "0"`：None 也是 falsy，会把显式 null 误写成 "0"。
+    for field, key in (
+        ("grading_enabled", SCHOOL_AI_GRADING_ENABLED_KEY),
+        ("companion_enabled", SCHOOL_AI_COMPANION_ENABLED_KEY),
+    ):
+        if field in fields_set:
+            value = getattr(payload, field)
+            set_school_setting(
+                db, school_id, key,
+                None if value is None else ("1" if value else "0"),
+            )
+            changed.append(field)
     for field, key in _SCHOOL_LIMIT_KEY_MAP.items():
         if field in fields_set:
             value = limit_values[field]

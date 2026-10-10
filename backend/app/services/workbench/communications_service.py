@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Communication
 from app.pagination import paginate
+from app.permissions import ensure_student_visible
 from app.schemas import CommunicationCreate
 from app.services.workbench._common import (
     active_student_id_query,
@@ -12,7 +13,6 @@ from app.services.workbench._common import (
     apply_teacher_student_filter,
     attach_student,
     audit,
-    ensure_student_operable,
     is_any_admin,
     is_student_in_teacher_classes,
     normalize_page,
@@ -53,9 +53,7 @@ def list_communications(
 def create_communication(db: Session, user, payload: CommunicationCreate) -> dict:
     """新增沟通记录。"""
     # 复用返回的 Student 以继承其 school_id（见下方 school_id 说明）
-    student = ensure_student_operable(db, payload.student_id)
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, payload.student_id):
-        raise HTTPException(status_code=403, detail="无权为该学生创建沟通")
+    student = ensure_student_visible(db, user, payload.student_id, detail_403="无权为该学生创建沟通")
     x = Communication(
         student_id=payload.student_id,
         # 显式继承父资源（学生档案）的租户归属，避免超管上下文下 school_id 落 NULL
@@ -76,9 +74,7 @@ def delete_communication(db: Session, user, communication_id: int) -> dict:
     x = db.get(Communication, communication_id)
     if not x:
         raise HTTPException(status_code=404, detail="记录不存在")
-    ensure_student_operable(db, x.student_id)
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, x.student_id):
-        raise HTTPException(status_code=403, detail="无权删除该沟通")
+    ensure_student_visible(db, user, x.student_id, detail_403="无权删除该沟通")
     db.delete(x)
     audit(db, user, "delete_communication", target=f"沟通#{communication_id}-{student_name(db, x.student_id)}", student_id=x.student_id)
     db.commit()

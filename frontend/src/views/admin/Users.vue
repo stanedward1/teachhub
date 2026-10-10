@@ -8,10 +8,10 @@
         style="width: 160px"
         @change="reload"
       >
-        <el-option label="平台超管" value="super_admin" />
-        <el-option label="学校管理员" value="school_admin" />
-        <el-option label="教师" value="teacher" />
-        <el-option label="学生" value="student" />
+        <el-option :label="ROLE_LABELS[ROLES.SUPER_ADMIN]" :value="ROLES.SUPER_ADMIN" />
+        <el-option :label="ROLE_LABELS[ROLES.SCHOOL_ADMIN]" :value="ROLES.SCHOOL_ADMIN" />
+        <el-option :label="ROLE_LABELS[ROLES.TEACHER]" :value="ROLES.TEACHER" />
+        <el-option :label="ROLE_LABELS[ROLES.STUDENT]" :value="ROLES.STUDENT" />
       </el-select>
       <el-input
         v-model="keyword"
@@ -100,9 +100,9 @@
         /></el-form-item>
         <el-form-item label="角色">
           <el-select v-model="form.role" style="width: 100%" :disabled="roleDisabled">
-            <el-option label="学校管理员" value="school_admin" />
-            <el-option label="教师" value="teacher" />
-            <el-option label="学生" value="student" />
+            <el-option :label="ROLE_LABELS[ROLES.SCHOOL_ADMIN]" :value="ROLES.SCHOOL_ADMIN" />
+            <el-option :label="ROLE_LABELS[ROLES.TEACHER]" :value="ROLES.TEACHER" />
+            <el-option :label="ROLE_LABELS[ROLES.STUDENT]" :value="ROLES.STUDENT" />
           </el-select>
         </el-form-item>
         <el-form-item
@@ -142,6 +142,13 @@ import StateView from '../../components/StateView.vue'
 import { useCrudList } from '../../composables/useCrudList'
 import { adminApi, studentApi, schoolApi } from '../../api'
 import { getUser, isPlatformAdmin } from '../../utils/auth'
+import {
+  canManageUser,
+  roleLabel as roleText,
+  roleTagType as roleType,
+  ROLE_LABELS,
+  ROLES,
+} from '../../utils/roles'
 
 const classes = ref([])
 const schools = ref([])
@@ -150,7 +157,8 @@ const keyword = useDebouncedRef('', 300)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
-const form = reactive({
+// 表单初始值工厂：reactive 初始化与 openCreate 复用同一份字面量，避免两处漂移
+const emptyForm = () => ({
   username: '',
   password: '',
   name: '',
@@ -159,6 +167,7 @@ const form = reactive({
   class_id: null,
   school_id: null,
 })
+const form = reactive(emptyForm())
 const { items, loading, error, load, reload, remove } = useCrudList(adminApi.users, {
   removeApi: adminApi.removeUser,
   buildParams: () => ({ role: role.value, keyword: keyword.value }),
@@ -166,41 +175,26 @@ const { items, loading, error, load, reload, remove } = useCrudList(adminApi.use
 })
 watch(keyword, reload)
 
-// 当前登录用户是否为教师（非管理员）
+// 当前登录用户角色来源：utils/auth getUser()（localStorage 会话）
 const currentUser = getUser()
-const isTeacherOnly = currentUser?.role === 'teacher'
 // 平台超管：可跨校建号，新增/编辑表单需显式指定「所属学校」
 const isPlatformUser = isPlatformAdmin()
 
 // 教师不能重置其他教师/管理员的密码
 function canResetPwd(row) {
-  return !(
-    isTeacherOnly &&
-    (row.role === 'teacher' || ['school_admin', 'super_admin'].includes(row.role))
-  )
+  return canManageUser(currentUser?.role, row.role)
 }
 // 教师不能删除其他教师/管理员
 function canRemove(row) {
-  return !(
-    isTeacherOnly &&
-    (row.role === 'teacher' || ['school_admin', 'super_admin'].includes(row.role))
-  )
+  return canManageUser(currentUser?.role, row.role)
 }
 // 教师编辑其他教师/管理员时禁止修改角色
 const roleDisabled = computed(
-  () =>
-    !!editing.value &&
-    isTeacherOnly &&
-    (editing.value.role === 'teacher' ||
-      ['school_admin', 'super_admin'].includes(editing.value.role))
+  () => !!editing.value && !canManageUser(currentUser?.role, editing.value.role)
 )
 // 教师编辑其他教师/管理员时禁止修改姓名
 const nameDisabled = computed(
-  () =>
-    !!editing.value &&
-    isTeacherOnly &&
-    (editing.value.role === 'teacher' ||
-      ['school_admin', 'super_admin'].includes(editing.value.role))
+  () => !!editing.value && !canManageUser(currentUser?.role, editing.value.role)
 )
 
 onMounted(async () => {
@@ -218,26 +212,9 @@ onMounted(async () => {
   load()
 })
 
-function roleType(r) {
-  return { super_admin: 'danger', school_admin: 'warning', teacher: 'primary', student: 'info' }[r]
-}
-function roleText(r) {
-  return { super_admin: '平台超管', school_admin: '学校管理员', teacher: '教师', student: '学生' }[
-    r
-  ]
-}
-
 function openCreate() {
   editing.value = null
-  Object.assign(form, {
-    username: '',
-    password: '',
-    name: '',
-    role: 'teacher',
-    phone: '',
-    class_id: null,
-    school_id: null,
-  })
+  Object.assign(form, emptyForm())
   dialog.value = true
 }
 

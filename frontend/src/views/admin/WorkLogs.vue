@@ -82,6 +82,7 @@ import { useSort } from '../../composables/useSort'
 import { useCrudList } from '../../composables/useCrudList'
 import { workLogApi, schoolApi } from '../../api'
 import { isPlatformAdmin } from '../../utils/auth'
+import { formatDate } from '../../utils/date'
 
 const dialog = ref(false)
 const editing = ref(null)
@@ -113,17 +114,9 @@ const items = useSorted(rawItems)
 
 onMounted(load)
 
-function today() {
-  // 本地日期：toISOString() 走 UTC，清晨（UTC 与本地跨天时）会返回差一天的日期
-  const d = new Date()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${d.getFullYear()}-${m}-${day}`
-}
-
 function openCreate() {
   editing.value = null
-  Object.assign(form, { date: today(), content: '', school_id: null })
+  Object.assign(form, { date: formatDate(new Date()), content: '', school_id: null })
   if (isPlatformAdminUser) loadSchools()
   dialog.value = true
 }

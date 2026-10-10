@@ -113,7 +113,7 @@ def list_talks(page: int = 1, page_size: int = 20, student_id: int | None = None
     return classlog_service.list_talks(db, page, page_size, student_id, class_id, user)
 
 
-@router.post("/talks", response_model=TalkOut, status_code=201)
+@router.post("/talks", response_model=TalkOut)
 def create_talk(payload: TalkCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.create_talk(db, payload, user)
 
@@ -129,7 +129,7 @@ def list_return_records(page: int = 1, page_size: int = 20, student_id: int | No
     return classlog_service.list_return_records(db, page, page_size, student_id, class_id, user)
 
 
-@router.post("/return-records", response_model=ReturnRecordOut, status_code=201)
+@router.post("/return-records", response_model=ReturnRecordOut)
 def create_return_record(payload: ReturnRecordCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.create_return_record(db, payload, user)
 
@@ -152,7 +152,7 @@ def summarize_performances(student_id: int | None = None, class_id: int | None =
     return classlog_service.summarize_performances(db, student_id, class_id, ptype, user)
 
 
-@router.post("/performances", response_model=PerformanceOut, status_code=201)
+@router.post("/performances", response_model=PerformanceOut)
 def create_performance(payload: PerformanceCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     # 用请求模型做类型校验（points 非数字 → 422），再转 dict 交服务层，
     # 保持服务层 `.get(...)` 的既有取值语义不变。
@@ -176,7 +176,7 @@ def list_student_comments(page: int = 1, page_size: int = 20, student_id: int | 
     return classlog_service.list_student_comments(db, page, page_size, student_id, class_id, user)
 
 
-@router.post("/student-comments", response_model=StudentCommentOut, status_code=201)
+@router.post("/student-comments", response_model=StudentCommentOut)
 def create_student_comment(payload: dict, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.create_student_comment(db, payload, user)
 

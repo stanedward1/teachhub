@@ -36,16 +36,22 @@ watch(keyword, () => load())
 const items = ref([])
 const loading = ref(false)
 const refreshing = ref(false)
+// 竞态守卫：搜索/下拉刷新并发在途时，旧响应晚到不覆盖新数据
+let loadSeq = 0
 
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const res = await mobileApi.students({ keyword: keyword.value })
+    if (seq !== loadSeq) return
     items.value = res.items || []
   } catch (e) {
   } finally {
-    loading.value = false
-    refreshing.value = false
+    if (seq === loadSeq) {
+      loading.value = false
+      refreshing.value = false
+    }
   }
 }
 

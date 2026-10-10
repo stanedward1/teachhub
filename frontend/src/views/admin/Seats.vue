@@ -20,8 +20,8 @@
     </div>
 
     <div class="page-card" v-loading="loading">
-      <div v-if="!classId" class="empty">请先选择班级</div>
-      <div v-else-if="seats.length === 0" class="empty">该班级暂无学生</div>
+      <div v-if="!classId" class="empty-state empty-state--tall">请先选择班级</div>
+      <div v-else-if="seats.length === 0" class="empty-state empty-state--tall">该班级暂无学生</div>
       <div v-else class="seat-grid" :style="{ gridTemplateColumns: `repeat(${columns}, 1fr)` }">
         <div
           v-for="(s, i) in seats"
@@ -182,9 +182,7 @@ async function save() {
   color: #111827;
   margin-top: 4px;
 }
-.empty {
-  text-align: center;
-  color: #9ca3af;
+.empty-state--tall {
   padding: 60px 0;
 }
 </style>

@@ -27,6 +27,7 @@ from app.platform_settings import (
 )
 from app.schemas import RegistrationSetting, StudentDeviceSetting
 from app.services.auth_service import invalidate_user_sessions
+from app.services.attendance_service import ATTENDANCE_STATUS
 from app.models import (
     Assignment,
     Attendance,
@@ -145,6 +146,14 @@ def _visible_audit_class_ids(db: Session, user: User):
     if is_any_admin(user):
         return None
     return get_head_class_ids(db, user.id)
+
+
+def _visible_audit_class_ids_or_403(db: Session, user: User):
+    """取可查看审计日志的班级范围；科任老师（无任何班主任班级）直接 403。"""
+    class_ids = _visible_audit_class_ids(db, user)
+    if class_ids == []:
+        raise HTTPException(status_code=403, detail="仅班主任或管理员可查看审计日志")
+    return class_ids
 
 
 def _build_alerts(db: Session, user: User, class_ids: list, student_ids: list) -> dict:
@@ -477,10 +486,7 @@ def delete_user(db: Session, user_id: int, user: User) -> dict:
     # 不能删除自己
     if u.id == user.id:
         raise HTTPException(status_code=400, detail="不能删除当前登录账号")
-    # 注：原有一段「教师不能删除其他教师/管理员」的判断，但本函数只被
-    # `routers/admin.py` 的 `admin_dep = require_school_admin`（仅 school_admin /
-    # super_admin 可进入）调用，`user.role == "teacher"` 恒为 False（死代码，见
-    # docs/CHANGELOG.md），已于 2026-09-21 移除。教师拦截点统一在路由依赖层。
+    # 同 reset_password 注：教师拦截点在路由依赖层。
     # 平台超管可跨校删除；学校管理员仅能删除本校账号
     if not is_platform_admin(user):
         ensure_same_school(user, u.school_id)
@@ -605,11 +611,9 @@ def list_audit_log_actions(db: Session, user: User) -> dict:
     """返回所有出现过的操作类型（去重，供前端下拉框动态展示）。
 
     过滤口径与 `list_audit_logs` / `audit_log_stats` 保持一致：非平台超管仅本校，
-    班主任额外限定在本班。否则班主任能借下拉框枚举出全校（乃至全平台）的操作类型。
+    班主任额外限定在本班。否则班主任能借下拉框枚举出全校（乃至全平台）的    操作类型。
     """
-    class_ids = _visible_audit_class_ids(db, user)
-    if class_ids == []:
-        raise HTTPException(status_code=403, detail="仅班主任或管理员可查看审计日志")
+    class_ids = _visible_audit_class_ids_or_403(db, user)
     q = db.query(OperationLog.action)
     if not is_platform_admin(user):
         q = q.filter(OperationLog.school_id == user.school_id)
@@ -630,9 +634,7 @@ def audit_log_stats(db: Session, days: int = 30, user: "User | None" = None) -> 
     权限与 list_audit_logs 一致：管理员看全校，班主任看自己班级。
     """
     days = max(1, min(days, 90))
-    class_ids = _visible_audit_class_ids(db, user)
-    if class_ids == []:
-        raise HTTPException(status_code=403, detail="仅班主任或管理员可查看审计日志")
+    class_ids = _visible_audit_class_ids_or_403(db, user)
 
     since = datetime.now() - timedelta(days=days)
     # 聚合下推 SQL：改前把区间内日志全量拉回内存再计数，现按三个维度分别
@@ -687,9 +689,7 @@ def audit_log_stats(db: Session, days: int = 30, user: "User | None" = None) -> 
 def list_audit_logs(db: Session, action: str = "", keyword: str = "", date: str = "", page: int = 1, page_size: int = 20, user: "User | None" = None) -> dict:
     page, page_size = normalize_page(page, page_size)
     """查询操作审计日志。管理员看全部；班主任看自己班级；科任老师不可见。"""
-    class_ids = _visible_audit_class_ids(db, user)
-    if class_ids == []:
-        raise HTTPException(status_code=403, detail="仅班主任或管理员可查看审计日志")
+    class_ids = _visible_audit_class_ids_or_403(db, user)
     stmt = select(OperationLog)
     # 租户隔离：平台超管全局审计，其余角色仅本校
     if not is_platform_admin(user):
@@ -897,16 +897,16 @@ def dashboard(db: Session, user: User) -> dict:
             Attendance.date >= att_start,
             Attendance.date <= att_end,
         ).all()
-    att_status = {"出勤": 0, "缺勤": 0, "请假": 0, "迟到": 0}
+    att_status = dict.fromkeys(ATTENDANCE_STATUS, 0)
     att_trend_map = {}
     att_by_class_map = {}
     for r in att_records:
         if r.status in att_status:
             att_status[r.status] += 1
-        day = att_trend_map.setdefault(r.date, {"出勤": 0, "缺勤": 0, "请假": 0, "迟到": 0})
+        day = att_trend_map.setdefault(r.date, dict.fromkeys(ATTENDANCE_STATUS, 0))
         if r.status in day:
             day[r.status] += 1
-        c = att_by_class_map.setdefault(r.class_id, {"出勤": 0, "缺勤": 0, "请假": 0, "迟到": 0})
+        c = att_by_class_map.setdefault(r.class_id, dict.fromkeys(ATTENDANCE_STATUS, 0))
         if r.status in c:
             c[r.status] += 1
     att_total = sum(att_status.values())
@@ -919,7 +919,7 @@ def dashboard(db: Session, user: User) -> dict:
     att_by_class = []
     for cid in class_ids:
         cls = att_class_map.get(cid)
-        st = att_by_class_map.get(cid, {"出勤": 0, "缺勤": 0, "请假": 0, "迟到": 0})
+        st = att_by_class_map.get(cid, dict.fromkeys(ATTENDANCE_STATUS, 0))
         total_n = sum(st.values())
         att_by_class.append(
             {

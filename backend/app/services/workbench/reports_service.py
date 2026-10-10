@@ -1,5 +1,6 @@
 """班级周报业务逻辑：周数据汇总 + 周报增删查。"""
 import json
+from datetime import date, datetime, time, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -36,16 +37,23 @@ def get_weekly_data(db: Session, user, class_id: int, week_start: str = "", week
         leave_q = leave_q.filter(Leave.start_date >= week_start, Leave.start_date <= week_end)
     leaves = leave_q.all()
 
+    # created_at 是 datetime，直接 `<= 'YYYY-MM-DD'` 会被 MySQL 按 00:00:00 截断，
+    # 导致结束日当天的数据全部漏掉 —— 改用「次日 00:00」作上界开区间。
+    end_exclusive = None
+    if week_start and week_end:
+        end_date = week_end if isinstance(week_end, date) else date.fromisoformat(week_end)
+        end_exclusive = datetime.combine(end_date + timedelta(days=1), time.min)
+
     perf_q = db.query(Performance).filter(Performance.student_id.in_(student_ids))
     if week_start and week_end:
-        perf_q = perf_q.filter(Performance.created_at >= week_start, Performance.created_at <= week_end)
+        perf_q = perf_q.filter(Performance.created_at >= week_start, Performance.created_at < end_exclusive)
     performances = perf_q.all()
     positive_count = sum(1 for p in performances if p.ptype == "积极")
     negative_count = sum(1 for p in performances if p.ptype == "消极")
 
     score_q = db.query(Score).filter(Score.student_id.in_(student_ids))
     if week_start and week_end:
-        score_q = score_q.filter(Score.created_at >= week_start, Score.created_at <= week_end)
+        score_q = score_q.filter(Score.created_at >= week_start, Score.created_at < end_exclusive)
     recent_scores = score_q.all()
     score_avg = round(sum(s.score for s in recent_scores) / len(recent_scores), 1) if recent_scores else 0
 
@@ -66,10 +74,13 @@ def get_weekly_data(db: Session, user, class_id: int, week_start: str = "", week
         leave_map[l.student_id] = leave_map.get(l.student_id, 0) + 1
 
     ranked = sorted(point_map.items(), key=lambda kv: kv[1], reverse=True)
+    # bottom5 排除已进入 top5 的学生，避免学生总数 ≤ 10 时同一人两头出现；
+    # 有积分记录的学生不足 10 人时名单如实缩短。
+    top_ids = {sid for sid, _ in ranked[:5]}
     top5 = [{"name": student_map.get(sid, ""), "points": BASE_POINTS + total}
             for sid, total in ranked[:5] if student_map.get(sid)]
     bottom5 = [{"name": student_map.get(sid, ""), "points": BASE_POINTS + total}
-               for sid, total in ranked[-5:] if student_map.get(sid)]
+               for sid, total in ranked if sid not in top_ids and student_map.get(sid)][-5:]
 
     profile_summaries = []
     for s in students[:10]:

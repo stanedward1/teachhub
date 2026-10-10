@@ -24,7 +24,8 @@ export function downloadExcel(data, filename) {
   a.href = url
   a.download = filename
   a.click()
-  URL.revokeObjectURL(url)
+  // 延迟回收：部分浏览器异步读取 blob，紧随 click 立即 revoke 可能中断下载
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export { EXCEL_MIME }

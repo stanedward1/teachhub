@@ -185,6 +185,25 @@ function nextKey() {
   return `local-${localSeq}`
 }
 
+/**
+ * 消息对象工厂：4 处同构字面量收敛（历史映射 / 乐观气泡 / 成功回答 / 失败气泡）。
+ * 默认自增 _key；overrides 显式传入 _key（服务端历史 id）时不消耗本地序号，
+ * 保持既有 _key 生成顺序与数值行为不变。
+ * @param {object} [overrides] 覆盖默认值的字段（如 role/content/failed/question/_key）
+ */
+function makeMsg(overrides = {}) {
+  return {
+    _key: overrides._key ?? nextKey(),
+    role: 'user',
+    content: '',
+    refused: false,
+    truncated: false,
+    failed: false,
+    createdAt: '',
+    ...overrides,
+  }
+}
+
 function startTimer() {
   clearTimer()
   waitedSeconds.value = 0
@@ -214,15 +233,15 @@ async function loadHistory() {
     const res = await homeworkApi.companionHistory(props.assignmentId)
     if (unmounted) return
     const list = Array.isArray(res?.messages) ? res.messages : []
-    messages.value = list.map((m) => ({
-      _key: `srv-${m.id}`,
-      role: m.role,
-      content: m.content,
-      refused: !!m.refused,
-      truncated: false,
-      failed: false,
-      createdAt: m.created_at || '',
-    }))
+    messages.value = list.map((m) =>
+      makeMsg({
+        _key: `srv-${m.id}`,
+        role: m.role,
+        content: m.content,
+        refused: !!m.refused,
+        createdAt: m.created_at || '',
+      })
+    )
     await scrollToBottom()
   } catch (e) {
     // 首屏无会话不应报错：后端契约返 conversation_id=null + 空数组；
@@ -273,15 +292,7 @@ async function send(questionOverride) {
   }
 
   // 乐观展示学生气泡
-  messages.value.push({
-    _key: nextKey(),
-    role: 'user',
-    content: question,
-    refused: false,
-    truncated: false,
-    failed: false,
-    createdAt: '',
-  })
+  messages.value.push(makeMsg({ content: question }))
   failedQuestion.value = question
   draft.value = ''
   await scrollToBottom()
@@ -291,15 +302,14 @@ async function send(questionOverride) {
   try {
     const res = await homeworkApi.companionAsk(props.assignmentId, { question })
     if (unmounted) return
-    messages.value.push({
-      _key: nextKey(),
-      role: 'assistant',
-      content: res?.answer || '',
-      refused: !!res?.refused,
-      truncated: !!res?.truncated,
-      failed: false,
-      createdAt: '',
-    })
+    messages.value.push(
+      makeMsg({
+        role: 'assistant',
+        content: res?.answer || '',
+        refused: !!res?.refused,
+        truncated: !!res?.truncated,
+      })
+    )
   } catch (e) {
     if (unmounted) return
     // 失败气泡 + 重试按钮；可读原因优先取后端 detail（403/429/502/503 都给可读文案）
@@ -310,15 +320,15 @@ async function send(questionOverride) {
         : e?.code === 'ECONNABORTED'
           ? '请求超时，请重试'
           : 'AI 暂时无法回答，请稍后重试'
-    messages.value.push({
-      _key: nextKey(),
-      role: 'assistant',
-      content: reason,
-      refused: false,
-      truncated: false,
-      failed: true,
-      createdAt: '',
-    })
+    messages.value.push(
+      makeMsg({
+        role: 'assistant',
+        content: reason,
+        failed: true,
+        // 失败气泡携带原提问：多个失败气泡并存时，retry 按各自气泡重试正确的提问
+        question,
+      })
+    )
   } finally {
     clearTimer()
     if (!unmounted) {
@@ -337,7 +347,9 @@ function retry(index) {
     ElMessage.warning('今日 AI 学伴次数已用完，明天再来吧')
     return
   }
-  const question = failedQuestion.value
+  // 优先取该失败气泡自带的提问（多个失败气泡并存时不串位），
+  // 兜底走 failedQuestion（兼容旧消息对象 / 历史路径）
+  const question = messages.value[index]?.question ?? failedQuestion.value
   if (!question) return
   // 提问气泡 + 失败回答气泡一起移除，交由 send 重建，避免提问重复
   // （仅删失败回答会让 send 再 push 一条新的用户气泡，原提问留在列表里）

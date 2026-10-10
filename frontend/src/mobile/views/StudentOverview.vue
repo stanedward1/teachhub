@@ -66,7 +66,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import * as echarts from 'echarts/core'
 import { RadarChart } from 'echarts/charts'
@@ -74,11 +74,12 @@ import { TooltipComponent, RadarComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 echarts.use([RadarChart, TooltipComponent, RadarComponent, CanvasRenderer])
 import { mobileApi } from '../api/mobile'
+import { useEChart } from '../../composables/useEChart'
 
 const route = useRoute()
 const data = ref(null)
 const radarRef = ref(null)
-let chart = null
+const radar = useEChart(radarRef)
 
 async function load() {
   try {
@@ -90,8 +91,7 @@ async function load() {
 
 function renderRadar() {
   if (!radarRef.value || !data.value) return
-  if (chart) chart.dispose()
-  chart = echarts.init(radarRef.value)
+  const chart = radar.init()
   const r = data.value.radar
   chart.setOption({
     tooltip: {},
@@ -123,12 +123,6 @@ function renderRadar() {
 
 onMounted(load)
 
-onBeforeUnmount(() => {
-  if (chart) {
-    chart.dispose()
-    chart = null
-  }
-})
 </script>
 
 <style scoped>

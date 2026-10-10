@@ -90,6 +90,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { showConfirmDialog, showSuccessToast, showToast } from 'vant'
 import { leaveApi } from '../../api'
 import { mobileApi } from '../api/mobile'
+import { formatDate } from '../../utils/date'
 
 const statusTab = ref('登记')
 const items = ref([])
@@ -116,15 +117,22 @@ const dateRangeText = computed(() => {
   return ''
 })
 
+// 竞态守卫：状态 tab/下拉刷新并发在途时，旧响应晚到不覆盖新数据
+let loadSeq = 0
+
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const res = await leaveApi.list({ status: statusTab.value, page_size: 100 })
+    if (seq !== loadSeq) return
     items.value = res.items || []
   } catch (e) {
   } finally {
-    loading.value = false
-    refreshing.value = false
+    if (seq === loadSeq) {
+      loading.value = false
+      refreshing.value = false
+    }
   }
 }
 
@@ -167,17 +175,10 @@ function chooseStudent(s) {
 
 function onDateConfirm(dates) {
   if (dates && dates.length >= 2) {
-    form.start_date = fmt(dates[0])
-    form.end_date = fmt(dates[1])
+    form.start_date = formatDate(dates[0])
+    form.end_date = formatDate(dates[1])
   }
   showCalendar.value = false
-}
-
-function fmt(d) {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
 }
 
 async function submit() {

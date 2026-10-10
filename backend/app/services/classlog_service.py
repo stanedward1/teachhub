@@ -45,7 +45,7 @@ from app.permissions import (
     is_teacher_class_owner,
     apply_student_class_filter,
     apply_teacher_student_filter,
-    ensure_student_operable,
+    ensure_student_visible,
     ensure_class_operable,
     resolve_school_id_or_400,
 )
@@ -67,12 +67,10 @@ def _check_student_permission(db: Session, user: User, student_id: int) -> Stude
     """教师只能操作自己班级学生的记录；退学/毕业学生不可操作（教师与管理员均受限）。
 
     返回对应的 ``Student`` 实例，供调用方复用其字段（如 ``school_id``）。
+    薄委托：语义统一收口至 ``app.permissions.ensure_student_visible``，
+    保留本函数以免改动 10 处既有调用点。
     """
-    # 退学/毕业限制
-    student = ensure_student_operable(db, student_id)
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
-        raise HTTPException(status_code=403, detail="无权操作该学生的记录")
-    return student
+    return ensure_student_visible(db, user, student_id)
 
 
 def _check_class_permission(db: Session, user: User, class_id: int):
@@ -671,11 +669,10 @@ def delete_performance(db: Session, performance_id: int, user: User) -> dict:
 # ---------------- 学生评语 ----------------
 def suggest_student_comment(db: Session, student_id: int, user: User) -> dict:
     """基于学生已有数据（成绩/表现/考勤/积分）生成评语草稿，供教师参考编辑。"""
-    student = db.get(Student, student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="学生不存在")
-    if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
-        raise HTTPException(status_code=403, detail="无权为该学生生成评语")
+    # 无封禁校验（与原实现一致）：仅校验存在性与带班可见性
+    student = ensure_student_visible(
+        db, user, student_id, detail_403="无权为该学生生成评语", check_operable=False
+    )
 
     # 成绩
     scores = db.query(Score).filter(Score.student_id == student_id).all()

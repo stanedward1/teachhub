@@ -1,12 +1,14 @@
 <template>
   <div>
     <div class="toolbar">
+      <!-- 与 Scores.vue 同款双绑定：class-id 才是班级选择；学生 v-model 不绑
+           （本页分析以班级为单位，学生选择不参与请求参数） -->
       <StudentSelect
-        v-model="analysisClassId"
+        v-model:class-id="analysisClassId"
         show-class-filter
         placeholder="选择班级"
         style="width: 280px"
-        @update:model-value="loadAnalysis"
+        @update:class-id="loadAnalysis"
       />
       <el-select
         v-model="analysisSubject"
@@ -92,6 +94,7 @@ import { ref, watch, nextTick } from 'vue'
 import StudentSelect from '../../../components/StudentSelect.vue'
 import StateView from '../../../components/StateView.vue'
 import { scoreApi } from '../../../api'
+import { useEChart } from '../../../composables/useEChart'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
@@ -118,7 +121,8 @@ const trendDialog = ref(false)
 const trendName = ref('')
 const trendData = ref([])
 const trendChartRef = ref(null)
-let trendChart = null
+// 原实现即无卸载清理（趋势弹窗关闭/组件卸载均不 dispose），保持原样关闭自动清理
+const trendChart = useEChart(trendChartRef, { disposeOnUnmount: false })
 
 // 由父组件页签切换驱动（原为父组件的 onTabChange）
 watch(
@@ -170,11 +174,7 @@ async function viewTrend(row) {
 
 function renderTrendChart() {
   if (!trendChartRef.value || !trendData.value.length) return
-  if (trendChart) {
-    trendChart.dispose()
-    trendChart = null
-  }
-  trendChart = echarts.init(trendChartRef.value)
+  const chart = trendChart.init()
   // 按科目分组，绘制多条折线（含班级均分对比虚线）
   const bySubject = {}
   for (const t of trendData.value) {
@@ -212,7 +212,7 @@ function renderTrendChart() {
   // 横轴取第一个科目的时间轴（各科目考试时间可能不同，这里简化）
   const firstKey = Object.keys(bySubject)[0]
   const xData = firstKey ? bySubject[firstKey].dates : []
-  trendChart.setOption({
+  chart.setOption({
     tooltip: { trigger: 'axis' },
     legend: { data: legendData, bottom: 0, textStyle: { color: '#6b7280', fontSize: 12 } },
     grid: { left: 40, right: 24, top: 30, bottom: 60 },
