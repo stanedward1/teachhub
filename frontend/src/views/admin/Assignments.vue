@@ -28,7 +28,7 @@
           <el-table-column prop="class_name" label="下发班级" width="150" />
           <el-table-column prop="deadline" label="截止时间" width="170" />
           <el-table-column prop="submission_count" label="提交数" width="90" />
-          <el-table-column label="操作" width="400" fixed="right">
+          <el-table-column label="操作" width="470" fixed="right">
             <template #default="{ row }">
               <el-button
                 link
@@ -39,6 +39,7 @@
               <el-button link type="primary" :loading="aiGradingId === row.id" @click="aiGrade(row)"
                 >AI 批改</el-button
               >
+              <el-button link type="primary" @click="openDistribution(row)">分数段</el-button>
               <el-button link type="warning" @click="openUnsubmitted(row)">未交名单</el-button>
               <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
               <el-button link type="danger" @click="remove(row)">删除</el-button>
@@ -185,6 +186,13 @@
         <el-button type="primary" @click="progressDialog = false">后台运行</el-button>
       </template>
     </el-dialog>
+
+    <!-- 分数段分布：列表页每行入口，与审阅页共用同一公共组件 -->
+    <ScoreDistributionDialog
+      v-model="distOpen"
+      :assignment-id="distRowId"
+      :assignment-title="distTitle"
+    />
   </div>
 </template>
 
@@ -194,6 +202,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
 import StateView from '../../components/StateView.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
+import ScoreDistributionDialog from '../../components/ScoreDistributionDialog.vue'
 import { homeworkApi, studentApi, uploadFile } from '../../api'
 
 const items = ref([])
@@ -474,6 +483,17 @@ async function openUnsubmitted(row) {
   } finally {
     unsubmittedLoading.value = false
   }
+}
+
+// 分数段分布弹窗（列表页每行入口，与审阅页共用公共组件 ScoreDistributionDialog）
+const distOpen = ref(false)
+const distRowId = ref(null)
+const distTitle = ref('')
+
+function openDistribution(row) {
+  distRowId.value = row.id
+  distTitle.value = row.title
+  distOpen.value = true
 }
 
 async function remove(row) {

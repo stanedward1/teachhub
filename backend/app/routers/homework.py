@@ -83,6 +83,16 @@ def unsubmitted_students(
     return homework_service.unsubmitted_students(db, assignment_id, user)
 
 
+@router.get("/assignments/{assignment_id}/score-distribution")
+def score_distribution(
+    assignment_id: int,
+    user=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """分数段分布：各分数段人数 + 已评分学生（含有效分）+ 未交学生单列（教师/管理员可用）。"""
+    return homework_service.score_distribution(db, assignment_id, user)
+
+
 @router.post("/assignments/{assignment_id}/ai-grade")
 def ai_grade_assignment(
     assignment_id: int,

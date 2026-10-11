@@ -4,7 +4,11 @@
       :content="assignment?.title || '提交审阅'"
       @back="$router.back()"
       style="margin-bottom: 16px"
-    />
+    >
+      <template #extra>
+        <el-button @click="openScoreDistribution">分数段分布</el-button>
+      </template>
+    </el-page-header>
 
     <!-- 任务正文（Markdown 渲染） -->
     <div class="page-card" v-if="assignment?.content">
@@ -126,6 +130,13 @@
 
     <!-- 学伴会话（教师只读，设计 §14.6）：与学生侧组件完全分离，无任何写入口 -->
     <CompanionConversationPanel v-model="companionOpen" :conversation-id="activeConversationId" />
+
+    <!-- 分数段分布：与任务列表页共用公共组件（五段筛选 + 双评分 + 未评分 + 未交单列） -->
+    <ScoreDistributionDialog
+      v-model="distributionOpen"
+      :assignment-id="route.params.id"
+      :assignment-title="assignment?.title || ''"
+    />
   </div>
 </template>
 
@@ -137,6 +148,7 @@ import Markdown from '../../components/Markdown.vue'
 import StateView from '../../components/StateView.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
 import CompanionConversationPanel from '../../components/CompanionConversationPanel.vue'
+import ScoreDistributionDialog from '../../components/ScoreDistributionDialog.vue'
 import { useCrudList } from '../../composables/useCrudList'
 import { homeworkApi } from '../../api'
 import { getUser } from '../../utils/auth'
@@ -158,6 +170,14 @@ const companionMap = ref({})
 const canViewCompanion = getUser()?.role === 'teacher'
 const companionOpen = ref(false)
 const activeConversationId = ref(null)
+
+// 分数段分布：弹窗显隐。数据加载与分类筛选（五段 / 未评分 / 未交）+ 双评分明细
+// 全部内聚在公共组件 ScoreDistributionDialog 中，与本页「提交审阅」职责解耦。
+const distributionOpen = ref(false)
+
+function openScoreDistribution() {
+  distributionOpen.value = true
+}
 
 // 作业提交审阅：单个作业的「作业详情 + 全部提交」一次取回。useCrudList 会把
 // page / page_size 传进 wrapper（P1-3 分页），透传给后端列表接口即可。

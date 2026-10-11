@@ -47,6 +47,9 @@ export const homeworkApi = {
     request.get(`/api/homework/assignments/${id}/submissions`, { params }),
   // 未交名单：该作业下发班级中尚未提交的学生
   unsubmitted: (id) => request.get(`/api/homework/assignments/${id}/unsubmitted`),
+  // 分数段分布：各分数段人数 + 已评分学生（含有效分）+ 未交学生单列
+  scoreDistribution: (id) =>
+    request.get(`/api/homework/assignments/${id}/score-distribution`),
   submissionDetail: (id) => request.get(`/api/homework/submissions/${id}`),
   // AI 批改（教师手动触发）：整份作业批量批改 / 单份提交批改
   aiGradeAssignment: (id) => request.post(`/api/homework/assignments/${id}/ai-grade`),

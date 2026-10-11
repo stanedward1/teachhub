@@ -10,8 +10,8 @@ class WorkLog(Base):
     __tablename__ = "work_logs"
 
     id = Column(Integer, primary_key=True)
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    teacher_id = Column(Integer, ForeignKey("users.id", name="fk_work_logs_teacher_id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_work_logs_school_id"), nullable=True, index=True)
     date = Column(Date)
     content = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
@@ -24,8 +24,8 @@ class ClassPlan(Base):
     __tablename__ = "class_plans"
 
     id = Column(Integer, primary_key=True)
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    teacher_id = Column(Integer, ForeignKey("users.id", name="fk_class_plans_teacher_id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_class_plans_school_id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     plan_type = Column(String(20), default="计划")  # 计划 / 总结
     content = Column(Text)
@@ -38,8 +38,8 @@ class TeacherPlan(Base):
     __tablename__ = "teacher_plans"
 
     id = Column(Integer, primary_key=True)
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    teacher_id = Column(Integer, ForeignKey("users.id", name="fk_teacher_plans_teacher_id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_teacher_plans_school_id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     plan_type = Column(String(20), default="计划")
     content = Column(Text)
@@ -52,8 +52,8 @@ class Schedule(Base):
     __tablename__ = "schedules"
 
     id = Column(Integer, primary_key=True)
-    class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    class_id = Column(Integer, ForeignKey("classrooms.id", name="fk_schedules_class_id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_schedules_school_id"), nullable=True, index=True)
     day_of_week = Column(Integer, nullable=False)  # 1-5
     period = Column(Integer, nullable=False)  # 第几节 1-8
     subject = Column(String(50))
@@ -67,8 +67,8 @@ class Activity(Base):
     __tablename__ = "activities"
 
     id = Column(Integer, primary_key=True)
-    class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    class_id = Column(Integer, ForeignKey("classrooms.id", name="fk_activities_class_id"), nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_activities_school_id"), nullable=True, index=True)
     title = Column(String(200), nullable=False)
     content = Column(Text)
     filepath = Column(Text)  # 多张配图路径，JSON 数组字符串（兼容旧单值字符串）
@@ -81,9 +81,9 @@ class Talk(Base):
     __tablename__ = "talks"
 
     id = Column(Integer, primary_key=True)
-    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE", name="fk_talks_student_id"), nullable=False, index=True)
+    teacher_id = Column(Integer, ForeignKey("users.id", name="fk_talks_teacher_id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_talks_school_id"), nullable=True, index=True)
     content = Column(Text)
     images = Column(Text)  # 多张配图路径，JSON 数组字符串
     created_at = Column(DateTime, server_default=func.now())
@@ -95,8 +95,8 @@ class ReturnRecord(Base):
     __tablename__ = "return_records"
 
     id = Column(Integer, primary_key=True)
-    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE", name="fk_return_records_student_id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_return_records_school_id"), nullable=True, index=True)
     return_date = Column(Date)
     reason = Column(String(255))
     note = Column(Text)
@@ -109,8 +109,8 @@ class Performance(Base):
     __tablename__ = "performances"
 
     id = Column(Integer, primary_key=True)
-    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE", name="fk_performances_student_id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_performances_school_id"), nullable=True, index=True)
     ptype = Column(String(20), default="积极")  # 积极 / 消极
     points = Column(Integer, default=1)  # 分值：正数加分、负数减分，默认 积极+1/消极-1
     content = Column(Text)
@@ -124,8 +124,8 @@ class StudentComment(Base):
     __tablename__ = "student_comments"
 
     id = Column(Integer, primary_key=True)
-    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE", name="fk_student_comments_student_id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_student_comments_school_id"), nullable=True, index=True)
     content = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())

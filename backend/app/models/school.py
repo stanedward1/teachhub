@@ -13,7 +13,7 @@ class School(Base):
     address = Column(String(255))
     phone = Column(String(20))
     status = Column(String(20), nullable=False, default="active", server_default="active")  # active / disabled
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)  # 平台超管创建人
+    created_by = Column(Integer, ForeignKey("users.id", name="fk_schools_created_by"), nullable=True)  # 平台超管创建人
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -26,12 +26,12 @@ class Classroom(Base):
     )
 
     id = Column(Integer, primary_key=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_classrooms_school_id"), index=True)
     name = Column(String(100), nullable=False)
     code = Column(String(50), nullable=False)
     major = Column(String(100))
     grade = Column(String(50))
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)  # 班主任
+    teacher_id = Column(Integer, ForeignKey("users.id", name="fk_classrooms_teacher_id"), nullable=True, index=True)  # 班主任
     is_graduated = Column(Boolean, nullable=False, default=False, server_default="0")  # 是否毕业
     created_at = Column(DateTime, server_default=func.now())
 
@@ -45,8 +45,8 @@ class ClassTeacher(Base):
     )
 
     id = Column(Integer, primary_key=True)
-    class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False, index=True)
-    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    class_id = Column(Integer, ForeignKey("classrooms.id", name="fk_class_teachers_class_id"), nullable=False, index=True)
+    teacher_id = Column(Integer, ForeignKey("users.id", name="fk_class_teachers_teacher_id"), nullable=False, index=True)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -59,8 +59,8 @@ class Student(Base):
     )
 
     id = Column(Integer, primary_key=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
-    class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=True, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_students_school_id"), nullable=True, index=True)
+    class_id = Column(Integer, ForeignKey("classrooms.id", name="fk_students_class_id"), nullable=True, index=True)
     name = Column(String(50), nullable=False)
     gender = Column(String(10), default="男")
     birth_date = Column(Date)

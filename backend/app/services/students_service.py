@@ -15,7 +15,20 @@ from sqlalchemy.orm import Session
 
 from app.audit import audit, batch_student_avatar_map, batch_user_map
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
-from app.models import Classroom, ClassTeacher, School, Student, StudentBoardHistory, User
+from app.models import (
+    Activity,
+    Assignment,
+    Attendance,
+    Classroom,
+    ClassTeacher,
+    Schedule,
+    School,
+    Seat,
+    Student,
+    StudentBoardHistory,
+    User,
+    WeeklyReport,
+)
 from app.pagination import paginate
 from app.permissions import (
     ensure_class_operable,
@@ -321,12 +334,38 @@ def update_classroom(db: Session, user: User, class_id: int, payload: dict) -> d
 
 
 def delete_classroom(db: Session, user: User, class_id: int) -> dict:
-    """删除班级（仅管理员）。"""
+    """删除班级（仅管理员）。
+
+    🔴 外键守卫：`classrooms.id` 被 9 张子表以 `ON DELETE RESTRICT` 引用（students /
+    assignments / attendance / weekly_reports / schedules / seats / class_teachers /
+    activities），若班级下仍有业务数据，直接 `db.delete` 会撞外键报 500。这里与
+    `delete_school` 的「有班级则拒绝」口径对齐：有子数据 ⇒ 400 拒绝，引导先迁移或停用。
+    `users.class_id` 是「班主任身份」冗余字段，删班时**解绑**（置 NULL）而非拒绝，
+    否则被设过班主任的班级永远删不掉（与 `_sync_head_teacher_class` 的卸任清空一致）。
+    """
     if not is_any_admin(user):
         raise HTTPException(status_code=403, detail="只有管理员可以删除班级")
     c = db.get(Classroom, class_id)
     if not c:
         raise HTTPException(status_code=404, detail="记录不存在")
+    # 外键 RESTRICT 子表守卫：任一有数据即拒绝删除（对齐 delete_school 的防孤儿口径）
+    _blocking_children = (
+        (Student, Student.class_id, "学生"),
+        (Assignment, Assignment.class_id, "作业"),
+        (Attendance, Attendance.class_id, "考勤"),
+        (WeeklyReport, WeeklyReport.class_id, "周报"),
+        (Schedule, Schedule.class_id, "课表"),
+        (Seat, Seat.class_id, "座位"),
+        (ClassTeacher, ClassTeacher.class_id, "科任老师"),
+        (Activity, Activity.class_id, "活动"),
+    )
+    for model, col, label in _blocking_children:
+        if db.query(model).filter(col == c.id).limit(1).first():
+            raise HTTPException(
+                status_code=400, detail=f"该班级下仍有{label}数据，请先迁移或停用而非删除"
+            )
+    # 解除班主任身份冗余（users.class_id 指向本班的账号置 NULL），避免删班被卡住
+    db.query(User).filter(User.class_id == c.id).update({User.class_id: None})
     db.delete(c)
     audit(db, user, "delete_classroom", target=f"班级#{class_id}")
     db.commit()

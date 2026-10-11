@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint, event
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, ForeignKeyConstraint, Integer, String, UniqueConstraint, event
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -42,6 +42,12 @@ class User(Base):
     # 应用层的「先查后插」只作为友好提示，不再承担唯一性保证（存在并发竞态）。
     __table_args__ = (
         UniqueConstraint("username_scope", "username", name="uq_user_scope_username"),
+        # class_id 外键带显式 onupdate=RESTRICT（与 DB 既有约束 fk_users_class_id 逐字节
+        # 对齐）；Column(ForeignKey) 无法表达 onupdate，故用 ForeignKeyConstraint 声明。
+        ForeignKeyConstraint(
+            ["class_id"], ["classrooms.id"],
+            name="fk_users_class_id", ondelete="RESTRICT", onupdate="RESTRICT",
+        ),
     )
 
     id = Column(Integer, primary_key=True)
@@ -57,15 +63,15 @@ class User(Base):
     role = Column(String(20), nullable=False, default="student", index=True)
     avatar = Column(String(255))
     phone = Column(String(20))
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)  # 租户归属，super_admin 为 NULL
-    class_id = Column(Integer, ForeignKey("classrooms.id"), nullable=True, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_users_school_id"), nullable=True, index=True)  # 租户归属，super_admin 为 NULL
+    class_id = Column(Integer, nullable=True, index=True)
     # 学生档案的**硬外键**：把「登录账号」与「学生档案(students)」绑定为可唯一定位的关系，
     # 取代此前 (class_id, name) 的软匹配（同班同名会命中错人、改名即失配）。
     # 可空：非学生角色恒为 NULL；学生账号在档案未建/迁移期歧义冲突时也暂空（回落软匹配）。
     # ondelete=SET NULL：档案被删不应连带删账号（账号还挂登录历史/审计）。
     student_id = Column(
         Integer,
-        ForeignKey("students.id", ondelete="SET NULL"),
+        ForeignKey("students.id", ondelete="SET NULL", name="fk_users_student_id"),
         nullable=True,
         index=True,
     )

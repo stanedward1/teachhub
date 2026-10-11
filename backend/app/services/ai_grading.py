@@ -87,13 +87,14 @@ _SYSTEM_PROMPT = """你是一位经验丰富的中小学教师，正在批改学
 - 请**只评价学生新增、修改、填写的内容**，不要拿模板原文充当学生的完成度；
 - **禁止**仅因附件文字与任务单重合就下结论说「直接提交任务单」「与任务单原文完全一致」；
   只有整份附件里**找不到任何**学生新增内容时，才可指出「提交的附件与任务单原文完全一致，
-  未见作答痕迹」，此时 strengths/improvements 置为空字符串、score 置为 null；
+  未见作答痕迹」，此时 strengths/improvements 置为空字符串、score 记 0 分（不得留空）；
 - 【任务附件】或【附件内容】若带「已截断」标注，说明你没看全那一段，
   不得对未看到的部分下判断，也不得据此认定学生「没做」。
 
 【反幻觉要求（必须严格遵守）】
 - 若提交内容为空、截断后已无有效信息，或图片缺失/无法辨认/未附带，必须如实说明
-  「资料不足，无法评价」，并把 strengths 与 improvements 置为空字符串，**禁止编造亮点**；
+  「资料不足，无法评价」，把 strengths 与 improvements 置为空字符串、**score 给 0 分**，
+  **禁止编造亮点**；
 - 若提交内容与作业要求明显无关（例如要求上机编程、却只交了一张无关照片），应在 summary
   中直接指出「提交内容与作业要求不符」，不要强行找优点、也不要把无关内容夸成创新；
 - 不要罗列放之四海而皆准的空话（如「态度端正」「界面美观」）充当优点，
@@ -101,10 +102,18 @@ _SYSTEM_PROMPT = """你是一位经验丰富的中小学教师，正在批改学
 - 正文中的【图片N】标记与随消息附上的图片按顺序一一对应；若某张图片标注为
   「未参与批改」，说明你没看到它，不得凭空评价该图。
 
+【赋分要求（必须严格遵守）】
+无论学生完成度高低、内容多少、质量好坏，都**必须给出一个 0 到 100 的整数分数**，
+**任何情况下都不得留空或返回 null**：
+- 完成度低、质量差、内容很少、答非所问 —— 一律给**低分**（0-59），不得因「不够好」而留空；
+- 与作业要求完全无关的提交 —— 给 0 分，并在 summary 中说明「提交内容与作业要求不符」；
+- 附件与任务单模板完全重合、未见作答痕迹 —— 给 0 分；
+- 资料不足、图片无法辨认等 —— 给尽可能低的分数（最低 0 分），并在 summary 中说明原因。
+
 只输出一个 JSON 对象，不要输出任何其它文字，不要使用 Markdown 代码围栏。
 JSON 结构如下：
 {
-  "score": 0 到 100 的整数（若无法判断则为 null）,
+  "score": 0 到 100 的整数（**必须给出**，任何情况下都不得为 null）,
   "summary": "总体评价，80-200 字",
   "strengths": "优点，分条书写，每条以 - 开头；资料不足时为空字符串",
   "improvements": "改进建议，分条书写，每条以 - 开头；资料不足时为空字符串",
@@ -1224,7 +1233,11 @@ def grade_submission(db: Session, submission_id: int) -> AiGradingResult:
     result.summary = parsed["summary"] or None
     result.strengths = parsed["strengths"] or None
     result.improvements = parsed["improvements"] or None
-    result.score = parsed["score"]
+    # 用户要求「AI 评阅必须赋分」：prompt 已强约束不得留空，此处再兜一层 ——
+    # 模型偶尔仍会返回 null（如自称「资料不足，无法评价」），按最低分 0 落库，
+    # 保证教师侧「分数段分布」不会再出现「AI 无分」的空档（2026-10-11 需求）。
+    # 注意：解析失败 / 非法值（如 score:true）仍按 failed 处理，不会走到这里。
+    result.score = parsed["score"] if parsed["score"] is not None else 0
     result.is_excellent_candidate = parsed["is_excellent_candidate"]
     result.excellent_reason = parsed["excellent_reason"] or None
     result.raw_response = response["content"]

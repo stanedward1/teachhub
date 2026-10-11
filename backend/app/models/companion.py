@@ -58,17 +58,17 @@ class AiCompanionConversation(Base):
     )
 
     id = Column(Integer, primary_key=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_ai_companion_conversations_school_id"), nullable=True, index=True)
     # 指向 students.id（学生档案），与 submissions/scores 等业务表的 student_id 语义一致
     student_id = Column(
         Integer,
-        ForeignKey("students.id", ondelete="CASCADE"),
+        ForeignKey("students.id", ondelete="CASCADE", name="fk_ai_companion_conversations_student_id"),
         nullable=False,
         index=True,
     )
     assignment_id = Column(
         Integer,
-        ForeignKey("assignments.id", ondelete="CASCADE"),
+        ForeignKey("assignments.id", ondelete="CASCADE", name="fk_ai_companion_conversations_assignment_id"),
         nullable=False,
         index=True,
     )
@@ -89,12 +89,12 @@ class AiCompanionMessage(Base):
     id = Column(Integer, primary_key=True)
     conversation_id = Column(
         Integer,
-        ForeignKey("ai_companion_conversations.id", ondelete="CASCADE"),
+        ForeignKey("ai_companion_conversations.id", ondelete="CASCADE", name="fk_ai_companion_messages_conversation_id"),
         nullable=False,
         index=True,
     )
     # 冗余的租户字段：使「查消息」直接受 ORM 租户过滤，无需 join 父会话
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_ai_companion_messages_school_id"), nullable=True, index=True)
     # 'user' | 'assistant'，与 OpenAI 协议对齐，可直接映射为 messages
     role = Column(String(16), nullable=False)
     content = Column(Text, nullable=False)
@@ -180,12 +180,12 @@ class AiCompanionUsageDailyStudent(Base):
     # 指向 students.id（学生档案），与 ai_companion_conversations.student_id 同语义
     student_id = Column(
         Integer,
-        ForeignKey("students.id", ondelete="CASCADE"),
+        ForeignKey("students.id", ondelete="CASCADE", name="fk_ai_companion_usage_daily_student_student_id"),
         nullable=False,
         index=True,
     )
     # 租户归属：写入时必须显式赋值（见类 docstring，勿依赖 before_flush 回填）
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_ai_companion_usage_daily_student_school_id"), nullable=True, index=True)
     # 当日已预留（≈ 已发生）的该生学伴外呼次数
     call_count = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, server_default=func.now())
@@ -232,7 +232,7 @@ class AiUsageDailyCompanionSchool(Base):
     # 业务日（由数据库时钟决定）；唯一约束保证「一天一校一行」，也是并发首次创建的兜底
     day = Column(Date, nullable=False)
     # 租户归属：写入时必须显式赋值（见类 docstring，勿依赖 before_flush 回填）
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_ai_usage_daily_companion_school_school_id"), nullable=False, index=True)
     # 当日已预留（≈ 已发生）的该校学伴外呼次数
     call_count = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, server_default=func.now())

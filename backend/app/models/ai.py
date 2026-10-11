@@ -41,7 +41,7 @@ class AiCredential(Base):
     # 是否允许图片类附件按多模态（base64 data URL）送入，由超管按所配模型能力决定
     vision_enabled = Column(Boolean, nullable=False, default=False)
     enabled = Column(Boolean, nullable=False, default=True)
-    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    updated_by = Column(Integer, ForeignKey("users.id", name="fk_ai_credentials_updated_by"), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -58,11 +58,11 @@ class AiGradingResult(Base):
     id = Column(Integer, primary_key=True)
     submission_id = Column(
         Integer,
-        ForeignKey("submissions.id", ondelete="CASCADE"),
+        ForeignKey("submissions.id", ondelete="CASCADE", name="fk_ai_grading_results_submission_id"),
         nullable=False,
         unique=True,
     )
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=True, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_ai_grading_results_school_id"), nullable=True, index=True)
     # 取值见上方 STATUS_PENDING / STATUS_SUCCESS / STATUS_FAILED 常量
     status = Column(String(20), nullable=False, default=STATUS_PENDING, index=True)
     provider = Column(String(50))
@@ -154,7 +154,7 @@ class AiUsageDailySchool(Base):
     # 业务日（由数据库时钟决定）；唯一约束保证「一天一校一行」，也是并发首次创建的兜底
     day = Column(Date, nullable=False)
     # 租户归属：写入时必须显式赋值（见类 docstring，勿依赖 before_flush 回填）
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", name="fk_ai_usage_daily_school_school_id"), nullable=False, index=True)
     # 当日已预留（≈ 已发生）的该校批改外呼次数
     call_count = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, server_default=func.now())

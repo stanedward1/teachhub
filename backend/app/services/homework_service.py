@@ -681,6 +681,183 @@ def unsubmitted_students(db: Session, assignment_id: int, user: User) -> dict:
     }
 
 
+def score_distribution(db: Session, assignment_id: int, user: User) -> dict:
+    """作业任务的分数段分布（教师端「看分数段的人员」）。
+
+    分数口径（用户拍板）：
+    - **教师点评分**（``SubmissionComment.score``，取该提交最新一条非空 score）；
+    - **AI 批改分**（``AiGradingResult.score``，**仅 status=success 且有分**）；
+    - 有效分（用于归段）= 教师分优先，无则 AI 分；两者皆无 = 已提交但「未评分」。
+
+    双评分并列（2026-10-11 契约扩展）：三类明细的每条记录都带
+    ``teacher_score`` / ``ai_score``（``int|None``，**缺失用 None 而非 0**），
+    前端据此决定「教师评分 / AI 评分」两列各自是否展示；``score``/``segment``
+    为兼容旧消费方保留。
+
+    分段（固定五段）：90-100 优秀 / 80-89 良好 / 70-79 中等 / 60-69 及格 / 0-59 不及格。
+
+    未交学生单列：作业下发班级中在籍（``is_dropped_out=False``）但无 Submission 记录者。
+
+    口径自洽（可用于断言）：``total = submitted_count + unsubmitted_count``；
+    ``submitted_count = scored_count + unscored_count``；``scored_count = Σ segments[i].count``。
+
+    Returns:
+        ``{ assignment_id, assignment_title, total, submitted_count,
+           scored_count, unscored_count, unsubmitted_count, segments: [...],
+           scored_students: [...], unscored_students: [...], unsubmitted: [...] }``
+    """
+    a = db.get(Assignment, assignment_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    _check_teacher_assignment_access(db, user, a)
+
+    # 在籍学生（作业下发班级，排除退学）
+    students = (
+        db.query(Student)
+        .filter(Student.class_id == a.class_id, Student.is_dropped_out.is_(False))
+        .order_by(Student.student_no)
+        .all()
+    )
+    student_ids = {s.id for s in students}
+
+    # 该作业全部提交（student_id -> submission_id）
+    subs = (
+        db.query(Submission.id, Submission.student_id)
+        .filter(Submission.assignment_id == assignment_id)
+        .all()
+    )
+    sub_by_student = {sid: sub_id for sub_id, sid in subs}
+
+    # 教师点评分（最新一条非空 score，按提交维度聚合）
+    teacher_scores: dict[int, int] = {}
+    if sub_by_student:
+        comment_rows = (
+            db.query(SubmissionComment.submission_id, SubmissionComment.score)
+            .filter(
+                SubmissionComment.submission_id.in_(sub_by_student.values()),
+                SubmissionComment.score.isnot(None),
+            )
+            .order_by(SubmissionComment.submission_id, SubmissionComment.id.desc())
+            .all()
+        )
+        for sub_id, score in comment_rows:
+            teacher_scores.setdefault(sub_id, score)  # 降序遍历，首次即最新
+
+    # AI 批改分（submission_id -> score）
+    # 🔴 只有 status=success 且 score 非空才算「有效 AI 分」：pending（批改中）/ failed
+    # （失败，error 里可能有中间分）都不得当作成绩参与分段与展示（2026-10-11 契约修复）。
+    ai_scores: dict[int, int] = {}
+    if sub_by_student:
+        ai_rows = (
+            db.query(AiGradingResult.submission_id, AiGradingResult.score)
+            .execution_options(skip_tenant_filter=True)
+            .filter(
+                AiGradingResult.submission_id.in_(sub_by_student.values()),
+                AiGradingResult.status == STATUS_SUCCESS,
+                AiGradingResult.score.isnot(None),
+            )
+            .all()
+        )
+        ai_scores = {sub_id: score for sub_id, score in ai_rows}
+
+    def segment_of(score: int) -> int:
+        if score >= 90:
+            return 0
+        if score >= 80:
+            return 1
+        if score >= 70:
+            return 2
+        if score >= 60:
+            return 3
+        return 4
+
+    SEGMENTS = [
+        {"key": "excellent", "label": "90-100", "name": "优秀", "min": 90, "max": 100},
+        {"key": "good", "label": "80-89", "name": "良好", "min": 80, "max": 89},
+        {"key": "medium", "label": "70-79", "name": "中等", "min": 70, "max": 79},
+        {"key": "pass", "label": "60-69", "name": "及格", "min": 60, "max": 69},
+        {"key": "fail", "label": "0-59", "name": "不及格", "min": 0, "max": 59},
+    ]
+    seg_counts = [0, 0, 0, 0, 0]
+    scored_students = []
+    unscored_students = []
+    unsubmitted = []
+
+    for s in students:
+        sub_id = sub_by_student.get(s.id)
+        if sub_id is None:
+            unsubmitted.append(
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "student_no": s.student_no,
+                    # 未交学生无提交记录，submission_id 恒为 None（前端据此禁用「查看完成情况」跳转）
+                    "submission_id": None,
+                    "teacher_score": None,
+                    "ai_score": None,
+                }
+            )
+            continue
+        # 双评分来源各自独立取出（缺失为 None，前端据此决定该列是否展示）
+        teacher_score = teacher_scores.get(sub_id)
+        ai_score = ai_scores.get(sub_id)
+        # 有效分口径：教师点评分优先，无则 AI 分（两者皆无 = 已提交未评分）
+        score = teacher_score if teacher_score is not None else ai_score
+        if score is None:
+            unscored_students.append(
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "student_no": s.student_no,
+                    # 已提交 ⇒ 有提交记录，供前端「点姓名跳转该生完成情况」
+                    "submission_id": sub_id,
+                    "teacher_score": None,
+                    "ai_score": None,
+                }
+            )
+            continue
+        idx = segment_of(score)
+        seg_counts[idx] += 1
+        scored_students.append(
+            {
+                "id": s.id,
+                "name": s.name,
+                "student_no": s.student_no,
+                # 已提交 ⇒ 有提交记录，供前端「点姓名跳转该生完成情况」
+                "submission_id": sub_id,
+                # score/segment/segment_label 为兼容旧消费方（柱状图/分段标记）保留
+                "score": score,
+                "segment": idx,
+                "segment_label": SEGMENTS[idx]["label"],
+                # 双评分并列展示：来源分别为教师点评分 / AI 批改分（success）
+                "teacher_score": teacher_score,
+                "ai_score": ai_score,
+            }
+        )
+
+    segments = [
+        {
+            **seg,
+            "count": seg_counts[i],
+        }
+        for i, seg in enumerate(SEGMENTS)
+    ]
+
+    return {
+        "assignment_id": a.id,
+        "assignment_title": a.title,
+        "total": len(students),
+        "submitted_count": len(student_ids & set(sub_by_student)),
+        "scored_count": len(scored_students),
+        "unscored_count": len(unscored_students),
+        "unsubmitted_count": len(unsubmitted),
+        "segments": segments,
+        "scored_students": scored_students,
+        "unscored_students": unscored_students,
+        "unsubmitted": unsubmitted,
+    }
+
+
 def get_submission(db: Session, submission_id: int, user: User) -> dict:
     """获取提交详情（含完整内容 + 教师点评列表）。"""
     s = db.get(Submission, submission_id)
