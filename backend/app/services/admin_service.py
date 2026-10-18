@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import audit
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
+from app.constants import SCORE_BANDS
 from app.permissions import (
     ensure_same_school,
     get_head_class_ids,
@@ -51,26 +52,24 @@ from app.security import hash_password, validate_password_strength
 from app.utils import gen_student_no, to_dict, normalize_page
 from app.pagination import paginate
 
-# 成绩分布分段定义：(标签, 下界, 上界)，上界 None 表示无上界
-_SCORE_BANDS = [
-    ("优秀(90+)", 90, None),
-    ("良好(75-89)", 75, 90),
-    ("中等(60-74)", 60, 75),
-    ("待提高(<60)", None, 60),
-]
-
 def _score_distribution(values) -> dict:
-    """按固定分段统计成绩分布，返回 {标签: {count, percent}}。"""
+    """按全站统一分段统计成绩分布，返回 ``{展示标签: {count, percent}}``。
+
+    分段口径唯一真源见 ``app.constants.SCORE_BANDS``（五段、良好线 80），与作业
+    「分数段分布」、学情评语档位共用——**不要在此另设阈值**（历史三套口径冲突见
+    `docs/REVIEW-2026-10-17-simplicity.md` S-01）。
+
+    展示标签形如 ``优秀(90-100)``：前端看板 `Dashboard.vue` 以 `Object.entries`
+    遍历本字典直接作图表项名，故标签由后端决定、前端零硬编码。
+    """
     total = len(values) or 1
     dist = {}
-    for label, lo, hi in _SCORE_BANDS:
-        if lo is None:
-            cnt = sum(1 for x in values if x < hi)
-        elif hi is None:
-            cnt = sum(1 for x in values if x >= lo)
-        else:
-            cnt = sum(1 for x in values if lo <= x < hi)
-        dist[label] = {"count": cnt, "percent": round(cnt / total * 100, 1)}
+    for band in SCORE_BANDS:
+        cnt = sum(1 for x in values if band["min"] <= x <= band["max"])
+        dist[f"{band['name']}({band['label']})"] = {
+            "count": cnt,
+            "percent": round(cnt / total * 100, 1),
+        }
     return dist
 
 
@@ -837,9 +836,9 @@ def dashboard(db: Session, user: User) -> dict:
         exam_groups.setdefault(en, []).append(s.score)
     score_dist_by_exam = {}
     for en, scs in sorted(exam_groups.items()):
-        d = _score_distribution(scs)
-        d["total"] = len(scs)
-        score_dist_by_exam[en] = d
+        # 不要把 total 塞进分布字典：前端 `Dashboard.vue` 用 `Object.entries(dist)`
+        # 直接生成饼图项，多出的 total 键会渲染成一个 0 值无名扇区（既有缺陷，本轮移除）。
+        score_dist_by_exam[en] = _score_distribution(scs)
     # 兼容旧前端：总体分布
     scores = [s.score for s in score_rows]
     dist = _score_distribution(scores)

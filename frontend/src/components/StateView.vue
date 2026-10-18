@@ -15,9 +15,9 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import SkeletonTable from './SkeletonTable.vue'
-import ErrorState from './ErrorState.vue'
-import EmptyState from './EmptyState.vue'
+import SkeletonTable from './state/SkeletonTable.vue'
+import ErrorState from './state/ErrorState.vue'
+import EmptyState from './state/EmptyState.vue'
 
 /**
  * StateView — 列表「加载 / 错误 / 空 / 正常」四态统一接入层。
@@ -25,6 +25,10 @@ import EmptyState from './EmptyState.vue'
  * 把 `SkeletonTable` + `ErrorState` + `EmptyState` 组合成单一开关，页面只需提供
  * `loading` / `error` / `empty` 三个布尔量即可获得一致的加载反馈，避免每个页面
  * 各写一套 `v-if` 判断。
+ *
+ * 目录约定（审计 S-07）：这三个子状态组件位于 `components/state/`，**仅供本组件内部使用**。
+ * 外部页面一律通过 `<StateView>` 接入，不要直接 import 它们——直接引用会绕过四态开关，
+ * 让「每个页面各写一套 v-if」的问题重新长回来。
  *
  * 时序约定（重要）：
  * - **骨架屏与错误态只在「首屏尚未成功展示过内容」时出现**。一旦成功渲染过内容，

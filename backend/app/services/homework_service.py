@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.audit import batch_student_avatar_map, batch_student_map, audit
+from app.constants import SCORE_BANDS, segment_index
 from app.pagination import paginate
 from app.models import (
     AiGradingResult,
@@ -695,6 +696,7 @@ def score_distribution(db: Session, assignment_id: int, user: User) -> dict:
     为兼容旧消费方保留。
 
     分段（固定五段）：90-100 优秀 / 80-89 良好 / 70-79 中等 / 60-69 及格 / 0-59 不及格。
+    口径唯一真源为 ``app.constants.SCORE_BANDS``，与教务看板、学情评语共用（S-01）。
 
     未交学生单列：作业下发班级中在籍（``is_dropped_out=False``）但无 Submission 记录者。
 
@@ -760,25 +762,10 @@ def score_distribution(db: Session, assignment_id: int, user: User) -> dict:
         )
         ai_scores = {sub_id: score for sub_id, score in ai_rows}
 
-    def segment_of(score: int) -> int:
-        if score >= 90:
-            return 0
-        if score >= 80:
-            return 1
-        if score >= 70:
-            return 2
-        if score >= 60:
-            return 3
-        return 4
-
-    SEGMENTS = [
-        {"key": "excellent", "label": "90-100", "name": "优秀", "min": 90, "max": 100},
-        {"key": "good", "label": "80-89", "name": "良好", "min": 80, "max": 89},
-        {"key": "medium", "label": "70-79", "name": "中等", "min": 70, "max": 79},
-        {"key": "pass", "label": "60-69", "name": "及格", "min": 60, "max": 69},
-        {"key": "fail", "label": "0-59", "name": "不及格", "min": 0, "max": 59},
-    ]
-    seg_counts = [0, 0, 0, 0, 0]
+    # 分段表与归段逻辑均取自 app.constants（全站唯一真源），本函数不再保留副本——
+    # 此前这里是 `segment_of()` if 链 + `SEGMENTS` 表两份同义表示（S-14），且阈值与
+    # 教务看板、学情评语各不相同时会造成同一分数不同等级（S-01）。
+    seg_counts = [0] * len(SCORE_BANDS)
     scored_students = []
     unscored_students = []
     unsubmitted = []
@@ -816,7 +803,7 @@ def score_distribution(db: Session, assignment_id: int, user: User) -> dict:
                 }
             )
             continue
-        idx = segment_of(score)
+        idx = segment_index(score)
         seg_counts[idx] += 1
         scored_students.append(
             {
@@ -828,7 +815,7 @@ def score_distribution(db: Session, assignment_id: int, user: User) -> dict:
                 # score/segment/segment_label 为兼容旧消费方（柱状图/分段标记）保留
                 "score": score,
                 "segment": idx,
-                "segment_label": SEGMENTS[idx]["label"],
+                "segment_label": SCORE_BANDS[idx]["label"],
                 # 双评分并列展示：来源分别为教师点评分 / AI 批改分（success）
                 "teacher_score": teacher_score,
                 "ai_score": ai_score,
@@ -840,7 +827,7 @@ def score_distribution(db: Session, assignment_id: int, user: User) -> dict:
             **seg,
             "count": seg_counts[i],
         }
-        for i, seg in enumerate(SEGMENTS)
+        for i, seg in enumerate(SCORE_BANDS)
     ]
 
     return {

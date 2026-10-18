@@ -24,6 +24,7 @@ from app.audit import (
     active_student_id_query,
     active_classroom_id_query,
 )
+from app.constants import EXCELLENT_LINE, GOOD_LINE
 from app.models import (
     Activity,
     Leave,
@@ -699,9 +700,10 @@ def suggest_student_comment(db: Session, student_id: int, user: User) -> dict:
             + (f"，涵盖科目：{'、'.join(subjects)}。" if subjects else "。")
         )
         if score_avg is not None:
-            if score_avg >= 90:
+            # 档位阈值取自 app.constants（与成绩分段同一真源），勿在此写裸数字
+            if score_avg >= EXCELLENT_LINE:
                 parts.append("学业表现优异，成绩名列前茅，望继续保持。")
-            elif score_avg >= 75:
+            elif score_avg >= GOOD_LINE:
                 parts.append("学业基础扎实，仍有提升空间，建议针对薄弱环节加强练习。")
             else:
                 parts.append("学业上需加倍努力，建议制定学习计划，夯实基础。")

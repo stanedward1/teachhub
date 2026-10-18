@@ -433,7 +433,8 @@ function renderCharts() {
           radius: ['40%', '70%'],
           center: ['50%', '50%'],
           data: distData,
-          color: ['#10b981', '#2563eb', '#f59e0b', '#ef4444'],
+          // 顺序与后端 SCORE_BANDS 一致：优秀/良好/中等/及格/不及格（绿→蓝→琥珀→橙→红）
+          color: ['#10b981', '#2563eb', '#f59e0b', '#f97316', '#ef4444'],
           label: {
             color: '#4b5563',
             fontSize: 12,
