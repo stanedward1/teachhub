@@ -7,28 +7,43 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Classroom, Score, Student
-from app.pagination import paginate
-from app.permissions import ensure_student_visible
-from app.schemas import ScoreCreate, ScoreUpdate
-from app.services.workbench._common import (
+from app.audit import (
     active_student_id_query,
-    apply_student_class_filter,
-    apply_teacher_student_filter,
     attach_student,
     audit,
     batch_student_map,
+    serialize_list_with_students,
+    student_name,
+)
+from app.models import (
+    Classroom,
+    Score,
+    Student,
+)
+from app.pagination import paginate
+from app.permissions import (
+    apply_student_class_filter,
+    apply_teacher_student_filter,
     ensure_student_operable,
+    ensure_student_visible,
     get_teacher_class_ids,
     is_any_admin,
     is_student_in_teacher_classes,
+)
+from app.schemas import (
+    ScoreCreate,
+    ScoreUpdate,
+)
+from app.services.workbench.importer import (
+    ROW_FAIL,
+    ROW_OK,
+    run_import,
+)
+from app.utils import (
     normalize_page,
-    serialize_list_with_students,
     stringify_dates,
-    student_name,
     to_dict,
 )
-from app.services.workbench.importer import ROW_FAIL, ROW_OK, run_import
 
 
 def list_scores(

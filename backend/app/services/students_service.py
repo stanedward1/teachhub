@@ -2,8 +2,8 @@
 
 自 `app/routers/students.py` 迁移而来（B1 分层）。对外行为与重构前完全一致，
 仅 `list_students` 的分页由「count + 分页」两次查询改为 `app.pagination.paginate`
-单次查询（响应字段与顺序不变）。`_students_out` / `_student_out` 仍对外导出，
-以兼容 `app/routers/mobile.py` 的既有引用。
+单次查询（响应字段与顺序不变）。学生序列化统一由
+`app.services.student_serialization` 提供（`students_out` / `student_out`）。
 """
 from io import BytesIO
 
@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.audit import audit, batch_student_avatar_map, batch_user_map
+from app.audit import audit, batch_user_map
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
 from app.models import (
     Activity,
@@ -44,34 +44,11 @@ from app.permissions import (
     is_teacher_class_owner,
 )
 from app.schemas import StudentCreate, StudentUpdate
+from app.services.student_serialization import student_out, students_out
 from app.services.uploads_service import save_avatar
 from app.security import hash_password, validate_password_strength
 from app.utils import normalize_page, parse_date_or_400, to_dict
 
-
-
-def _students_out(db: Session, rows: list) -> list:
-    """批量序列化学生：一次查班级名 + 一次查头像，避免 N+1。"""
-    if not rows:
-        return []
-    class_ids = {s.class_id for s in rows if s.class_id}
-    class_map = (
-        {c.id: c.name for c in db.query(Classroom).filter(Classroom.id.in_(class_ids)).all()}
-        if class_ids else {}
-    )
-    avatar_map = batch_student_avatar_map(db, [s.id for s in rows])
-    items = []
-    for s in rows:
-        d = to_dict(s)
-        d["class_name"] = class_map.get(s.class_id)
-        d["avatar"] = avatar_map.get(s.id)
-        items.append(d)
-    return items
-
-
-def _student_out(db: Session, s: Student) -> dict:
-    """单个学生序列化（含班级名 + 头像）。"""
-    return _students_out(db, [s])[0]
 
 
 # ---------------- 学校 ----------------
@@ -493,7 +470,7 @@ def list_students(
     elif dropped_out == "true":
         stmt = stmt.where(Student.is_dropped_out.is_(True))
     rows, total = paginate(db, stmt.order_by(Student.id), page, page_size)
-    return {"items": _students_out(db, rows), "total": total}
+    return {"items": students_out(db, rows), "total": total}
 
 
 def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
@@ -566,7 +543,7 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
     audit(db, user, "create_student", target=f"新增学生-{s.name} ({s.student_no})", student_id=s.id)
     db.commit()
     db.refresh(s)
-    return _student_out(db, s)
+    return student_out(db, s)
 
 
 def update_student(db: Session, user: User, student_id: int, payload: StudentUpdate) -> dict:
@@ -613,7 +590,7 @@ def update_student(db: Session, user: User, student_id: int, payload: StudentUpd
     audit(db, user, "update_student", target=f"学生#{student_id}-{s.name}", student_id=student_id)
     db.commit()
     db.refresh(s)
-    return _student_out(db, s)
+    return student_out(db, s)
 
 
 def delete_student(db: Session, user: User, student_id: int) -> dict:
@@ -792,8 +769,8 @@ def board_type_stats(db: Session, user: User, class_id: int | None = None) -> di
     return {
         "day_count": len(day),
         "boarding_count": len(boarding),
-        "day": _students_out(db, day),
-        "boarding": _students_out(db, boarding),
+        "day": students_out(db, day),
+        "boarding": students_out(db, boarding),
     }
 
 

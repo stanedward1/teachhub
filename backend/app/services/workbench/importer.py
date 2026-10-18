@@ -36,7 +36,7 @@ from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from app.models import ImportHistory
-from app.services.workbench._common import audit
+from app.audit import audit
 
 logger = logging.getLogger(__name__)
 

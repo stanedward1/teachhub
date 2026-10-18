@@ -14,7 +14,7 @@
    列表优先复用 ``apply_teacher_student_filter``（V-d，项目注释明确「统一收口避免遗漏」）。
 2. **教师侧只读**（X6）：本模块**不提供**任何写学生会话的函数。
 3. **会话详情三重硬校验**（§14.2，缺一不可）：① 会话存在；② 其作业本班可访问
-   **或系该教师所创建**（``_check_teacher_assignment_access``，V-a，「创建者保留管理权」）；
+   **或系该教师所创建**（``check_teacher_assignment_access``，V-a，「创建者保留管理权」）；
    ③ 该会话 ``student_id`` 落在教师可见班级范围内。**任不满足一律 404**（X5：不泄露会话存在性）。
 
 多租户：会话/消息表含 ``school_id``，查询**不手写** ``school_id`` 条件（S2，由
@@ -42,21 +42,9 @@ from app.models import (
     User,
 )
 from app.pagination import paginate
+from app.services.homework_service import check_teacher_assignment_access
 
 logger = logging.getLogger("teachhub.ai")
-
-
-def _check_teacher_assignment_access(db: Session, user: User, assignment: Assignment) -> None:
-    """作业级入口校验（V-a）：本班（班主任 ∪ 科任）**或该作业创建者**可访问，管理员不受限。
-
-    直接复用 ``homework_service._check_teacher_assignment_access``（``§14.3 V-a``，
-    原文要求「🔴 不可绕过」）。该函数语义为：``assignment is None`` 直接放行、
-    教师**非本班且非创建者** ⇒ 403、管理员不受限（「创建者保留管理权」，2026-10-09）。
-    这里复用**同一实现**，保证口径不漂移。
-    """
-    from app.services.homework_service import _check_teacher_assignment_access
-
-    _check_teacher_assignment_access(db, user, assignment)
 
 
 def list_companion_conversations(
@@ -95,7 +83,7 @@ def list_companion_conversations(
     if not assignment:
         raise HTTPException(status_code=404, detail="任务不存在")
     # 硬校验 ①：非本班（且非创建者）作业直接 403（V-a；同校跨班 ORM 不覆盖，必须显式校验）
-    _check_teacher_assignment_access(db, user, assignment)
+    check_teacher_assignment_access(db, user, assignment)
 
     stmt = (
         select(AiCompanionConversation)
@@ -195,7 +183,7 @@ def get_companion_conversation(
 
         🔴 **三重硬校验**（§14.2，缺一不可）：
         ① 会话必须存在（否则 404）；
-        ② 会话的 ``assignment_id`` 对应作业必须**本班可访问或系该教师所创建**（``_check_teacher_assignment_access``）；
+        ② 会话的 ``assignment_id`` 对应作业必须**本班可访问或系该教师所创建**（``check_teacher_assignment_access``）；
         ③ 该会话 ``student_id`` 必须落在 ``get_teacher_class_ids`` 覆盖范围内
            （防「本班教师拿别的会话 id 试探」）。
         任一条不满足 ⇒ **404**（不返回 403，避免泄露会话存在性）。
@@ -211,10 +199,10 @@ def get_companion_conversation(
 
     assignment = db.get(Assignment, conv.assignment_id)
     # 校验 ②：作业本班可访问（或系该教师所创建）；不可访问一律以 404 收尾（X5，不泄露存在性）。
-    # 注意：_check_teacher_assignment_access 会抛 403，这里**捕获后转 404**，
+    # 注意：check_teacher_assignment_access 会抛 403，这里**捕获后转 404**，
     # 以统一满足「会话详情越权 ⇒ 404」的红线。
     try:
-        _check_teacher_assignment_access(db, user, assignment)
+        check_teacher_assignment_access(db, user, assignment)
     except HTTPException:
         raise HTTPException(status_code=404, detail="会话不存在")
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,7 @@ from app.security import (
     validate_password_strength,
     verify_password,
 )
+from app.services import uploads_service
 from app.utils import gen_student_no, to_dict
 
 # 登录失败锁定策略（连续失败 15 次锁定 15 分钟）
@@ -494,3 +495,24 @@ def logout(db: Session, refresh_token: str) -> dict:
         row.revoked_at = _utcnow()
         db.commit()
     return {"ok": True}
+
+
+def list_public_schools(db: Session) -> dict:
+    """登录页学校下拉（无需登录）：仅返回启用中的学校。
+
+    该端点供**未登录**页面使用，因此不能依赖租户上下文，读取的是平台级学校表；
+    只暴露 `id / name / code` 三个字段，避免泄露学校配置。
+    """
+    rows = db.query(School).filter(School.status == "active").order_by(School.id).all()
+    return {"items": [{"id": s.id, "name": s.name, "code": s.code} for s in rows]}
+
+
+def update_avatar(db: Session, user: User, file: UploadFile) -> dict:
+    """更新当前用户头像：校验 / 落盘 / 清理旧文件交给 `uploads_service.save_avatar`。
+
+    事务边界收在本函数内（router 不再持有 `db.commit()`），与其余写接口的分层一致；
+    返回结构 `{"avatar": <相对路径>}` 保持不变。
+    """
+    user.avatar = uploads_service.save_avatar(file, user_id=user.id, old_path=user.avatar)
+    db.commit()
+    return {"avatar": user.avatar}

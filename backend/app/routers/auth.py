@@ -16,10 +16,10 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import School, User
+from app.models import User
 from app.platform_settings import is_registration_allowed
 from app.schemas import LoginRequest, PasswordRequest, RefreshRequest, RegisterRequest
-from app.services import auth_service, uploads_service
+from app.services import auth_service
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -95,8 +95,7 @@ def logout(request: Request, payload: RefreshRequest, db: Session = Depends(get_
 @router.get("/schools")
 def public_schools(db: Session = Depends(get_db)):
     """登录页学校下拉（无需登录）：仅返回启用中的学校。"""
-    rows = db.query(School).filter(School.status == "active").order_by(School.id).all()
-    return {"items": [{"id": s.id, "name": s.name, "code": s.code} for s in rows]}
+    return auth_service.list_public_schools(db)
 
 
 @router.get("/registration-status")
@@ -128,12 +127,10 @@ def upload_avatar(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """学生 / 教师上传自己的头像。
+    """学生 / 教师上传自己的头像（校验 / 落盘 / 落库全部在 service 层）。
 
-    校验（图片白名单 / 2MB 上限）、分块落盘与旧头像清理已下沉到
-    :func:`app.services.uploads_service.save_avatar`；本路由仅做依赖注入、
-    落库与返回（对外状态码 / 文案 / 返回结构保持不变）。
+    校验（图片白名单 / 2MB 上限）、分块落盘、旧头像清理与事务提交由
+    :func:`app.services.auth_service.update_avatar` 统一完成；本路由只做依赖注入
+    与调用（对外状态码 / 文案 / 返回结构保持不变）。
     """
-    user.avatar = uploads_service.save_avatar(file, user_id=user.id, old_path=user.avatar)
-    db.commit()
-    return {"avatar": user.avatar}
+    return auth_service.update_avatar(db, user, file)

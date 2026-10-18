@@ -4,14 +4,14 @@ import json
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.audit import audit
 from app.models import Seat
-from app.schemas import SeatSave
-from app.services.workbench._common import (
-    audit,
+from app.permissions import (
     ensure_class_operable,
     is_any_admin,
     is_teacher_class_owner,
 )
+from app.schemas import SeatSave
 
 
 def get_seat(db: Session, user, class_id: int) -> dict:

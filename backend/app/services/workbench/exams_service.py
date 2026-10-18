@@ -5,14 +5,15 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.audit import audit
 from app.models import Exam
+from app.permissions import resolve_school_id_or_400
 from app.schemas import ExamUpdate
-from app.services.workbench._common import (
-    audit,
-    resolve_school_id_for_schools_scope,
-    to_dict,
+from app.uploads import (
+    resolve_upload_path,
+    save_upload,
 )
-from app.uploads import resolve_upload_path, save_upload
+from app.utils import to_dict
 
 # 试卷允许的文档格式
 _EXAM_EXTS = {".pdf", ".doc", ".docx"}
@@ -41,7 +42,7 @@ def upload_exam(
 
     # 先解析归属学校（超管必须显式指定）——放在落盘之前，避免校验失败却已把文件写入磁盘。
     # 试卷是学校级实体、无父资源可继承：超管需显式指定，教师/校管取自身 school_id。
-    resolved_school_id = resolve_school_id_for_schools_scope(db, user, school_id)
+    resolved_school_id = resolve_school_id_or_400(db, user, school_id)
 
     original = file.filename or "exam"
     ext = os.path.splitext(original)[1].lower()

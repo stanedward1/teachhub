@@ -57,7 +57,7 @@ def _check_student_access(assignment: Assignment, user: User):
         raise HTTPException(status_code=403, detail="无权访问该任务")
 
 
-def _check_teacher_assignment_access(db: Session, user: User, assignment: Assignment):
+def check_teacher_assignment_access(db: Session, user: User, assignment: Assignment):
     """教师可访问「自己负责班级」的作业/提交，或**自己创建**的作业；管理员不受限。
 
     🔴 「创建者保留管理权」（2026-10-09 用户拍板）：``assignment.created_by`` 与
@@ -233,7 +233,7 @@ def ai_grade_submission(db: Session, submission_id: int, user: User) -> dict:
     if not s:
         raise HTTPException(status_code=404, detail="提交不存在")
     a = db.get(Assignment, s.assignment_id)
-    _check_teacher_assignment_access(db, user, a)
+    check_teacher_assignment_access(db, user, a)
 
     # 幂等守卫：该提交已有 `pending` 结果行 ⇒ 正在批改中，本次为教师双击 / 多标签页
     # 造成的重复投递，直接空操作返回（不重复外呼、不重复预扣配额）。返回 200 而非 400
@@ -306,7 +306,7 @@ def ai_grade_assignment(db: Session, assignment_id: int, user: User) -> dict:
     a = db.get(Assignment, assignment_id)
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
-    _check_teacher_assignment_access(db, user, a)
+    check_teacher_assignment_access(db, user, a)
 
     submission_ids = _assignment_submission_ids(db, assignment_id)
     if not submission_ids:
@@ -372,7 +372,7 @@ def ai_grade_progress(db: Session, assignment_id: int, user: User) -> dict:
     """查询**整份作业**的 AI 批改进度（前端轮询用）。
 
     与批量触发 `ai_grade_assignment` 复用**同一套权限判据**
-    （`_check_teacher_assignment_access`：本班教师或该作业创建者 / 管理员可读），不另写一套。
+    （`check_teacher_assignment_access`：本班教师或该作业创建者 / 管理员可读），不另写一套。
     纯聚合、无写操作、无外呼，可安全被前端每 2 秒轮询一次。
 
     `finished` 的语义是「**没有在跑的任务了**」（`pending == 0`），而**不是**
@@ -386,7 +386,7 @@ def ai_grade_progress(db: Session, assignment_id: int, user: User) -> dict:
     a = db.get(Assignment, assignment_id)
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
-    _check_teacher_assignment_access(db, user, a)
+    check_teacher_assignment_access(db, user, a)
 
     submission_ids = _assignment_submission_ids(db, assignment_id)
     progress = ai_grading.progress_for_submissions(db, submission_ids)
@@ -475,7 +475,7 @@ def get_assignment(db: Session, assignment_id: int, user: User) -> dict:
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
     _check_student_access(a, user)
-    _check_teacher_assignment_access(db, user, a)
+    check_teacher_assignment_access(db, user, a)
     d = to_dict(a)
     cls = db.get(Classroom, a.class_id)
     creator = db.get(User, a.created_by)
@@ -591,7 +591,7 @@ def list_submissions(
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
     _check_student_access(a, user)
-    _check_teacher_assignment_access(db, user, a)
+    check_teacher_assignment_access(db, user, a)
     q = db.query(Submission).filter(Submission.assignment_id == assignment_id)
     if user.role == "student":
         stu = get_student_by_account(db, user)
@@ -648,7 +648,7 @@ def unsubmitted_students(db: Session, assignment_id: int, user: User) -> dict:
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
     # 教师只能查看自己负责班级的作业，管理员/超管不受限
-    _check_teacher_assignment_access(db, user, a)
+    check_teacher_assignment_access(db, user, a)
 
     students = (
         db.query(Student)
@@ -709,7 +709,7 @@ def score_distribution(db: Session, assignment_id: int, user: User) -> dict:
     a = db.get(Assignment, assignment_id)
     if not a:
         raise HTTPException(status_code=404, detail="任务不存在")
-    _check_teacher_assignment_access(db, user, a)
+    check_teacher_assignment_access(db, user, a)
 
     # 在籍学生（作业下发班级，排除退学）
     students = (
@@ -865,7 +865,7 @@ def get_submission(db: Session, submission_id: int, user: User) -> dict:
         raise HTTPException(status_code=404, detail="提交不存在")
     a = db.get(Assignment, s.assignment_id)
     _check_student_access(a, user)
-    _check_teacher_assignment_access(db, user, a)
+    check_teacher_assignment_access(db, user, a)
     if user.role == "student":
         stu_me = get_student_by_account(db, user)
         if not stu_me or s.student_id != stu_me.id:
@@ -917,7 +917,7 @@ def add_submission_comment(db: Session, submission_id: int, payload: dict, user:
     if not s:
         raise HTTPException(status_code=404, detail="提交不存在")
     # 教师只能点评自己班级的提交
-    _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
+    check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
     # 退学/毕业限制
     _ensure_submission_operable(db, s)
     content = (payload.get("content") or "").strip()
@@ -967,7 +967,7 @@ def delete_submission_comment(db: Session, submission_id: int, comment_id: int, 
     s = db.get(Submission, submission_id)
     if not s:
         raise HTTPException(status_code=404, detail="记录不存在")
-    _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
+    check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
     _ensure_submission_operable(db, s)
     db.delete(c)
     stu = db.get(Student, s.student_id) if s else None
@@ -1121,7 +1121,7 @@ def mark_excellent(db: Session, submission_id: int, payload: dict, user: User) -
     if not s:
         raise HTTPException(status_code=404, detail="提交不存在")
     # 教师只能评自己班级的提交为优秀
-    _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
+    check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
     # 退学/毕业限制
     _ensure_submission_operable(db, s)
     if _find_excellent_of_submission(db, submission_id):
@@ -1151,7 +1151,7 @@ def unmark_excellent(db: Session, submission_id: int, user: User) -> dict:
     s = db.get(Submission, submission_id)
     if not s:
         raise HTTPException(status_code=404, detail="提交不存在")
-    _check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
+    check_teacher_assignment_access(db, user, db.get(Assignment, s.assignment_id))
     _ensure_submission_operable(db, s)
     e = _find_excellent_of_submission(db, submission_id)
     if e:

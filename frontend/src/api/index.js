@@ -1,5 +1,19 @@
 import request from './request'
 
+// ============ 通用 CRUD 工厂 ============
+// 各资源接口的四件套只有 URL 段不同，统一由此生成，避免 13 份逐字复制。
+// `methods` 显式声明该资源真实存在的方法：后端没有 update 的资源不要凭空暴露。
+const CRUD_METHODS = {
+  list: (base) => (params) => request.get(`/api/${base}`, { params }),
+  create: (base) => (data) => request.post(`/api/${base}`, data),
+  update: (base) => (id, data) => request.put(`/api/${base}/${id}`, data),
+  remove: (base) => (id) => request.delete(`/api/${base}/${id}`),
+}
+
+function crud(base, methods = Object.keys(CRUD_METHODS)) {
+  return Object.fromEntries(methods.map((m) => [m, CRUD_METHODS[m](base)]))
+}
+
 // ============ 认证 ============
 export const authApi = {
   login: (data) => request.post('/api/auth/login', data),
@@ -29,10 +43,7 @@ export const metaApi = {
 
 // ============ 租户（学校）管理：平台超管 ============
 export const schoolApi = {
-  list: () => request.get('/api/schools'),
-  create: (data) => request.post('/api/schools', data),
-  update: (id, data) => request.put(`/api/schools/${id}`, data),
-  remove: (id) => request.delete(`/api/schools/${id}`),
+  ...crud('schools'),
   setStatus: (id, status) => request.put(`/api/schools/${id}/status`, { status }),
 }
 
@@ -121,10 +132,7 @@ export const studentApi = {
 
 // ============ 教师工作台 ============
 export const scoreApi = {
-  list: (params) => request.get('/api/scores', { params }),
-  create: (data) => request.post('/api/scores', data),
-  update: (id, data) => request.put(`/api/scores/${id}`, data),
-  remove: (id) => request.delete(`/api/scores/${id}`),
+  ...crud('scores'),
   analysis: (params) => request.get('/api/scores/analysis', { params }),
   export: (params) => request.get('/api/scores/export', { params, responseType: 'blob' }),
   template: () => request.get('/api/scores/template', { responseType: 'blob' }),
@@ -134,12 +142,7 @@ export const scoreApi = {
     }),
 }
 
-export const leaveApi = {
-  list: (params) => request.get('/api/leaves', { params }),
-  create: (data) => request.post('/api/leaves', data),
-  update: (id, data) => request.put(`/api/leaves/${id}`, data),
-  remove: (id) => request.delete(`/api/leaves/${id}`),
-}
+export const leaveApi = crud('leaves')
 
 export const attendanceApi = {
   list: (params) => request.get('/api/attendance', { params }),
@@ -147,17 +150,9 @@ export const attendanceApi = {
   summary: (params) => request.get('/api/attendance/summary', { params }),
 }
 
-export const communicationApi = {
-  list: (params) => request.get('/api/communications', { params }),
-  create: (data) => request.post('/api/communications', data),
-  remove: (id) => request.delete(`/api/communications/${id}`),
-}
+export const communicationApi = crud('communications', ['list', 'create', 'remove'])
 
-export const resourceApi = {
-  list: (params) => request.get('/api/resources', { params }),
-  create: (data) => request.post('/api/resources', data),
-  remove: (id) => request.delete(`/api/resources/${id}`),
-}
+export const resourceApi = crud('resources', ['list', 'create', 'remove'])
 
 export const examApi = {
   list: (params) => request.get('/api/exams', { params }),
@@ -177,62 +172,38 @@ export const seatApi = {
 }
 
 // ============ 班级日志 ============
-export const workLogApi = {
-  list: (params) => request.get('/api/work-logs', { params }),
-  create: (data) => request.post('/api/work-logs', data),
-  update: (id, data) => request.put(`/api/work-logs/${id}`, data),
-  remove: (id) => request.delete(`/api/work-logs/${id}`),
-}
+export const workLogApi = crud('work-logs')
+
+const classPlan = crud('class-plans')
+const teacherPlan = crud('teacher-plans')
 
 export const planApi = {
-  classPlans: (params) => request.get('/api/class-plans', { params }),
-  createClassPlan: (data) => request.post('/api/class-plans', data),
-  updateClassPlan: (id, data) => request.put(`/api/class-plans/${id}`, data),
-  removeClassPlan: (id) => request.delete(`/api/class-plans/${id}`),
-  teacherPlans: (params) => request.get('/api/teacher-plans', { params }),
-  createTeacherPlan: (data) => request.post('/api/teacher-plans', data),
-  updateTeacherPlan: (id, data) => request.put(`/api/teacher-plans/${id}`, data),
-  removeTeacherPlan: (id) => request.delete(`/api/teacher-plans/${id}`),
+  classPlans: classPlan.list,
+  createClassPlan: classPlan.create,
+  updateClassPlan: classPlan.update,
+  removeClassPlan: classPlan.remove,
+  teacherPlans: teacherPlan.list,
+  createTeacherPlan: teacherPlan.create,
+  updateTeacherPlan: teacherPlan.update,
+  removeTeacherPlan: teacherPlan.remove,
 }
 
-export const scheduleApi = {
-  list: (params) => request.get('/api/schedules', { params }),
-  create: (data) => request.post('/api/schedules', data),
-  update: (id, data) => request.put(`/api/schedules/${id}`, data),
-  remove: (id) => request.delete(`/api/schedules/${id}`),
-}
+export const scheduleApi = crud('schedules')
 
-export const activityApi = {
-  list: (params) => request.get('/api/activities', { params }),
-  create: (data) => request.post('/api/activities', data),
-  remove: (id) => request.delete(`/api/activities/${id}`),
-}
+export const activityApi = crud('activities', ['list', 'create', 'remove'])
 
-export const talkApi = {
-  list: (params) => request.get('/api/talks', { params }),
-  create: (data) => request.post('/api/talks', data),
-  remove: (id) => request.delete(`/api/talks/${id}`),
-}
+export const talkApi = crud('talks', ['list', 'create', 'remove'])
 
-export const returnRecordApi = {
-  list: (params) => request.get('/api/return-records', { params }),
-  create: (data) => request.post('/api/return-records', data),
-  remove: (id) => request.delete(`/api/return-records/${id}`),
-}
+export const returnRecordApi = crud('return-records', ['list', 'create', 'remove'])
 
 export const performanceApi = {
-  list: (params) => request.get('/api/performances', { params }),
+  ...crud('performances', ['list', 'create', 'remove']),
   // 筛选范围内的积分汇总（净变动 / 累计加分 / 累计扣分 / 记录数 / 涉及学生数）
   summary: (params) => request.get('/api/performances/summary', { params }),
-  create: (data) => request.post('/api/performances', data),
-  remove: (id) => request.delete(`/api/performances/${id}`),
 }
 
 export const studentCommentApi = {
-  list: (params) => request.get('/api/student-comments', { params }),
-  create: (data) => request.post('/api/student-comments', data),
-  update: (id, data) => request.put(`/api/student-comments/${id}`, data),
-  remove: (id) => request.delete(`/api/student-comments/${id}`),
+  ...crud('student-comments'),
   suggest: (studentId) =>
     request.get('/api/student-comments/suggest', { params: { student_id: studentId } }),
 }

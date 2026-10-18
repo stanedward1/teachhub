@@ -3,23 +3,30 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Leave
-from app.pagination import paginate
-from app.permissions import ensure_student_visible
-from app.schemas import LeaveCreate, LeaveUpdate
-from app.services.workbench._common import (
+from app.audit import (
     active_student_id_query,
-    apply_student_class_filter,
-    apply_teacher_student_filter,
     attach_student,
     audit,
+    serialize_list_with_students,
+    student_name,
+)
+from app.models import Leave
+from app.pagination import paginate
+from app.permissions import (
+    apply_student_class_filter,
+    apply_teacher_student_filter,
+    ensure_student_visible,
     is_any_admin,
     is_student_in_teacher_classes,
+)
+from app.schemas import (
+    LeaveCreate,
+    LeaveUpdate,
+)
+from app.utils import (
     normalize_page,
     parse_date_or_400,
-    serialize_list_with_students,
     stringify_dates,
-    student_name,
     to_dict,
 )
 

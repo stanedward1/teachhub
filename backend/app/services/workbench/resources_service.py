@@ -2,14 +2,12 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.audit import audit
 from app.models import Resource
+from app.permissions import resolve_school_id_or_400
 from app.schemas import ResourceCreate
-from app.services.workbench._common import (
-    audit,
-    resolve_school_id_for_schools_scope,
-    to_dict,
-)
 from app.uploads import ensure_upload_path
+from app.utils import to_dict
 
 
 def list_resources(db: Session, keyword: str = "") -> dict:
@@ -31,7 +29,7 @@ def create_resource(db: Session, user, payload: ResourceCreate) -> dict:
         ensure_upload_path(payload.filepath)
     # 资源是学校级实体、无父资源可继承：超管必须显式指定归属学校（否则落 NULL 全租户不可见），
     # 教师/校管忽略入参、取自身 school_id（防跨校写入）。
-    school_id = resolve_school_id_for_schools_scope(db, user, payload.school_id)
+    school_id = resolve_school_id_or_400(db, user, payload.school_id)
     x = Resource(
         name=name,
         school_id=school_id,

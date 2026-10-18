@@ -2,19 +2,21 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import StudentProfileTag
-from app.permissions import ensure_student_visible
-from app.schemas import StudentTagCreate
-from app.services.student_stats import compute_student_stats
-from app.services.students_service import _student_out
-from app.services.workbench._common import (
+from app.audit import (
     audit,
+    student_name,
+)
+from app.models import StudentProfileTag
+from app.permissions import (
     ensure_student_operable,
+    ensure_student_visible,
     is_any_admin,
     is_student_in_teacher_classes,
-    student_name,
-    to_dict,
 )
+from app.schemas import StudentTagCreate
+from app.services.student_serialization import student_out
+from app.services.student_stats import compute_student_stats
+from app.utils import to_dict
 
 
 def get_student_profile(db: Session, user, student_id: int) -> dict:
@@ -123,7 +125,7 @@ def get_student_profile(db: Session, user, student_id: int) -> dict:
     ]
 
     return {
-        "student": _student_out(db, student),
+        "student": student_out(db, student),
         "radar": radar,
         "radar_basis": radar_basis,
         "score_summary": score_summary,

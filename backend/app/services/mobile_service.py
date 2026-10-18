@@ -15,11 +15,11 @@ from app.permissions import (
 from app.services.student_stats import compute_student_stats
 
 # 学生序列化辅助统一取自 students service 层（B1 分层后 router 不再对外提供内部函数）。
-from app.services.students_service import _student_out, _students_out
+from app.services.student_serialization import student_out, students_out
 
 
 def _light_student(d: dict) -> dict:
-    """从 _student_out 的完整字典中抽取移动端所需精简字段。"""
+    """从 student_out 的完整字典中抽取移动端所需精简字段。"""
     return {
         "id": d["id"],
         "name": d["name"],
@@ -46,7 +46,7 @@ def mobile_students(
             Student.name.contains(keyword) | Student.student_no.contains(keyword)
         )
     rows = q.order_by(Student.id).limit(200).all()
-    items = [_light_student(d) for d in _students_out(db, rows)]
+    items = [_light_student(d) for d in students_out(db, rows)]
     return {"items": items, "total": len(items)}
 
 
@@ -97,7 +97,7 @@ def mobile_student_overview(db: Session, user: User, student_id: int) -> dict:
     ]
 
     return {
-        "student": _student_out(db, student),
+        "student": student_out(db, student),
         "radar": radar,
         "score_summary": score_summary,
         "point_summary": point_summary,

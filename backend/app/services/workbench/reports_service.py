@@ -5,16 +5,27 @@ from datetime import date, datetime, time, timedelta
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.config import BASE_POINTS
-from app.models import Classroom, Leave, Performance, Score, Student, WeeklyReport
-from app.schemas import ReportSave
-from app.services.workbench._common import (
+from app.audit import (
     active_classroom_id_query,
     audit,
+)
+from app.config import BASE_POINTS
+from app.models import (
+    Classroom,
+    Leave,
+    Performance,
+    Score,
+    Student,
+    WeeklyReport,
+)
+from app.permissions import (
     ensure_class_operable,
     get_teacher_class_ids,
     is_any_admin,
     is_teacher_class_owner,
+)
+from app.schemas import ReportSave
+from app.utils import (
     parse_date_or_400,
     to_dict,
 )

@@ -11,5 +11,5 @@
 约束：
 - 对外 API 路径、请求/响应字段、状态码、中文提示文案、`audit(...)` 文案与调用时机
   必须与重构前**完全一致**。
-- service 不得 import router，避免循环依赖；共享依赖与辅助统一放在 `_common.py`。
+- service 不得 import router，避免循环依赖；共享依赖与辅助直接从真源模块（`app.audit` / `app.permissions` / `app.utils`）导入。
 """
