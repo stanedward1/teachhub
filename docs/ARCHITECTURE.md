@@ -120,7 +120,8 @@ teachhub/
 │   │   ├── layout/            # StudentLayout / AdminLayout（可折叠外壳）
 │   │   │   └── admin/         #   AdminLayout 子件：AdminSidebar / AdminHeader / menuConfig.js
 │   │   ├── composables/       # 可组合函数（useCrudList / useSort / useDebouncedRef / useDownload / useLogout）
-│   │   ├── components/        # ImportDialog / Markdown / MarkdownEditor / StudentSelect / StudentCard / SortBar / PaginationBar / StateView（四态接入层）/ SkeletonTable / ErrorState / EmptyState / VirtualList / AiGradingPanel（AI 批改纯展示面板，学生口径）/ AiCompanionDrawer（AI 学伴**学生端可写**抽屉）/ CompanionConversationPanel（AI 学伴**教师端只读**面板）
+│   │   ├── components/        # ImportDialog / Markdown / MarkdownEditor / StudentSelect / StudentCard / SortBar / PaginationBar / StateView（四态接入层）/ VirtualList / AiGradingPanel（AI 批改纯展示面板，学生口径）/ AiCompanionDrawer（AI 学伴**学生端可写**抽屉）/ CompanionConversationPanel（AI 学伴**教师端只读**面板）
+│   │   ├── components/state/  # 三态原子组件 SkeletonTable / ErrorState / EmptyState（仅供 StateView 内部使用，外部勿直接引用）
 │   │   ├── mobile/            # 移动端（Vant）：layout + views + api
 │   │   ├── views/student/     # 学生端页面（登录/作业/优秀作品/我的提交+详情/编程练习/资料）
 │   │   └── views/admin/       # 管理端页面（29 个，含 Schools 学校管理、PlatformSettings 平台设置）
@@ -250,9 +251,9 @@ teachhub/
 | `PaginationBar.vue` | 统一分页条（居中换行、窄屏自适应） | 各业务列表页 |
 | `ImportDialog.vue` | 通用 Excel 批量导入弹窗（模板下载 + 拖拽上传 + 错误明细；业务差异由 `importFn` / `templateUrl` 注入） | 学生管理、成绩管理 |
 | `StateView.vue` | **列表四态接入层**：组合「骨架屏 / 错误+重试 / 空态 / 正常内容」，页面只传 `loading` / `error` / `empty` 三个布尔量；支持 `#skeleton` 具名插槽自定义骨架、`#empty` 插槽放操作按钮 | 全部 27 处列表视图（管理端 23 页 + 成绩分析页签 + 学生端 3 页） |
-| `SkeletonTable.vue` | 表格加载骨架屏（表头 + 若干行占位，行高固定防 CLS）；多由 `StateView` 间接使用 | 各列表页 |
-| `ErrorState.vue` | 统一错误态（含「重试」按钮，向上抛 `retry`）；多由 `StateView` 间接使用 | 各列表页 |
-| `EmptyState.vue` | 统一空状态占位（默认插槽可放「新建」等按钮）；多由 `StateView` 间接使用 | 各列表页 |
+| `state/SkeletonTable.vue` | 表格加载骨架屏（表头 + 若干行占位，行高固定防 CLS）；**仅供 `StateView` 内部使用**（审计 S-07） | 经 `StateView` 接入各列表页 |
+| `state/ErrorState.vue` | 统一错误态（含「重试」按钮，向上抛 `retry`）；**仅供 `StateView` 内部使用**（审计 S-07） | 经 `StateView` 接入各列表页 |
+| `state/EmptyState.vue` | 统一空状态占位（默认插槽可放「新建」等按钮）；**仅供 `StateView` 内部使用**（审计 S-07） | 经 `StateView` 接入各列表页 |
 | `VirtualList.vue` | 长列表虚拟滚动（固定行高窗口化，`requestAnimationFrame` 节流，DOM 节点数恒定） | 移动端「快捷记录」选学生弹窗（全校长列表） |
 | `AiGradingPanel.vue` | **AI 批改意见纯展示面板（学生口径）**：状态标签 / 分数 / 总评 / 亮点 / 改进建议 / 「AI 生成，仅供参考」免责声明，`pending` 与无结果给占位。**不展示** `model` / `excellent_reason` / `attachment_used` 等教师专属字段 | 学生端「我的提交详情」（`/my-submissions/{id}`）、「作业详情」教师反馈区块（`/homework/{id}`）、「优秀作品详情」（`/excellent/{id}`） |
 | `AiCompanionDrawer.vue` | **AI 学伴学生端可写抽屉**：引导式问答输入 + 「今日剩余次数」展示；提问成功后**重拉权威剩余值**（不本地减一），`remaining<=0` 时前置禁用避免反复撞 429 | 学生端「作业详情」（`/homework/{id}`） |

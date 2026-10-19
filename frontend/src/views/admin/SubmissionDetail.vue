@@ -92,6 +92,35 @@
         </div>
       </div>
 
+      <!-- AI 学伴对话（教师只读，设计 §14.6）：学生提问原文 + AI 全文。
+           管理员 / 超管无该接口权限（后端 require_teacher_only），不渲染本区块。 -->
+      <div v-if="canViewCompanion" class="companion-section">
+        <div class="companion-head">
+          <span class="companion-title">AI 学伴对话</span>
+          <el-tag v-if="companionConv" size="small" type="info">
+            {{ companionConv.turn_count }} 轮
+          </el-tag>
+          <el-tag v-if="companionConv?.has_refused" size="small" type="warning">有拒答</el-tag>
+          <el-button
+            v-if="companionConv"
+            link
+            type="primary"
+            size="small"
+            @click="companionOpen = true"
+          >
+            查看完整对话
+          </el-button>
+        </div>
+        <div class="companion-tip">
+          学生向 AI 学伴提问的原文与回答，仅供教师了解学习过程；只读，不可编辑。
+        </div>
+        <div v-if="companionLoading" class="ai-text ai-muted">加载中…</div>
+        <div v-else-if="!companionConv" class="ai-text ai-muted">
+          该生在本作业下未使用 AI 学伴。
+        </div>
+        <div v-else class="ai-text">最近活跃 {{ companionConv.last_active_at || '—' }}</div>
+      </div>
+
       <!-- 教师点评区 -->
       <div class="comments-section">
         <div style="font-weight: 500; margin-bottom: 12px; color: #303133">
@@ -159,6 +188,12 @@
     </div>
 
     <div v-else-if="!loading" class="empty-state empty-state--tall">提交不存在或已被删除</div>
+
+    <!-- 学伴会话抽屉（教师只读，与列表页共用同一组件） -->
+    <CompanionConversationPanel
+      v-model="companionOpen"
+      :conversation-id="companionConv?.conversation_id || null"
+    />
   </div>
 </template>
 
@@ -167,6 +202,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
+import CompanionConversationPanel from '../../components/CompanionConversationPanel.vue'
 import { homeworkApi } from '../../api'
 import { getUser, isSchoolAdmin, isPlatformAdmin } from '../../utils/auth'
 
@@ -179,15 +215,47 @@ const currentUser = getUser()
 // 学校管理员 / 平台超管可删除任意点评
 const isAdmin = isSchoolAdmin() || isPlatformAdmin()
 
+// AI 学伴：教师只读。管理员 / 超管调用该接口必 403，故非教师不发起请求、不渲染区块。
+const canViewCompanion = currentUser?.role === 'teacher'
+const companionConv = ref(null)
+const companionLoading = ref(false)
+const companionOpen = ref(false)
+
 onMounted(load)
 
 async function load() {
   loading.value = true
   try {
     submission.value = await homeworkApi.submissionDetail(route.params.submissionId)
+    await loadCompanion(submission.value)
   } catch (e) {
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 取该生在本作业下的学伴会话（教师只读）。
+ *
+ * 复用作业级会话列表接口（该接口按 student_id 一并返回，一次请求即可定位），
+ * `_silent` 表示失败时不弹全局错误提示 —— 学伴信息属附加信息，不应阻断作业审阅。
+ * 无会话或请求失败一律降级为 null，页面显示「未使用 AI 学伴」。
+ */
+async function loadCompanion(sub) {
+  if (!canViewCompanion || !sub) return
+  companionLoading.value = true
+  try {
+    const res = await homeworkApi.companionConversations(
+      sub.assignment_id,
+      { page: 1, page_size: 200 },
+      { _silent: true }
+    )
+    const list = Array.isArray(res?.items) ? res.items : []
+    companionConv.value = list.find((c) => c.student_id === sub.student_id) || null
+  } catch (e) {
+    companionConv.value = null
+  } finally {
+    companionLoading.value = false
   }
 }
 
@@ -455,5 +523,29 @@ async function acceptAiExcellent() {
   font-size: 12px;
   color: #9ca3af;
   margin-top: 8px;
+}
+/* AI 学伴区块：与 AI 批改（紫色）刻意区分成蓝色，避免两块「AI 生成内容」混淆 */
+.companion-section {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+}
+.companion-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.companion-title {
+  font-weight: 600;
+  color: #1d4ed8;
+  font-size: 14px;
+}
+.companion-tip {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 6px 0 10px;
 }
 </style>
