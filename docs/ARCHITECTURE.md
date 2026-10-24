@@ -70,7 +70,7 @@ teachhub/
 │   │   │   └── operation_log.py
 │   │   ├── routers/           # 按业务域分组的 API 路由
 │   │   │   ├── auth.py        #   登录/注册/注册开关状态/密码/学校下拉（含登录限流）
-│   │   │   ├── meta.py        #   班级选项、编程练习（公开）
+│   │   │   ├── meta.py        #   班级选项、学习资源分组（公开）
 │   │   │   ├── homework.py    #   作业/提交/优秀作品/评论
 │   │   │   ├── students.py    #   学校/班级/学生 CRUD + 班级教师（班主任+科任）+ 密码管理 + 通宿生统计
 │   │   │   ├── workbench/     #   教师工作台子包（原单文件 1374 行按资源域拆分）
@@ -123,7 +123,7 @@ teachhub/
 │   │   ├── components/        # ImportDialog / Markdown / MarkdownEditor / StudentSelect / StudentCard / SortBar / PaginationBar / StateView（四态接入层）/ VirtualList / AiGradingPanel（AI 批改纯展示面板，学生口径）/ AiCompanionDrawer（AI 学伴**学生端可写**抽屉）/ CompanionConversationPanel（AI 学伴**教师端只读**面板）
 │   │   ├── components/state/  # 三态原子组件 SkeletonTable / ErrorState / EmptyState（仅供 StateView 内部使用，外部勿直接引用）
 │   │   ├── mobile/            # 移动端（Vant）：layout + views + api
-│   │   ├── views/student/     # 学生端页面（登录/作业/优秀作品/我的提交+详情/编程练习/资料）
+│   │   ├── views/student/     # 学生端页面（登录/作业/优秀作品/我的提交+详情/学习资源/资料）
 │   │   └── views/admin/       # 管理端页面（29 个，含 Schools 学校管理、PlatformSettings 平台设置）
 │   │       ├── students/      #   Students 子件：表单/密码/变更历史/饼图/头像单元格
 │   │       └── scores/        #   Scores 子件：成绩分析 / 录入弹窗

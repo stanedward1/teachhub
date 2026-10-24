@@ -54,6 +54,8 @@ const routes = [
         component: () => import('../views/student/SubmissionDetail.vue'),
       },
       {
+        // 路径沿用 /practice：学生书签与历史链接不能失效，页面语义已升级为「学习资源」
+        // （编程 / 打字 / 图文新闻 / 法治 / 科普 / 职教，由后端 meta 下发分组）
         path: 'practice',
         name: 'practice',
         component: () => import('../views/student/Practice.vue'),

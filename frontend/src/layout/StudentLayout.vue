@@ -10,7 +10,7 @@
           <router-link to="/homework" active-class="active">我的作业</router-link>
           <router-link to="/excellent" active-class="active">优秀作品</router-link>
           <router-link to="/my-submissions" active-class="active">我的提交</router-link>
-          <router-link to="/practice" active-class="active">编程练习</router-link>
+          <router-link to="/practice" active-class="active">学习资源</router-link>
         </nav>
         <el-dropdown @command="onCommand">
           <span class="user-chip">
@@ -104,6 +104,7 @@ function onCommand(cmd) {
   display: flex;
   gap: 8px;
   flex: 1;
+  align-items: center;
 }
 .nav-links a {
   text-decoration: none;
@@ -151,11 +152,19 @@ function onCommand(cmd) {
     padding: 0 12px;
     gap: 16px;
   }
+  /* 四个站内导航项在 360~390px 宽度下刚好临界：收窄内边距与间距使其完整显示，
+     更窄的屏幕仍由上面的横向滚动兜底 */
   .nav-links {
-    gap: 4px;
+    gap: 2px;
+    overflow-x: auto;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav-links::-webkit-scrollbar {
+    display: none;
   }
   .nav-links a {
-    padding: 6px 8px;
+    padding: 6px 4px;
     font-size: 13px;
   }
   .logo-text {
@@ -166,16 +175,6 @@ function onCommand(cmd) {
   }
   .content {
     padding: 16px 12px;
-  }
-}
-@media (max-width: 480px) {
-  .nav-links {
-    overflow-x: auto;
-    white-space: nowrap;
-    -webkit-overflow-scrolling: touch;
-  }
-  .nav-links::-webkit-scrollbar {
-    display: none;
   }
 }
 </style>
