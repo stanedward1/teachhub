@@ -404,6 +404,9 @@ def register(db: Session, payload, user_agent: str | None = None) -> dict:
         role="student",
         school_id=cls.school_id,  # 租户归属，缺失会被教师查询的 school_id 过滤掉
         class_id=payload.class_id,
+        # 档案 → 账号的稳定锚点：缺了它，此后一切「档案 ↔ 账号」只能靠班级+姓名软匹配，
+        # 学生改名/转班就会串人（删错账号、改错密码，见 RBT-35）
+        student_id=student.id,
         # 自助注册同样遵守密码强度口径：弱口令不直接拒绝（保持既有注册体验），
         # 但强制其登录后修改，与教师建号路径（students_service 里
         # `must_change_password=validate_password_strength(pwd) is not None`）一致。

@@ -1,5 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.constants import SCORE_MAX, SCORE_MIN
+
 
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, description="教师=用户名，学生=姓名")
@@ -179,17 +181,19 @@ class AiCompanionAsk(BaseModel):
 
 
 # ============ 成绩 ============
+# 分数上下界取 `app.constants.SCORE_MIN/SCORE_MAX`（唯一真源，与统计分段共用同一区间）。
+# ⚠️ 此前这里是裸 `le=150`，而统计分段只覆盖 0-100 ⇒ 105/120 分能入库却在看板消失（RBT-37）。
 class ScoreCreate(BaseModel):
     student_id: int = Field(..., gt=0)
     subject: str = Field("未分类", max_length=50)
-    score: float = Field(..., ge=0, le=150)
+    score: float = Field(..., ge=SCORE_MIN, le=SCORE_MAX)
     exam_name: str | None = None
 
 
 class ScoreUpdate(BaseModel):
     student_id: int | None = Field(None, gt=0)
     subject: str | None = Field(None, max_length=50)
-    score: float | None = Field(None, ge=0, le=150)
+    score: float | None = Field(None, ge=SCORE_MIN, le=SCORE_MAX)
     exam_name: str | None = None
 
 

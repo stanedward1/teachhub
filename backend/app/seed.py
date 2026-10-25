@@ -225,6 +225,8 @@ def seed_all():
                     role="student",
                     school_id=school.id,
                     class_id=classroom.id,
+                    # 种子账号同样要挂硬外键：「档案 ↔ 账号」不留软匹配（RBT-35）
+                    student_id=s.id,
                 )
                 db.add(u)
                 student_users.append(u)
@@ -655,6 +657,8 @@ def seed_all():
                 db.add(User(
                     username=nm, password_hash=hash_password("123456"), name=nm,
                     role="student", school_id=school2.id, class_id=c3.id,
+                    # 同上：种子数据也走硬外键（RBT-35）
+                    student_id=st.id,
                 ))
                 if i <= 2:
                     db.add(Score(

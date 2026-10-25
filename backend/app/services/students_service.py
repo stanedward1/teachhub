@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import audit, batch_user_map
@@ -36,7 +37,7 @@ from app.permissions import (
     ensure_student_operable,
     ensure_student_visible,
     filter_classrooms_by_teacher,
-    get_student_account,
+    get_account_of_student,
     get_teacher_class_ids,
     is_any_admin,
     is_platform_admin,
@@ -522,7 +523,9 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
     db.add(s)
     db.flush()
     # 自动同步生成学生登录账号（班级 + 姓名，默认密码 123456）
-    exists_user = get_student_account(db, class_id, name)
+    # 🔴 定位走硬外键（get_account_of_student）；新建时**必须回填 `student_id`**，
+    # 否则该账号此后只剩「班级 + 姓名」软匹配可用，改名/转班就会串人（RBT-35）。
+    exists_user = get_account_of_student(db, s)
     if not exists_user:
         db.add(
             User(
@@ -538,12 +541,56 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
                 # 同文件 `reset_student_password` 一直是显式传 `s.school_id`，此处对齐。
                 school_id=school_id,
                 class_id=class_id,
+                # 档案 → 账号的稳定锚点（RBT-35）
+                student_id=s.id,
             )
         )
     audit(db, user, "create_student", target=f"新增学生-{s.name} ({s.student_no})", student_id=s.id)
     db.commit()
     db.refresh(s)
     return student_out(db, s)
+
+
+def _sync_account_identity(db: Session, account: User | None, s: Student) -> None:
+    """把学生档案的 ``name`` / ``class_id`` 同步到其登录账号（无账号时直接返回）。
+
+    🔴 为什么必须同步（2026-10-25 修 RBT-35）：账号唯一性口径是
+    ``uq_user_scope_username`` = ``(username_scope, username)``，学生的 scope 是
+    ``stu:<school>:<class>``，而 ``username`` 就是姓名。不同步的后果全部由**正常业务
+    操作**触发，不需要攻击者：
+
+    1. A 改名后 ``get_student_account(新名)`` 返回 None ⇒ 「重置密码」给 A 新建**第二个
+       账号，旧账号仍能登录，一名学生两套身份；
+    2. A 转进已有同名 B 的班后，旧账号仍挂原班 ⇒ 删 B 时软匹配可能命中 A 的账号，
+       ``purge_user_data`` 连带清掉 A 的作业与成绩。
+
+    ⚠️ 「转到有同名同学的班」会撞唯一键，这是**真实冲突**（同班同名学生无法各有账号）：
+    显式 409 并回滚整次更新，既不静默跳过同步（跳过等于把歧义留给下一次删除），
+    也不让它冒成 500。``db.rollback()`` 会一并丢弃本次已改的档案字段——这正是
+    「要么整体成功、要么整体不动」的预期语义。
+    """
+    if account is None:
+        return
+    changed = False
+    if account.name != s.name:
+        # 学生账号 username 恒等于姓名，两者必须同时改（登录用姓名 + 班级）
+        account.name = s.name
+        account.username = s.name
+        changed = True
+    if account.class_id != s.class_id:
+        account.class_id = s.class_id
+        # username_scope 由 models/user.py 的 before_update 事件按新 class_id 重算
+        changed = True
+    if not changed:
+        return
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="目标班级已存在同名学生账号，请先处理重名后再修改",
+        )
 
 
 def update_student(db: Session, user: User, student_id: int, payload: StudentUpdate) -> dict:
@@ -570,12 +617,19 @@ def update_student(db: Session, user: User, student_id: int, payload: StudentUpd
     ):
         raise HTTPException(status_code=403, detail="教师无权修改学生班级")
     old_type = s.student_type
+    # 🔴 先在**改动前**按旧的班级/姓名把账号取出来：改名或转班之后软匹配必然失配，
+    # 事后再找要么找不到（→ 下次「重置密码」给该生新建第二个账号，旧账号仍能登录），
+    # 要么找到同名的别人（→ 删错账号 / 改错密码）。见 RBT-35。
+    account = get_account_of_student(db, s)
     for f in (
         "name", "gender", "birth_date", "class_id", "major",
         "parent_name", "parent_phone", "student_type", "is_dropped_out",
     ):
         if f in data and data[f] is not None:
             setattr(s, f, parse_date_or_400(data[f]) if f == "birth_date" else data[f])
+    # 账号身份同步（RBT-35）：档案改了名/换了班，账号必须跟着改，否则「班级 + 姓名」
+    # 这把软钥匙从此指向别人。
+    _sync_account_identity(db, account, s)
     # 记录寄宿/通学状态变更
     new_type = data.get("student_type")
     if new_type and new_type != old_type:
@@ -603,8 +657,10 @@ def delete_student(db: Session, user: User, student_id: int) -> dict:
     # 级联清理：删除该学生全部业务数据（成绩/考勤/表现/提交等），避免孤儿数据
     purge_student_data(db, student_id)
 
-    # 同步删除对应的登录账号（users，通过班级+姓名定位），并清理其头像文件
-    account = get_student_account(db, s.class_id, s.name)
+    # 同步删除对应的登录账号（users，硬外键 `users.student_id` 定位），并清理其头像文件
+    # 🔴 绝不能用「班级 + 姓名」软匹配：学生改名/转班后（update_student 曾不同步账号）
+    # 命中 `.first()` 可能是**同名同学**的账号 ⇒ 删 B 会 purge 掉 A 的成绩与作业（RBT-35）。
+    account = get_account_of_student(db, s)
     avatar_url = account.avatar if account else None
 
     db.delete(s)
@@ -630,7 +686,8 @@ def reset_student_password(db: Session, student_id: int, payload: dict, user: Us
     new_pwd = payload.get("password") or "123456"
     # 弱密码标记首次登录强制改密
     must_change = validate_password_strength(new_pwd) is not None
-    u = get_student_account(db, s.class_id, s.name)
+    # 硬外键定位（RBT-35）：软匹配会在改名/转班后指向同名的另一名学生
+    u = get_account_of_student(db, s)
     if not u:
         u = User(
             username=s.name,
@@ -639,6 +696,7 @@ def reset_student_password(db: Session, student_id: int, payload: dict, user: Us
             role="student",
             school_id=s.school_id,
             class_id=s.class_id,
+            student_id=s.id,
             must_change_password=must_change,
         )
         db.add(u)
@@ -701,7 +759,8 @@ def batch_reset_student_passwords(db: Session, payload, user: User) -> dict:
             failed.append({"id": sid, "reason": e.detail})
             continue
 
-        u = get_student_account(db, s.class_id, s.name)
+        # 硬外键定位（RBT-35），与单个改密同一口径
+        u = get_account_of_student(db, s)
         if not u:
             u = User(
                 username=s.name,
@@ -710,6 +769,7 @@ def batch_reset_student_passwords(db: Session, payload, user: User) -> dict:
                 role="student",
                 school_id=s.school_id,
                 class_id=s.class_id,
+                student_id=s.id,
                 must_change_password=must_change,
             )
             db.add(u)
@@ -737,7 +797,7 @@ def upload_student_avatar(db: Session, user: User, student_id: int, file) -> dic
         db, user, student_id, detail_403="无权为该学生上传头像", operable_first=False
     )
 
-    student_user = get_student_account(db, s.class_id, s.name)
+    student_user = get_account_of_student(db, s)
     if not student_user:
         raise HTTPException(status_code=404, detail="学生账号不存在，请先创建学生档案")
 

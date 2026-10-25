@@ -53,6 +53,11 @@ logger = logging.getLogger("teachhub.homework")
 
 
 # ---------------- 内部辅助 ----------------
+# 优秀作品「互评」评论长度上限。`WorkComment.content` 是 Text（库层无上限），
+# 若不在服务层挡，任意 id + 一兆字符串就能写进库（RBT-34）。
+_WORK_COMMENT_MAX_CHARS = 1000
+
+
 def _check_student_access(assignment: Assignment, user: User):
     if user.role == "student" and assignment.class_id != user.class_id:
         raise HTTPException(status_code=403, detail="无权访问该任务")
@@ -1215,14 +1220,44 @@ def list_excellent(db: Session, page: int, page_size: int, user: User) -> dict:
     return {"items": items, "total": total}
 
 
+def _ensure_excellent_visible(db: Session, e: ExcellentWork, user: User) -> Assignment:
+    """校验该优秀作品对当前用户可见，并返回其所属作业；不可见一律 **404**。
+
+    🔴 为什么必须单独抽出来（2026-10-25 修 RBT-34）：`db.get(ExcellentWork, id)` 只带
+    **租户**维度（同校可见），而 `ExcellentWork.id` 是连续自增主键 —— 少了班级判定，
+    同校学生只要改 URL 里的数字就能遍历全校优秀作品（正文、学生姓名、头像、教师评语、
+    AI 评语全在返回体里）；`add_comment` 更可直接向任意 id 写库。
+
+    口径与 `list_excellent` **逐条对齐**（那里本来就写对了，此处只是把同一判据复用到
+    详情与写路径）：学生＝本班、教师＝自己带的班（班主任 ∪ 科任）、管理员不受限；
+    跨校仍由 ORM 的 `school_id` 注入挡住。
+
+    统一返回 404 而非 403：403 等于确认「这个 id 存在、只是不给你看」，
+    而 `ExcellentWork.id` 可枚举 —— 对越权访问不应泄露存在性。
+    """
+    s = db.get(Submission, e.submission_id)
+    a = db.get(Assignment, s.assignment_id) if s else None
+    if a is None:
+        # 提交/作业已不存在 ⇒ 作品行本身是孤儿，与「不可见」同样处理
+        raise HTTPException(status_code=404, detail="作品不存在")
+    if user.role == "student":
+        if a.class_id != user.class_id:
+            raise HTTPException(status_code=404, detail="作品不存在")
+    elif user.role == "teacher":
+        if a.class_id not in get_teacher_class_ids(db, user.id):
+            raise HTTPException(status_code=404, detail="作品不存在")
+    return a
+
+
 def get_excellent(db: Session, excellent_id: int, user: User) -> dict:
     e = db.get(ExcellentWork, excellent_id)
     if not e:
         raise HTTPException(status_code=404, detail="作品不存在")
+    # 班级可见性（RBT-34）：下面的返回体含学生姓名/头像、教师评语与 AI 评语全文
+    a = _ensure_excellent_visible(db, e, user)
     s = db.get(Submission, e.submission_id)
-    a = db.get(Assignment, s.assignment_id) if s else None
-    stu = db.get(Student, s.student_id) if s else None
-    cls = db.get(Classroom, a.class_id) if a else None
+    stu = db.get(Student, s.student_id)
+    cls = db.get(Classroom, a.class_id)
     comments = (
         db.query(WorkComment)
         .filter(WorkComment.excellent_id == excellent_id)
@@ -1280,9 +1315,16 @@ def add_comment(db: Session, excellent_id: int, payload: dict, user: User) -> di
     ew = db.get(ExcellentWork, excellent_id)
     if not ew:
         raise HTTPException(status_code=404, detail="作品不存在")
+    # 班级可见性（RBT-34）：写路径同样要判，否则 POST 任意 id 就能跨班写评论
+    _ensure_excellent_visible(db, ew, user)
     content = (payload.get("content") or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="评论内容不能为空")
+    if len(content) > _WORK_COMMENT_MAX_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"评论内容过长（最多 {_WORK_COMMENT_MAX_CHARS} 字）",
+        )
     c = WorkComment(
         excellent_id=excellent_id,
         user_id=user.id,

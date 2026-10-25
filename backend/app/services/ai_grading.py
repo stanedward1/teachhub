@@ -453,6 +453,14 @@ _MIN_SUBMISSION_KEEP_CHARS = 1000
 _REQ_TRUNCATED_MARK = "\n（任务附件过长，此处已截断）"
 _ATT_TRUNCATED_MARK = "\n（⚠️ 学生附件过长，此处已截断；未显示的部分未参与批改）"
 
+# 作业「说明 / 正文」在输入预算中的**上限比例**（RBT-36）。它们是背景资料，本身可能是
+# 一整份任务单——教师把 2 万字任务单粘进「说明」是常规操作。此前这两段既不参与预算、
+# 也不被裁剪，消息骨架直接超过 AI_MAX_INPUT_CHARS，最后一道「从尾部截断」兜底落在
+# 学生正文之前 ⇒ 学生作答整段消失（正是 2026-09-24 那次线上误判的成因）。
+_HEAD_BUDGET_RATIO = 0.4
+# 正文（学生作答本身）被压缩时插入的标记
+_BODY_TRUNCATED_MARK = "\n（⚠️ 提交正文过长，此处已截断；未显示的部分未参与批改）"
+
 # 学生「在任务单模板上作答」时，提交附件会包含大量与【任务附件】**逐字相同**的模板文字。
 # 原样送模型有两个后果（2026-09-24 线上问题）：
 #   ① 重复的模板段落稀释了学生自己的作答，模型倾向于概括成「附件内容与任务单原文完全一致」，
@@ -616,6 +624,37 @@ def _extract_assignment_materials(
     return "\n\n".join(texts), images, notes
 
 
+def _clip_assignment_head(assignment, budget: int) -> tuple[str, str, int]:
+    """把「作业说明 / 正文」裁到 ``budget`` 字符以内，返回 ``(说明, 正文, 被截掉的字符数)``。
+
+    🔴 为什么必须裁（2026-10-25 修 RBT-36 / RDB-25）：这两段此前**既不参与预算、
+    也不被裁剪**，于是「教师把一整份任务单粘进说明」这一常规操作会让消息骨架本身
+    超过 ``AI_MAX_INPUT_CHARS``；压缩任务/学生附件的两级兜底因此全部失效，
+    最终落到「从整串尾部截断」——而学生正文正好排在骨架之后 ⇒ **作答整段消失**，
+    模型只看到模板原文，判成「附件内容与任务单原文完全一致」。
+
+    分配策略：两段都非空时用**水位法**（先各占一半，剩余额度让给对方），
+    避免其中一段独吞配额；只有一段时它独占。
+    """
+    if assignment is None:
+        return "", "", 0
+    desc = assignment.description or ""
+    cont = assignment.content or ""
+    total = len(desc) + len(cont)
+    if total <= budget:
+        return desc, cont, 0
+    budget = max(0, budget)
+    if not desc:
+        return "", cont[:budget], total - budget
+    if not cont:
+        return desc[:budget], "", total - budget
+    half = budget // 2
+    d_keep = min(len(desc), half)
+    c_keep = min(len(cont), max(0, budget - d_keep))
+    d_keep = min(len(desc), max(0, budget - c_keep))
+    return desc[:d_keep], cont[:c_keep], total - d_keep - c_keep
+
+
 def _build_messages(
     assignment: Assignment | None,
     content_text: str,
@@ -642,11 +681,22 @@ def _build_messages(
     供调用方落进 `attachment_used` 给教师看 —— **截断必须对教师可见**，
     否则教师会把「内容没送到」误当成「学生没做」。
 
-    🔴 预算分配原则（2026-09-24 修）：**任务附件先让位，学生附件最后才动**。
-    此前是「整体拼完再 `text[:AI_MAX_INPUT_CHARS]` 从尾部砍」，而学生附件恰好排在消息最末；
-    学生又习惯把答案写在任务单模板的**末尾**、模板原文占了绝大部分篇幅 ——
-    于是一刀砍掉的正是学生的作答内容，模型只看到模板原文，判成
+    🔴 预算分配原则（2026-09-24 首修，2026-10-25 补全）：**作业说明/正文先按比例封顶，
+    然后任务附件让位，学生附件次之，学生正文最后才动，且任何截断都必须写进
+    ``budget_notes``**。
+
+    历史教训（两次同一现象）：学生习惯把答案写在任务单模板的**末尾**，模板原文却占绝大
+    篇幅，于是「从整串尾部截一刀」砍掉的永远是作答内容，模型只看到模板原文，判成
     「附件内容与任务单原文完全一致」（线上被误读为「学生直接交了任务单」）。
+    2026-09-24 只把「任务附件 / 学生附件」纳入分段预算，**作业说明与正文（`head_parts`）
+    仍不参与**——教师把一整份任务单粘进「说明」时，骨架本身就超限，分级压缩全部失效，
+    最终仍从尾部砍，学生作答再次整段消失且 `budget_notes` 为空（RBT-36 / RDB-25）。
+    现在四级预算依次为：
+
+    1. 作业说明/正文 → 封顶 ``_HEAD_BUDGET_RATIO``；
+    2. 任务附件 → 让学生附件先放；
+    3. 学生附件 → 保底 ``_MIN_SUBMISSION_KEEP_CHARS``；
+    4. 学生正文 → 只有它自己超限时才削尾部，并如实上报截断量。
     """
     limit = settings.AI_MAX_INPUT_CHARS
     body = content_text.strip() if content_text and content_text.strip() else ""
@@ -655,13 +705,23 @@ def _build_messages(
         and ((assignment.description or "").strip() or (assignment.content or "").strip())
     )
 
+    # 作业「说明 / 正文」先按比例封顶：不封顶时它们会把整条消息顶过上限，
+    # 让后面几级预算全部失效（RBT-36）。
+    head_desc, head_content, head_cut = _clip_assignment_head(
+        assignment, int(limit * _HEAD_BUDGET_RATIO)
+    )
+    if head_cut and budget_notes is not None:
+        budget_notes.append(
+            f"作业说明/正文超出输入预算，已截断 {head_cut} 字符（未显示的部分未参与批改）"
+        )
+
     head_parts: list[str] = ["【作业要求】"]
     if assignment is not None:
         head_parts.append(f"标题：{assignment.title}")
-        if assignment.description:
-            head_parts.append(f"说明：{assignment.description}")
-        if assignment.content:
-            head_parts.append(f"正文：\n{assignment.content}")
+        if head_desc:
+            head_parts.append(f"说明：{head_desc}")
+        if head_content:
+            head_parts.append(f"正文：\n{head_content}")
     else:
         head_parts.append("（作业信息缺失）")
 
@@ -756,9 +816,33 @@ def _build_messages(
             )
         text = render(req_text, att_text)
 
-    # 最后手段：以上都无效（如正文单段就超限）时，只能整体截断
+    # 最后手段：走到这里只剩「学生正文自己就超限」这一种可能（说明/正文已封顶、
+    # 任务附件与学生附件均已压到 0）。此时**削正文尾部**，而不是从整串尾部砍 ——
+    # 后者会把正文整段切掉（RBT-36 的原始现象），且不会留下任何提示。
     if len(text) > limit:
-        text = text[:limit] + "\n（内容过长已截断）"
+        body_full = len(body)
+        # 预留截断标记自身的长度，避免「削完仍超限」再来一轮
+        cut = min(body_full, len(text) - limit + len(_BODY_TRUNCATED_MARK))
+        body = body[: body_full - cut] + _BODY_TRUNCATED_MARK
+        if budget_notes is not None:
+            budget_notes.append(
+                f"学生提交内容超出输入预算，已截断 {cut} 字符（未显示的部分未参与批改）"
+            )
+        text = render(req_text, att_text)
+
+    # 终极兜底：连正文都清零仍超限（说明/正文 + 各类标记本身超限，理论上不会发生）。
+    # 这一步必须留痕 —— 「截断对学生评价的影响」不允许静默发生。
+    # ⚠️ 截到 ``limit - len(标记)``：旧写法 ``text[:limit] + 标记`` 会把结果顶到
+    # ``limit + 标记长度``，正是这条兜底自己越界的原因之一。
+    if len(text) > limit:
+        cut = len(text) - limit
+        mark = "\n（内容过长已截断）"
+        keep = max(0, limit - len(mark))
+        text = text[:keep] + mark
+        if budget_notes is not None:
+            budget_notes.append(
+                f"整条批改消息仍超出输入预算，已从尾部再截断 {cut} 字符（未显示的部分未参与批改）"
+            )
 
     if images:
         content: list[dict] = [{"type": "text", "text": text}]

@@ -247,12 +247,13 @@ def filter_students_by_teacher(db: Session, teacher_id: int, is_admin: bool):
 def get_student_account(db: Session, class_id: int, name: str) -> User | None:
     """通过「班级 + 姓名」定位学生登录账号（role=student），不存在返回 None。
 
-    ⚠️ 本函数**保持软匹配不变**：它的入参就是 ``(class_id, name)``，语义即
-    「给我这个班里叫这个名字的账号」，不存在可用于改写的 ``student_id`` ——
-    调用方手里只有班级与姓名，没有档案 id。改为硬外键需要一个额外的「档案 → 账号」
-    入口函数（见 ``get_student_avatar`` 的硬外键分支），不在本函数职责内。
-    因此这里保留原样，仅延续既有 ``.first()`` 语义（该项目账号唯一性由
-    ``users.username_scope`` 复合唯一约束在库层保证，见 models/user.py）。
+    ⚠️ **仅用于「还没有 Student 档案对象」的入口**（如建档前查重、导入查重、注册查重）。
+    凡是调用方手里已有 ``Student`` 的地方，一律改用 ``get_account_of_student`` ——
+    软匹配会在改名/转班后命中错人（2026-10-25 修 RBT-35：删 B 的账号删掉了 A 的、
+    重置 B 的密码改掉了 A 的）。
+
+    本函数本身仍保留软匹配语义：入参只有班级与姓名，没有可用于改写的 ``student_id``。
+    账号唯一性由 ``users.username_scope`` 复合唯一约束在库层保证（见 models/user.py）。
     """
     if not class_id or not name:
         return None
@@ -261,6 +262,35 @@ def get_student_account(db: Session, class_id: int, name: str) -> User | None:
         .filter(User.role == "student", User.class_id == class_id, User.name == name)
         .first()
     )
+
+
+def get_account_of_student(db: Session, student: Student) -> User | None:
+    """由**学生档案**定位其登录账号：硬外键优先，软匹配仅作历史数据兜底。
+
+    🔴 这是「档案 → 账号」的**唯一正路**（2026-10-25 修 RBT-35）。顺序：
+
+    1. ``users.student_id == student.id`` —— 唯一、且不受改名/同班同名影响；
+    2. 回落 ``(class_id, name)`` 软匹配，覆盖迁移期尚未回填 ``student_id`` 的历史行；
+    3. 回落命中且该账号 ``student_id`` 为空时**顺手回填**（调用方随后都会 commit），
+       下一次定位就命中硬外键 —— 无需额外的数据修复脚本，软匹配会随使用逐步收敛掉。
+
+    为什么不覆盖已有 ``student_id``：非空但指向别的档案属于**脏数据**，静默改写会把
+    「账号挂错人」变成看不出发生过的事；保留它，交由 ``get_student_by_account`` 的
+    租户校验与审计日志暴露。
+    """
+    if not student:
+        return None
+    u = (
+        db.query(User)
+        .filter(User.role == "student", User.student_id == student.id)
+        .first()
+    )
+    if u is not None:
+        return u
+    u = get_student_account(db, student.class_id, student.name)
+    if u is not None and u.student_id is None:
+        u.student_id = student.id
+    return u
 
 
 def get_student_by_account(db: Session, user: User) -> Student | None:

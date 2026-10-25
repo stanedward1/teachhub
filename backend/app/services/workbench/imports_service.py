@@ -15,7 +15,7 @@ from app.models import (
 )
 from app.pagination import paginate
 from app.permissions import (
-    get_student_account,
+    get_account_of_student,
     get_teacher_class_ids,
     is_any_admin,
 )
@@ -115,7 +115,7 @@ def import_students(db: Session, user, file) -> dict:
         if first_school[0] is None:
             first_school[0] = class_school.get(class_id)
 
-        session.add(Student(
+        student = Student(
             student_no=data["student_no"],
             name=data["name"],
             gender=data["gender"],
@@ -126,10 +126,12 @@ def import_students(db: Session, user, file) -> dict:
             parent_name=data["parent_name"],
             parent_phone=data["parent_phone"],
             student_type=data["student_type"],
-        ))
+        )
+        session.add(student)
         session.flush()
 
-        exists_user = get_student_account(session, class_id, data["name"])
+        # 定位走硬外键（RBT-35）；新建账号时回填 student_id，否则此后只剩软匹配可用
+        exists_user = get_account_of_student(session, student)
         if not exists_user:
             session.add(User(
                 username=data["name"],
@@ -138,6 +140,7 @@ def import_students(db: Session, user, file) -> dict:
                 role="student",
                 school_id=class_school.get(class_id),
                 class_id=class_id,
+                student_id=student.id,
             ))
         return ROW_OK, []
 

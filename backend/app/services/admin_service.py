@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import audit
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
-from app.constants import SCORE_BANDS
+from app.constants import SCORE_BANDS, segment_index
 from app.permissions import (
     ensure_same_school,
     get_head_class_ids,
@@ -59,18 +59,26 @@ def _score_distribution(values) -> dict:
     「分数段分布」、学情评语档位共用——**不要在此另设阈值**（历史三套口径冲突见
     `docs/REVIEW-2026-10-17-simplicity.md` S-01）。
 
-    展示标签形如 ``优秀(90-100)``：前端看板 `Dashboard.vue` 以 `Object.entries`
+    🔴 归段一律调用 ``segment_index()``，**不得自己写区间判断**（2026-10-25 修 RBT-37）：
+    此前这里按 ``band["min"] <= x <= band["max"]`` 统计，而 `SCORE_BANDS` 只覆盖
+    0-100 的闭区间，于是 `105` / `120`（`Score.score` 允许到 150）与 `89.5`（整数缝）
+    三条分数**同时从看板消失**，五段计数之和小于样本数、百分比之和小于 100%。
+    现在只有一份判定实现，作业侧与看板侧对同一分数必然同档。
+
+    展示标签形如 ``优秀(90 分及以上)``：前端看板 `Dashboard.vue` 以 `Object.entries`
     遍历本字典直接作图表项名，故标签由后端决定、前端零硬编码。
     """
     total = len(values) or 1
-    dist = {}
-    for band in SCORE_BANDS:
-        cnt = sum(1 for x in values if band["min"] <= x <= band["max"])
-        dist[f"{band['name']}({band['label']})"] = {
-            "count": cnt,
-            "percent": round(cnt / total * 100, 1),
+    counts = [0] * len(SCORE_BANDS)
+    for x in values:
+        counts[segment_index(x)] += 1
+    return {
+        f"{band['name']}({band['label']})": {
+            "count": counts[i],
+            "percent": round(counts[i] / total * 100, 1),
         }
-    return dist
+        for i, band in enumerate(SCORE_BANDS)
+    }
 
 
 def _teachers_class_map(db: Session, teacher_ids):
@@ -350,11 +358,12 @@ def create_user(db: Session, payload: dict, user: User) -> dict:
     # 学生账号必须同步建立学生档案，否则教师后台花名册查不到
     if role == "student" and u.class_id:
         cls = db.get(Classroom, u.class_id)
-        if cls and not db.query(Student).filter(
-            Student.class_id == u.class_id, Student.name == name
-        ).first():
-            db.add(
-                Student(
+        if cls:
+            stu = db.query(Student).filter(
+                Student.class_id == u.class_id, Student.name == name
+            ).first()
+            if stu is None:
+                stu = Student(
                     school_id=cls.school_id,
                     class_id=u.class_id,
                     name=name,
@@ -363,7 +372,12 @@ def create_user(db: Session, payload: dict, user: User) -> dict:
                     student_type="day",
                     status="active",
                 )
-            )
+                db.add(stu)
+                db.flush()
+            # 🔴 账号 → 档案的硬外键必须在此回填（RBT-35）：此前的「建号 + 建档案」只写了两行
+            # 数据、没有连线，此后删学生/重置密码只能靠「班级 + 姓名」软匹配，
+            # 改名或转班就会删错账号、改错密码。
+            u.student_id = stu.id
     audit(db, user, "create_user", target=f"{u.username} ({u.name})", detail=f"role={role}")
     db.commit()
     db.refresh(u)
