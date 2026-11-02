@@ -66,6 +66,8 @@ export const homeworkApi = {
   aiGradeAssignment: (id) => request.post(`/api/homework/assignments/${id}/ai-grade`),
   // AI 批改进度（轮询用）：返回 {total,success,failed,pending,ungraded,done,finished}
   aiGradeProgress: (id) => request.get(`/api/homework/assignments/${id}/ai-grade/progress`),
+  // 任务 AI 综合分析（基于已提交内容 + AI 批改结果，每次消耗 1 次 AI 额度）
+  analyzeAssignment: (id) => request.post(`/api/homework/assignments/${id}/ai-analysis`),
   aiGradeSubmission: (id) => request.post(`/api/homework/submissions/${id}/ai-grade`),
   addSubmissionComment: (id, data) =>
     request.post(`/api/homework/submissions/${id}/comments`, data),

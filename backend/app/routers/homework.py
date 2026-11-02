@@ -14,6 +14,7 @@ from app.deps import (
     require_teacher_only,
 )
 from app.schemas import AiCompanionAsk, SubmissionCommentCreate, SubmissionCreate
+from app.services import ai_analysis as ai_analysis_service
 from app.services import ai_companion, ai_companion_teacher, homework_service
 
 router = APIRouter(prefix="/api/homework", tags=["作业提交平台"])
@@ -91,6 +92,16 @@ def score_distribution(
 ):
     """分数段分布：各分数段人数 + 已评分学生（含有效分）+ 未交学生单列（教师/管理员可用）。"""
     return homework_service.score_distribution(db, assignment_id, user)
+
+
+@router.post("/assignments/{assignment_id}/ai-analysis")
+def ai_analysis(
+    assignment_id: int,
+    user=Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """任务 AI 综合分析：基于已提交内容与 AI 批改结果给出班级层面的综合评价（每次消耗 1 次 AI 额度）。"""
+    return ai_analysis_service.analyze_assignment(db, assignment_id, user)
 
 
 @router.post("/assignments/{assignment_id}/ai-grade")

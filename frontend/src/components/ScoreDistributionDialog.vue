@@ -13,7 +13,7 @@
       </div>
 
       <template v-else-if="distribution">
-        <!-- 汇总条 -->
+        <!-- 汇总条（左侧统计 + 右侧「AI 综合分析」入口） -->
         <div class="sdd-summary">
           <span>应提交 <b>{{ distribution.total }}</b> 人</span>
           <span class="dot">·</span>
@@ -22,6 +22,43 @@
           <span>未评分 <b class="warn-text">{{ distribution.unscored_count }}</b> 人</span>
           <span class="dot">·</span>
           <span>未交 <b class="danger-text">{{ distribution.unsubmitted_count }}</b> 人</span>
+          <!-- 零提交时禁用：后端同样会 400 短路，前端提前挡住是为了不让人白点一次 -->
+          <el-button
+            class="sdd-analysis-btn"
+            type="primary"
+            plain
+            size="small"
+            :loading="analyzing"
+            :disabled="analysisDisabled"
+            :title="analysisHint"
+            @click="runAnalysis"
+          >
+            {{ analysis ? '重新分析' : 'AI 综合分析' }}
+          </el-button>
+        </div>
+
+        <!-- AI 综合分析结果（班级层面归纳；逐生分数仍以下方明细表为准） -->
+        <div v-if="analysis" class="sdd-analysis">
+          <div class="sdd-analysis-head">
+            <span class="sdd-analysis-title">AI 综合分析</span>
+            <span class="sdd-analysis-time">{{ formatGeneratedAt(analysis.generated_at) }}</span>
+          </div>
+          <div class="sdd-analysis-chips">
+            <span v-for="chip in analysisChips" :key="chip.label" class="sdd-analysis-chip">
+              {{ chip.label }} <b>{{ chip.value }}</b>
+            </span>
+          </div>
+          <Markdown :content="analysis.analysis" />
+          <el-collapse v-if="hasAnalysisNotes" class="sdd-analysis-more">
+            <el-collapse-item title="参与分析的数据" name="data">
+              <div v-if="analysis.omitted_count" class="sdd-analysis-omit">
+                本次有 {{ analysis.omitted_count }} 名学生的明细未进入输入预算。
+              </div>
+              <ul class="sdd-analysis-notes">
+                <li v-for="(note, idx) in analysis.budget_notes || []" :key="idx">{{ note }}</li>
+              </ul>
+            </el-collapse-item>
+          </el-collapse>
         </div>
 
         <!-- 分类筛选：全部 / 五段 / 未评分 / 未交（点击只展示对应学生） -->
@@ -124,16 +161,27 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import { homeworkApi } from '../api'
+import Markdown from './Markdown.vue'
 
 /**
  * ScoreDistributionDialog — 作业「分数段分布」公共弹窗（列表页 / 审阅页共用）。
  *
  * 能力：汇总（应提交 / 已提交 / 未评分 / 未交）+ 分类筛选（全部 / 五段 / 未评分 / 未交）
- * + 双评分明细（教师评分 / AI 评分，缺失单元格显示灰「—」，不做整列隐藏）+ 未交单列分区。
+ * + 双评分明细（教师评分 / AI 评分，缺失单元格显示灰「—」，不做整列隐藏）+ 未交单列分区
+ * + **AI 综合分析**（一次调用给出班级层面的总体情况 / 亮点 / 共性问题 / 教学建议）。
  *
  * 数据自持：弹窗打开（或 assignmentId 变化）时按 id 拉取 `score-distribution`，
  * 分类切换**纯前端筛选**、不重新请求（单作业学生量通常 ≤ 百级）。
+ *
+ * 为什么「AI 综合分析」要二次确认：它和 AI 批改**共用同一个成本池**，一次点击就是
+ * 1~2 次真实外呼费用（模型输出被截断时后端会重试一次并补记额度）。误点即花钱，所以
+ * 首次分析、重新分析都要确认（文案区分，避免用户以为「重新分析」是免费的本地重算）。
+ * 零提交时按钮直接禁用 —— 后端也会 400 短路，前端提前挡住只是少一次无意义的往返。
+ *
+ * 为什么关闭弹窗/切换任务就清空分析：分析结果绑定了具体任务与生成时刻，若残留，下一次
+ * 打开别的任务时会看到上一个任务的结论，比「没有结果」危险得多。
  *
  * 明细表「姓名」可点击（仅已提交学生）→ 跳转该生提交详情页
  * （`/admin/homework/{assignmentId}/submissions/{submissionId}`，即「任务完成情况」）；
@@ -168,6 +216,10 @@ const dialogTitle = computed(() =>
 const distribution = ref(null)
 const loading = ref(false)
 const error = ref(false)
+/** AI 综合分析结果（null = 本次打开还没生成过；关闭弹窗/切换任务时清空） */
+const analysis = ref(null)
+/** 分析请求进行中（按钮 loading；请求期间禁止重复点击） */
+const analyzing = ref(false)
 /** 当前分类：'all' | 段 key | 'unscored' | 'unsubmitted' */
 const activeFilter = ref('all')
 
@@ -226,6 +278,84 @@ const emptyText = computed(() =>
   activeFilter.value === 'unsubmitted' ? '全部已提交，无未交学生' : '该分类暂无学生'
 )
 
+/** 分数/百分比文本：后端用 null 表示「无数据」，这里统一显示「—」（0 是合法值，不能隐藏） */
+function metricText(v, suffix = '') {
+  return v === null || v === undefined ? '—' : `${v}${suffix}`
+}
+
+/** 生成时间：ISO 字符串 → 「YYYY-MM-DD HH:mm」（不引入日期库，够用即可） */
+function formatGeneratedAt(v) {
+  if (!v) return ''
+  return String(v).replace('T', ' ').slice(0, 16)
+}
+
+/** 分析结果顶部的统计 chips（数字直接取后端 stats，前端不做任何再计算） */
+const analysisChips = computed(() => {
+  const s = analysis.value && analysis.value.stats
+  if (!s) return []
+  return [
+    { label: '教师均分', value: metricText(s.avg_teacher_score) },
+    { label: 'AI 均分', value: metricText(s.avg_ai_score) },
+    { label: 'AI 覆盖率', value: metricText(s.ai_reviewed_pct, '%') },
+  ]
+})
+
+/** 「参与分析的数据」折叠区：没有 omitted_count 也没有说明时不渲染（避免空折叠面板） */
+const hasAnalysisNotes = computed(() => {
+  const a = analysis.value
+  if (!a) return false
+  return Boolean(a.omitted_count) || (a.budget_notes || []).length > 0
+})
+
+/** 零提交时禁用分析按钮：没有可分析的内容，点了只会 400 */
+const analysisDisabled = computed(
+  () => !distribution.value || distribution.value.submitted_count === 0
+)
+
+const analysisHint = computed(() =>
+  analysisDisabled.value
+    ? '该任务还没有学生提交，暂无法生成分析'
+    : '基于已提交内容与 AI 批改结果生成班级综合评价（每次消耗 1~2 次 AI 额度）'
+)
+
+/**
+ * 触发 AI 综合分析（后端一次调用给出班级层面评价）。
+ *
+ * 必须先二次确认再发请求：额度是真金白银，取消时**一个请求都不发**。
+ * 文案写「1~2 次」不是保守说法：模型输出被截断时后端会自动重试一次并补记额度
+ * （见 `ai_grading._call_model` 的 `_record_extra_grade_call`），所以一次点击最多扣 2 次。
+ * 结果按「发起时的 assignmentId」校对后才落盘 —— 请求期间的切换任务不能让旧结果
+ * 显示在新任务下。
+ */
+async function runAnalysis() {
+  if (!props.assignmentId || analyzing.value || analysisDisabled.value) return
+  const confirmText = analysis.value
+    ? '重新分析将再次消耗 1~2 次 AI 额度，是否继续？'
+    : '本次分析将消耗 1 次 AI 调用额度（模型输出被截断时会自动重试，最多 2 次），是否继续？'
+  try {
+    await ElMessageBox.confirm(confirmText, 'AI 综合分析', { type: 'info' })
+  } catch (e) {
+    return // 用户取消：不发请求
+  }
+  const targetId = props.assignmentId
+  analyzing.value = true
+  try {
+    const result = await homeworkApi.analyzeAssignment(targetId)
+    // 期间切换了任务/关闭了弹窗 ⇒ 丢弃本次结果（错误提示由全局拦截器负责）
+    if (String(props.assignmentId) === String(targetId)) analysis.value = result
+  } catch (e) {
+    // 错误交给全局拦截器提示，这里只保证按钮 loading 复位
+  } finally {
+    analyzing.value = false
+  }
+}
+
+/** 清空分析结果与进行中状态（关闭弹窗 / 切换任务时必须调用） */
+function resetAnalysis() {
+  analysis.value = null
+  analyzing.value = false
+}
+
 async function load() {
   if (!props.assignmentId) return
   loading.value = true
@@ -241,10 +371,11 @@ async function load() {
   }
 }
 
-// 打开弹窗（或切换任务）时加载；关闭时不动作
+// 打开弹窗（或切换任务）时加载；关闭时清空分析结果 —— 残留会把 A 任务的结论显示在 B 任务下
 watch(
   () => [props.modelValue, props.assignmentId],
   ([open]) => {
+    resetAnalysis()
     if (open) load()
   }
 )
@@ -261,9 +392,71 @@ watch(
   color: #909399;
 }
 .sdd-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 8px;
   font-size: 14px;
   color: #606266;
   margin-bottom: 14px;
+}
+.sdd-analysis-btn {
+  margin-left: auto;
+}
+.sdd-analysis {
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  background: #f8fafc;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+}
+.sdd-analysis-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.sdd-analysis-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+.sdd-analysis-time {
+  font-size: 12px;
+  color: #9ca3af;
+}
+.sdd-analysis-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.sdd-analysis-chip {
+  padding: 3px 10px;
+  font-size: 12px;
+  color: #606266;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 12px;
+}
+.sdd-analysis-chip b {
+  color: var(--el-color-primary);
+}
+.sdd-analysis-more {
+  margin-top: 10px;
+  --el-collapse-header-bg-color: transparent;
+  --el-collapse-content-bg-color: transparent;
+}
+.sdd-analysis-omit {
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--el-color-warning);
+}
+.sdd-analysis-notes {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #909399;
 }
 .sdd-summary b {
   color: #303133;

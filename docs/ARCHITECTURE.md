@@ -94,6 +94,7 @@ teachhub/
 │   │   │   ├── auth_service.py / students_service.py / classlog_service.py / homework_service.py / admin_service.py
 │   │   │   ├── mobile_service.py / meta_service.py / attendance_service.py / uploads_service.py
 │   │   │   ├── ai_client.py / ai_attachments.py / ai_image.py / ai_grading.py / ai_admin_service.py  # AI 批改：模型客户端 / 附件解析 / 图片管线（内容嗅探·缩放·EXIF）/ 批改调度与降级 / 超管凭证与开关
+│   │   │   ├── ai_analysis.py  # 任务分数分布「AI 综合分析」：复用 score_distribution 取数 + ai_grading 的凭证/双池额度/_call_model，只读出班级综合评价（不写批改结果、不落缓存）
 │   │   │   ├── ai_companion.py / ai_companion_teacher.py  # AI 学伴：学生问答链路（上下文组装 + 模型调用 + V1 启发式护栏 + 落库 + **平台池四原语 + 每生配额三原语 + 校池原语（三闸：每生→学校→平台）**）/ 教师侧**只读**查询（本班会话列表 + 单会话详情 + 审计）
 │   │   │   └── workbench/     #   工作台子包：_common.py + scores/leaves/communications/resources/exams/seats/imports/profile/reports_service.py
 │   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
@@ -347,6 +348,7 @@ teachhub/
 | 可观测性 | 自研中间件 + `/metrics`，零第三方依赖 | 单实例部署零成本接入 Prometheus；多副本再换共享计数 |
 | AI 凭证存储 | 专用 `ai_credentials` 表（**无 `school_id`**） | 绕过「塞进 `settings`」的三个坑：明文返回 / 值 255 容量 / `NULL` 唯一失效；安全性改由 `require_super_admin` 保证 |
 | AI 批改触发 | **教师手动**（不做学生提交自动批改） | 成本可控、外发时机可控；提交链路上零 AI 调用，AI 不可用不影响交作业 |
+| AI 综合分析 | **同步阻塞一次外呼** + **双池各 1 次** + 摘要硬预算（`AI_MAX_INPUT_CHARS`，系统提示也计入） | 教师在「分数分布」里当场要结论，不值得为一次调用引入线程池与轮询；与批改共用成本池，避免出现「第二个不受管的口子」。数据摘要而非全文：全班提交原文必然超预算，按五个分数段**轮转抽样**比「取前 N 个」更有代表性，跳过的学生数必须回传给教师看 |
 | AI 学伴调用 | **同步阻塞**（学生当场等回答，后端超时 25s < 前端 axios 30s）+ **双额度闸门（平台池 + 每生配额）** + **启发式护栏** | 与批改的「异步线程池 + 投递即返回」范式不同：学生需即时反馈，故同步等待并压短超时留 5s 缓冲；额度用**两张独立表**：平台池 `ai_usage_daily_companion`（成本刹车）+ 每生配额 `ai_companion_usage_daily_student`（公平刹车，唯一约束 `(day, student_id)`），**叠加生效、互不挤占、各自行锁互不阻塞**；护栏为 system prompt 引导准则 + V1 **启发式**长代码块拦截（**非保证**，Hit/误杀率须抽检建立基线） |
 | 推理模型调用 | **显式关闭思考**（`thinking.type=disabled`） | 思考 token 与正文共用 `max_tokens`，开启会把预算吃光导致正文为空（线上事故）；门控于 `base_url` 含 `deepseek` |
 | 重复内容的成本 | 靠**上游前缀缓存**，不靠「少发」 | 批改无状态，任务附件必然随每份提交重复送入；把稳定内容放消息最前即可命中 DeepSeek 自动前缀缓存（1/10~1/50 计价）。⚠️ 依赖**官方直连端点**，中转/聚合平台返回 `cached_tokens: 0` |
