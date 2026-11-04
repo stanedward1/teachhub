@@ -91,7 +91,7 @@ python -m pytest tests/ -v
 - 新增路由文件（或子包）后需在 `main.py` 中 `include_router`。
 - 平台级全局配置读写统一走 `app/platform_settings.py`（`get_global_setting` / `set_global_setting` / `is_registration_allowed`），**不要**在 router 里直接查 `Setting` 表拼 `school_id IS NULL`。
 - **分层约定（Service Layer）**：业务逻辑与数据访问放 `app/services/`（子域多时按目录组织，实例 `services/workbench/`）；router 只保留装饰器 / 依赖注入 / 参数解析 / 调用 service / 返回。service 函数统一以 `db: Session` 作为第一参数，可抛 `HTTPException` 以逐字保持状态码与中文文案一致；service **不得 import router**（避免循环依赖）。新增 / 改造接口应**同时**改 service + 薄 router，**不要**把业务逻辑写回 router。
-- **分页**：列表接口统一用 `app/pagination.py` 的 `paginate(db, stmt, page, page_size)`（传入未加 `offset/limit` 的 `select()`）；不要再写 `q.count()` + 分页的两次查询。
+- **分页**：列表接口统一用 `app/pagination.py` 的 `paginate(db, stmt, page, page_size)`（传入未加 `offset/limit` 的 `select()`）；不要再写 `q.count()` + 分页的两次查询。**传 `Query` 会直接 `TypeError`**（`paginate` 开头有 `isinstance(stmt, Select)` 断言）——`Query` 恰好也有 `add_columns/offset/limit`，历史上因此「看起来能跑」，实际打 `SADeprecationWarning`，SQLAlchemy 2.1 起报错。
 
 ### 3.2 请求/响应
 
@@ -123,7 +123,7 @@ python -m pytest tests/ -v
 - 确保「迁移链」与「模型 schema」保持一致，避免依赖 `create_all` 兜底而遗漏加列
 - **多租户约束调整**：改唯一约束（如 `settings.key` 全局唯一 → `(school_id, key)` 校内唯一）时，SQLite 不支持 `DROP CONSTRAINT`，需在迁移中**重建表**（新建→拷贝→删除→重命名），参考 `f1a2b3c4d5e6_settings_school_key_unique.py`；MySQL/PostgreSQL 可直接 `drop_constraint` + `create_unique_constraint`。
 - **手动改库须同步 `alembic_version`**：`main.py` 启动自动 `upgrade head`，若先用 SQL 手动改了库再触发迁移会重复执行报错（如 DROP INDEX 1091）。手动改库后需 `UPDATE alembic_version SET version_num='<rev>'` 到对应 revision。
-- **外键删除规则分层**（2026-10-01 实测 `Base.metadata` 逐列统计，合计 **83 个外键**）：**22 个显式 `ondelete="CASCADE"`**（纯从属关系：作业链、AI 学伴链、学生业务链，另含 `refresh_tokens.user_id`）；**2 个显式 `SET NULL`**（`refresh_tokens.school_id`、`users.student_id`）；其余 **59 个未显式设置 `ondelete`**（`teacher_id` / `created_by` / `school_id` / `class_id` 等，依赖 InnoDB 默认行为，**语义等价 RESTRICT**；**显式声明 RESTRICT 恒为 0**）。完整清单见 `docs/ARCHITECTURE.md` §5 与 `docs/ER-DIAGRAM.md`。应用层 `cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序删除作双保险，与 CASCADE 兼容。
+- **外键删除规则分层**（2026-11-03 实测 `Base.metadata` 逐列统计，合计 **83 个外键**）：**22 个显式 `ondelete="CASCADE"`**（纯从属关系：作业链、AI 学伴链、学生业务链，另含 `refresh_tokens.user_id`）；**2 个显式 `SET NULL`**（`refresh_tokens.school_id`、`users.student_id`）；其余 **58 个未显式设置** `ondelete`（`teacher_id` / `created_by` / `school_id` / `class_id` 等，依赖 InnoDB 默认行为，**语义等价 RESTRICT**）；另有 **1 个显式 `ondelete="RESTRICT"`**（`users.class_id` → `classrooms.id`）。完整清单见 `docs/ARCHITECTURE.md` §5 与 `docs/ER-DIAGRAM.md`。应用层 `cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序删除作双保险，与 CASCADE 兼容。
 - **🔴 与 `created_at` 比时间必须用数据库时钟**：本项目时间戳统一由 `server_default=func.now()` 生成（SQLite 为 **UTC**、MySQL 为**库本地时区**），而 Python 的 `date.today()` 取的是**进程本地日期**。两者的时区基准不保证一致（例如 SQLite 下本地 03:20 属于 UTC 前一天），用 `created_at >= 本地今日零点` 会把当天记录整片过滤掉 —— AI 批改的每日限额就曾因此**恒为 0、永不触发**。正确写法是让数据库自己算边界，如 `func.date(Col.created_at) == func.current_date()`（参考 `services/ai_grading.py::today_call_count`）。历史数据 `admin_service.py` 的周统计也有 `date.today()`，改动涉及跨日统计时需一并核对。
 
 ### 3.5 工具函数与辅助

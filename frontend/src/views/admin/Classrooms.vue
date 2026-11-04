@@ -118,7 +118,13 @@
           <el-tag v-else size="small" type="info">科任</el-tag>
           <el-button v-if="!t.is_head" link type="danger" @click="removeTeacher(t)">移除</el-button>
         </div>
-        <div v-if="!classTeacherList.length" class="empty-state">暂无教师</div>
+        <!-- 加载失败必须与「真的没有科任老师」区分开：两者都渲染成空列表时，
+             管理员会以为配置丢了（RBT-77 / RDB-69） -->
+        <div v-if="teacherLoadError" class="empty-state">
+          科任老师信息加载失败
+          <el-button link type="primary" @click="loadClassTeachers">重试</el-button>
+        </div>
+        <div v-else-if="!classTeacherList.length" class="empty-state">暂无教师</div>
       </div>
       <div class="teacher-add">
         <el-select v-model="newTeacherId" filterable placeholder="选择教师" style="flex: 1">
@@ -167,6 +173,8 @@ const form = reactive({
 const teacherDialog = ref(false)
 const currentClass = ref(null)
 const classTeacherList = ref([])
+// 科任老师加载失败态（与「暂无教师」区分）：失败时弹窗里给出重试入口
+const teacherLoadError = ref(false)
 const newTeacherId = ref(null)
 
 onMounted(async () => {
@@ -227,6 +235,7 @@ async function save() {
     dialog.value = false
     load()
   } catch (e) {
+    // 已由全局拦截器提示（request.js 按 HTTP 状态弹 toast），这里再弹就是双弹窗
   } finally {
     saving.value = false
   }
@@ -235,15 +244,23 @@ async function save() {
 function openTeachers(row) {
   currentClass.value = row
   newTeacherId.value = null
+  teacherLoadError.value = false
   teacherDialog.value = true
   loadClassTeachers()
 }
 
 async function loadClassTeachers() {
+  teacherLoadError.value = false
   try {
     const res = await studentApi.classTeachers(currentClass.value.id)
     classTeacherList.value = res.items || []
-  } catch (e) {}
+  } catch (e) {
+    // 🔴 这一处**不能**只吞：失败与「该班没有科任老师」在弹窗里都渲染成空列表，
+    // 管理员会以为配置丢了。其余空 catch 依赖 request.js 拦截器的 toast 即可
+    // （RBT-77 / RDB-69）。
+    classTeacherList.value = []
+    teacherLoadError.value = true
+  }
 }
 
 async function addTeacher() {
@@ -253,7 +270,9 @@ async function addTeacher() {
     ElMessage.success('添加成功')
     newTeacherId.value = null
     loadClassTeachers()
-  } catch (e) {}
+  } catch (e) {
+    // 已由全局拦截器提示（request.js），不重复弹窗
+  }
 }
 
 async function removeTeacher(t) {
@@ -266,7 +285,9 @@ async function removeTeacher(t) {
     await studentApi.removeClassTeacher(currentClass.value.id, t.teacher_id)
     ElMessage.success('已移除')
     loadClassTeachers()
-  } catch (e) {}
+  } catch (e) {
+    // 已由全局拦截器提示（request.js），不重复弹窗
+  }
 }
 </script>
 

@@ -227,6 +227,10 @@ def seed_all():
                     class_id=classroom.id,
                     # 种子账号同样要挂硬外键：「档案 ↔ 账号」不留软匹配（RBT-35）
                     student_id=s.id,
+                    # ⚠️ 种子账号**刻意不置** `must_change_password`：演示口令 123456
+                    # 印在启动日志里，置 True 会把开箱即用的演示流程变成「登录后强制
+                    # 改密」。这是与生产建号口径（`services/student_account.py` 的口令
+                    # 强度自动推导，审计 SMP-24）**有意**的差异，不要「顺手对齐」。
                 )
                 db.add(u)
                 student_users.append(u)
@@ -659,6 +663,8 @@ def seed_all():
                     role="student", school_id=school2.id, class_id=c3.id,
                     # 同上：种子数据也走硬外键（RBT-35）
                     student_id=st.id,
+                    # 同上：种子账号刻意不置 `must_change_password`（演示口令要能用，
+                    # 与生产建号口径的差异是有意的，见上方第一处种子的注释）
                 ))
                 if i <= 2:
                     db.add(Score(

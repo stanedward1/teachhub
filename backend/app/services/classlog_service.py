@@ -54,14 +54,18 @@ from app.utils import stringify_dates, to_dict, normalize_page, parse_date_or_40
 
 
 # ---------------- 内部辅助 ----------------
-def _filter_student_query(db: Session, model, user: User):
-    """教师只能查询自己班级学生的记录；管理员查询全部。均排除退学学生。"""
-    q = db.query(model)
-    # 排除退学学生
-    q = q.filter(model.student_id.in_(active_student_id_query(db)))
-    # 教师班级过滤（复用统一权限过滤逻辑）
-    q, _ = apply_teacher_student_filter(db, user, q, model)
-    return q
+def _filter_student_stmt(db: Session, model, user: User):
+    """教师只能查询自己班级学生的记录；管理员查询全部。均排除退学学生。
+
+    🔴 返回 **``select()`` 而不是 ``Query``**（SMP-53②，2026-11-04）：本函数的 4 个列表
+    调用点都要把语句交给 ``paginate``，而它只接受 ``select()``。旧写法是
+    ``q.order_by(...).statement`` —— 能跑，但把「Query→Select」的绕行留在业务层，
+    后来者照抄就会在 ``homework_service`` 那样直接传 ``Query``（RBT-68）。
+    """
+    stmt = select(model).where(model.student_id.in_(active_student_id_query(db)))
+    # 教师班级过滤（复用统一权限过滤逻辑；该函数对 Select / Query 都成立）
+    stmt, _ = apply_teacher_student_filter(db, user, stmt, model)
+    return stmt
 
 
 def _check_student_permission(db: Session, user: User, student_id: int) -> Student:
@@ -422,17 +426,17 @@ def list_talks(
     user: User,
 ) -> dict:
     page, page_size = normalize_page(page, page_size)
-    q = _filter_student_query(db, Talk, user)
+    stmt = _filter_student_stmt(db, Talk, user)
     if class_id:
-        q, denied = apply_student_class_filter(db, user, q, class_id, Talk)
+        stmt, denied = apply_student_class_filter(db, user, stmt, class_id, Talk)
         if denied:
             return {"items": [], "total": 0}
     if student_id:
         # 教师只能查看自己班级学生的谈心
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
             return {"items": [], "total": 0}
-        q = q.filter(Talk.student_id == student_id)
-    rows, total = paginate(db, q.order_by(Talk.id.desc()).statement, page, page_size)
+        stmt = stmt.where(Talk.student_id == student_id)
+    rows, total = paginate(db, stmt.order_by(Talk.id.desc()), page, page_size)
     return {
         "items": [_serialize_talk(x) for x in serialize_list_with_students(db, rows)],
         "total": total,
@@ -479,17 +483,17 @@ def list_return_records(
     user: User,
 ) -> dict:
     page, page_size = normalize_page(page, page_size)
-    q = _filter_student_query(db, ReturnRecord, user)
+    stmt = _filter_student_stmt(db, ReturnRecord, user)
     if class_id:
-        q, denied = apply_student_class_filter(db, user, q, class_id, ReturnRecord)
+        stmt, denied = apply_student_class_filter(db, user, stmt, class_id, ReturnRecord)
         if denied:
             return {"items": [], "total": 0}
     if student_id:
         # 教师只能查看自己班级学生的返校记录
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
             return {"items": [], "total": 0}
-        q = q.filter(ReturnRecord.student_id == student_id)
-    rows, total = paginate(db, q.order_by(ReturnRecord.id.desc()).statement, page, page_size)
+        stmt = stmt.where(ReturnRecord.student_id == student_id)
+    rows, total = paginate(db, stmt.order_by(ReturnRecord.id.desc()), page, page_size)
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
@@ -535,19 +539,19 @@ def list_performances(
     user: User,
 ) -> dict:
     page, page_size = normalize_page(page, page_size)
-    q = _filter_student_query(db, Performance, user)
+    stmt = _filter_student_stmt(db, Performance, user)
     if class_id:
-        q, denied = apply_student_class_filter(db, user, q, class_id, Performance)
+        stmt, denied = apply_student_class_filter(db, user, stmt, class_id, Performance)
         if denied:
             return {"items": [], "total": 0}
     if student_id:
         # 教师只能查看自己班级学生的表现
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
             return {"items": [], "total": 0}
-        q = q.filter(Performance.student_id == student_id)
+        stmt = stmt.where(Performance.student_id == student_id)
     if ptype:
-        q = q.filter(Performance.ptype == ptype)
-    rows, total = paginate(db, q.order_by(Performance.id.desc()).statement, page, page_size)
+        stmt = stmt.where(Performance.ptype == ptype)
+    rows, total = paginate(db, stmt.order_by(Performance.id.desc()), page, page_size)
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
@@ -574,7 +578,7 @@ def summarize_performances(
     补上「积分看不到合计」的缺口。
 
     **权限与筛选口径完全复用 `list_performances` 的同一条链路**
-    （`_filter_student_query` + `apply_student_class_filter` + 教师班级校验），
+    （`_filter_student_stmt` + `apply_student_class_filter` + 教师班级校验），
     保证「列表看到的记录」与「汇总统计的记录」永远是同一批 ——
     否则会出现列表 12 条、汇总按 20 条算的口径错位。
 
@@ -592,28 +596,32 @@ def summarize_performances(
     本接口跨多个学生聚合，叠加每人 100 的基数会产生无意义数值，
     因此字段刻意命名为 `delta` 而非 `total`，避免与画像口径混淆。
     """
-    q = _filter_student_query(db, Performance, user)
+    stmt = _filter_student_stmt(db, Performance, user)
     # 显式租户过滤（见 docstring 的 ⚠️）
     if user.school_id is not None:
-        q = q.filter(Performance.school_id == user.school_id)
+        stmt = stmt.where(Performance.school_id == user.school_id)
     if class_id:
-        q, denied = apply_student_class_filter(db, user, q, class_id, Performance)
+        stmt, denied = apply_student_class_filter(db, user, stmt, class_id, Performance)
         if denied:
             return dict(_EMPTY_POINT_SUMMARY)
     if student_id:
         # 教师只能查看自己班级学生的表现
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
             return dict(_EMPTY_POINT_SUMMARY)
-        q = q.filter(Performance.student_id == student_id)
+        stmt = stmt.where(Performance.student_id == student_id)
     if ptype:
-        q = q.filter(Performance.ptype == ptype)
+        stmt = stmt.where(Performance.ptype == ptype)
 
-    row = q.with_entities(
-        func.coalesce(func.sum(Performance.points), 0),
-        func.coalesce(func.sum(case((Performance.points > 0, Performance.points), else_=0)), 0),
-        func.coalesce(func.sum(case((Performance.points < 0, Performance.points), else_=0)), 0),
-        func.count(Performance.id),
-        func.count(func.distinct(Performance.student_id)),
+    # `with_only_columns` 保留原 FROM 与全部 where（等同 Query.with_entities），
+    # 聚合结果仍是一次往返、一条 SQL
+    row = db.execute(
+        stmt.with_only_columns(
+            func.coalesce(func.sum(Performance.points), 0),
+            func.coalesce(func.sum(case((Performance.points > 0, Performance.points), else_=0)), 0),
+            func.coalesce(func.sum(case((Performance.points < 0, Performance.points), else_=0)), 0),
+            func.count(Performance.id),
+            func.count(func.distinct(Performance.student_id)),
+        )
     ).one()
     delta, positive, negative, count, student_count = row
     return {
@@ -757,17 +765,17 @@ def list_student_comments(
     user: User,
 ) -> dict:
     page, page_size = normalize_page(page, page_size)
-    q = _filter_student_query(db, StudentComment, user)
+    stmt = _filter_student_stmt(db, StudentComment, user)
     if class_id:
-        q, denied = apply_student_class_filter(db, user, q, class_id, StudentComment)
+        stmt, denied = apply_student_class_filter(db, user, stmt, class_id, StudentComment)
         if denied:
             return {"items": [], "total": 0}
     if student_id:
         # 教师只能查看自己班级学生的评语
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
             return {"items": [], "total": 0}
-        q = q.filter(StudentComment.student_id == student_id)
-    rows, total = paginate(db, q.order_by(StudentComment.id.desc()).statement, page, page_size)
+        stmt = stmt.where(StudentComment.student_id == student_id)
+    rows, total = paginate(db, stmt.order_by(StudentComment.id.desc()), page, page_size)
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 

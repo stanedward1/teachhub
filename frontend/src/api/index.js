@@ -1,5 +1,13 @@
 import request from './request'
 
+// 「任务 AI 综合分析」的等待上限（毫秒）。**必须与后端 `settings.AI_ANALYSIS_TIMEOUT`
+// 满足 `2 × 60 秒 + 余量 < 本值`**：该接口是同步外呼，最坏情况会因输出截断重试一次，
+// 而额度在后端预留时就已 commit（失败不退还）。若前端先放弃，教师看到的只是「请求超时」，
+// 服务端却可能已经算完并扣了 1~2 次额度 —— 于是「超时 → 按提示重试 → 再扣一次」变成
+// 必然路径（2026-11 审计 RBT-51）。全局 axios 超时是 30 秒，远小于这里的耗时，所以
+// 这一个接口必须单独放宽；后端同时用「在途去重」让重试拿到 409 而不是第二次扣费。
+const ANALYSIS_TIMEOUT_MS = 180000
+
 // ============ 通用 CRUD 工厂 ============
 // 各资源接口的四件套只有 URL 段不同，统一由此生成，避免 13 份逐字复制。
 // `methods` 显式声明该资源真实存在的方法：后端没有 update 的资源不要凭空暴露。
@@ -66,8 +74,12 @@ export const homeworkApi = {
   aiGradeAssignment: (id) => request.post(`/api/homework/assignments/${id}/ai-grade`),
   // AI 批改进度（轮询用）：返回 {total,success,failed,pending,ungraded,done,finished}
   aiGradeProgress: (id) => request.get(`/api/homework/assignments/${id}/ai-grade/progress`),
-  // 任务 AI 综合分析（基于已提交内容 + AI 批改结果，每次消耗 1 次 AI 额度）
-  analyzeAssignment: (id) => request.post(`/api/homework/assignments/${id}/ai-analysis`),
+  // 任务 AI 综合分析（基于逐生 AI 批改结论 + 教师评分 + 班级统计，**不含提交原文**；
+  // 每次消耗 1~2 次 AI 额度）。同步接口 ⇒ 单独放宽超时，见 ANALYSIS_TIMEOUT_MS。
+  analyzeAssignment: (id) =>
+    request.post(`/api/homework/assignments/${id}/ai-analysis`, null, {
+      timeout: ANALYSIS_TIMEOUT_MS,
+    }),
   aiGradeSubmission: (id) => request.post(`/api/homework/submissions/${id}/ai-grade`),
   addSubmissionComment: (id, data) =>
     request.post(`/api/homework/submissions/${id}/comments`, data),

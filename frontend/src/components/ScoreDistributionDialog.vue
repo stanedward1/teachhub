@@ -37,6 +37,13 @@
           </el-button>
         </div>
 
+        <!-- 同步接口：教师在弹窗里线性等待。生成中明确告知耗时与「重复点击不重复扣费」，
+             否则 1 分钟的等待会被当成卡死，用户去关弹窗/重复点正是成本失控的来源。 -->
+        <div v-if="analyzing" class="sdd-analysis-running">
+          AI 正在汇总班级数据生成评价，通常需要 20~60 秒（输出被截断时会更久）。生成期间请不要关闭弹窗；
+          重复点击会被后端直接挡下（409），不会重复消耗额度。
+        </div>
+
         <!-- AI 综合分析结果（班级层面归纳；逐生分数仍以下方明细表为准） -->
         <div v-if="analysis" class="sdd-analysis">
           <div class="sdd-analysis-head">
@@ -315,7 +322,7 @@ const analysisDisabled = computed(
 const analysisHint = computed(() =>
   analysisDisabled.value
     ? '该任务还没有学生提交，暂无法生成分析'
-    : '基于已提交内容与 AI 批改结果生成班级综合评价（每次消耗 1~2 次 AI 额度）'
+    : '基于任务要求、班级统计与逐生 AI 批改结论生成班级综合评价（不含提交原文；每次消耗 1~2 次 AI 额度）'
 )
 
 /**
@@ -402,6 +409,16 @@ watch(
 }
 .sdd-analysis-btn {
   margin-left: auto;
+}
+.sdd-analysis-running {
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #606266;
+  background: #f4f8ff;
+  border: 1px dashed var(--el-color-primary-light-5);
+  border-radius: 8px;
 }
 .sdd-analysis {
   padding: 14px 16px;

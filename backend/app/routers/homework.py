@@ -13,7 +13,12 @@ from app.deps import (
     require_teacher,
     require_teacher_only,
 )
-from app.schemas import AiCompanionAsk, SubmissionCommentCreate, SubmissionCreate
+from app.schemas import (
+    AiCompanionAsk,
+    AssignmentListOut,
+    SubmissionCommentCreate,
+    SubmissionCreate,
+)
 from app.services import ai_analysis as ai_analysis_service
 from app.services import ai_companion, ai_companion_teacher, homework_service
 
@@ -21,7 +26,7 @@ router = APIRouter(prefix="/api/homework", tags=["作业提交平台"])
 
 
 # ---------------- 作业任务 ----------------
-@router.get("/assignments")
+@router.get("/assignments", response_model=AssignmentListOut)
 def list_assignments(
     class_id: int | None = None,
     page: int | None = Query(None, ge=1),
@@ -100,7 +105,13 @@ def ai_analysis(
     user=Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
-    """任务 AI 综合分析：基于已提交内容与 AI 批改结果给出班级层面的综合评价（每次消耗 1 次 AI 额度）。"""
+    """任务 AI 综合分析：基于逐生 AI 批改结论 + 教师评分 + 班级统计给出班级层面的综合评价。
+
+    🔴 输入**不含学生提交原文** —— 模型看到的是逐生 AI 评语（那份评语才是读过提交内容的
+    产物）与系统统计好的班级数字，口径见 `ai_analysis` 模块 docstring。
+    同步外呼一次（最坏因截断重试 2 次，上限 `2 × AI_ANALYSIS_TIMEOUT` 秒）；
+    每次发起消耗 1~2 次 AI 额度；同一任务已有分析在跑时 409 且**不扣额度**。
+    """
     return ai_analysis_service.analyze_assignment(db, assignment_id, user)
 
 

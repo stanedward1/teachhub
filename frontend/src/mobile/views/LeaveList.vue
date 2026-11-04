@@ -146,7 +146,9 @@ async function approve(l) {
     await leaveApi.update(l.id, { status: '已销假' })
     showSuccessToast('已销假')
     load()
-  } catch (e) {}
+  } catch (e) {
+    // 已由全局拦截器提示（request.js 在 /m* 路由走 showToast），不重复弹窗
+  }
 }
 
 function openCreate() {
@@ -164,7 +166,9 @@ async function loadPicker() {
   try {
     const res = await mobileApi.students({ keyword: pickKeyword.value })
     pickList.value = res.items || []
-  } catch (e) {}
+  } catch (e) {
+    // 已由全局拦截器提示（request.js 在 /m* 路由走 showToast），不重复弹窗
+  }
 }
 
 function chooseStudent(s) {

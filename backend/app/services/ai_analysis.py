@@ -1,9 +1,36 @@
-"""任务「AI 综合分析」：基于**已提交内容 + 已 AI 批改结果 + 教师评分**给出班级层面的综合评价。
+"""任务「AI 综合分析」：基于**逐生 AI 批改结论 + 教师评分 + 班级统计**给出班级层面的综合评价。
 
 产品语境（教师端「分数段分布」弹窗里的「AI 综合分析」按钮）：教师已经看过逐生分数与逐生
 AI 评语，缺的是**一屏能读完的班级结论** —— 整体水平、主要亮点、共性问题、下一步怎么教。
 逐生批改（`ai_grading.grade_submission`）回答不了这个问题，所以这里单独做一次
 「一个班一次调用」的聚合分析。
+
+🔴 **送给模型的到底是什么（口径别写错，2026-11 审计 RDB-52）**：本模块**从不读学生提交
+原文**。复核方式要**避开自指**（旧写法「grep "Submission" 应为 0 命中」把说明文字自己算了
+进去，永远得到 1 —— RDB-66）：
+
+```
+grep -nE "Submission[.(]" app/services/ai_analysis.py   # 应为 0 命中：无提交正文取值
+grep -n "^from app.models import" app/services/ai_analysis.py
+# 输出里只有 AiGradingResult / Assignment / User，不含任何提交正文模型
+```
+
+输入只有四类：
+
+1. 任务信息：标题 + 说明/正文（封顶 `_HEAD_CLIP_CHARS`）；
+2. 班级统计：全部来自 `homework_service.score_distribution`；
+3. 逐生明细行：姓名｜教师分｜AI 分｜`AiGradingResult.summary/strengths/improvements`；
+4. 固定输出要求。
+
+也就是说，模型看到的「学生写得怎么样」是 **AI 批改时留下的结论**（那份结论才是读过提交
+正文的产物），不是提交本身。所以对外文案只能写「基于逐生 AI 批改结论 + 班级统计」，
+写「基于已提交内容」是不实描述 —— 同一句谎话曾在模块 docstring、路由 docstring、
+README、API.md（两处）、前端 api 注释与按钮提示共六处同时存在。
+
+为什么不直接把提交正文也送进去：输入预算 `AI_MAX_INPUT_CHARS` 是 8000 字符（系统提示
+也计入），一个班按 40 人算平均每人只剩不到 200 字 —— 送正文只会把每人切成一句半，
+既做不出「共性问题」的归纳，又会让单次成本与同步等待时间随班级规模线性膨胀。
+真要「按原文分析班级共性」，正确做法是离线汇总而不是把班级塞进一次同步外呼。
 
 四条设计红线（照抄 `ai_grading` 的既有约定，不要在这里另立口径）：
 
@@ -21,11 +48,24 @@ AI 评语，缺的是**一屏能读完的班级结论** —— 整体水平、�
    （S21）。没有提交就没有可分析的内容，若先扣额度再报错，等于白吃教师一次额度。
    该路径必须**零额度消耗、零计数行写入**。
 
+🔴 **同步外呼的等待上限（2026-11 审计 RBT-51）**：本接口是**同步**的（教师弹窗里线性
+等待），而额度在 `reserve_*` 里就 commit 了（预留即占用）。因此「前端先超时 → 教师按
+提示重试 → 后端仍在跑 → 再扣 1~2 次却拿不到结果」曾经是**必然路径**而非边界情况：前端
+axios 全局 30 秒，后端单次 `AI_REQUEST_TIMEOUT=60`、截断重试后最坏 120 秒。现在两层兜住：
+
+- 单次外呼上限改由 `settings.AI_ANALYSIS_TIMEOUT` 决定，与前端该请求的
+  `ANALYSIS_TIMEOUT_MS = 180000` 满足 ``2 × 60 + 60 < 180`` 的余量关系；
+- **在途去重**（`_acquire_inflight`）：同一任务已有一次分析在跑时，后来的请求直接 409
+  且**不预留额度** —— 覆盖「客户端已放弃、服务端还在算」这段窗口，重试不会二次扣费。
+  锁是**进程内**的（本服务单 worker 启动），跨进程不共享；它的价值是挡住重复点击，
+  不是分布式锁。
+
 输入预算（`settings.AI_MAX_INPUT_CHARS`，**系统提示词也计入**）：班级人多时逐生明细必然
 超限，本模块按「五个分数段轮转取样」把有限预算公平地摊到各个分数段（避免只看到高分段的
 样本就对全班下结论），并把**任何截断**写进 ``budget_notes`` 回给教师 —— 截断不允许静默发生。
 """
 import logging
+import threading
 from datetime import datetime
 
 from fastapi import HTTPException
@@ -48,6 +88,38 @@ from app.services.ai_grading import (
 )
 
 logger = logging.getLogger("teachhub.ai")
+
+# ---------------- 在途去重 ----------------
+#: 正在生成分析的任务 id。**进程内**集合，配合 `_inflight_lock` 使用。
+_inflight: set[int] = set()
+_inflight_lock = threading.Lock()
+
+
+def _acquire_inflight(assignment_id: int) -> None:
+    """占住某任务的分析名额；已在跑则 409。
+
+    🔴 必须放在 `reserve_*` **之前**：额度预留即 commit、失败不退还（S21），一次因
+    「上一次还在跑」而被拒的请求绝不能扣掉教师的额度。它挡的正是「客户端 30 秒就放弃、
+    服务端还在算 60~120 秒」那段窗口 —— 教师此时重试是最自然的动作，也是最容易二次扣费
+    的动作。
+    """
+    with _inflight_lock:
+        if assignment_id in _inflight:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "该任务的分析仍在生成中（上一次请求可能已在你这边超时），"
+                    "本次不会消耗额度，请稍候再查看结果"
+                ),
+            )
+        _inflight.add(assignment_id)
+
+
+def _release_inflight(assignment_id: int) -> None:
+    """释放名额。必须放在 ``finally`` 里：任何异常路径漏释放都会把该任务永久锁死。"""
+    with _inflight_lock:
+        _inflight.discard(assignment_id)
+
 
 # ---------------- 提示词 ----------------
 # 系统提示计入 `AI_MAX_INPUT_CHARS`，所以写得紧一点：只保留「不许编数字 / 不许罗列逐生
@@ -411,52 +483,22 @@ def _stats_from_distribution(distribution: dict) -> dict:
     }
 
 
-def analyze_assignment(db: Session, assignment_id: int, user: User) -> dict:
-    """生成某任务（某班）的 AI 综合分析。**每次调用消耗 1 次 AI 额度**。
+def _run_analysis(
+    db: Session,
+    *,
+    assignment_id: int,
+    assignment: Assignment | None,
+    distribution: dict,
+    title: str,
+    school_id: int | None,
+    cred,
+) -> dict:
+    """预留双池额度 → 组装摘要 → 外呼 → 返回结果。**调用方必须已通过全部闸门**。
 
-    闸门顺序（与 `ai_grading.request_grading` 保持同一套，勿调换）：
-
-    1. `homework_service.score_distribution` —— 404 / 403 / 租户隔离的唯一真源；
-    2. **零提交短路**（必须在任何额度预留之前，见模块 docstring 第 4 条）；
-    3. 凭证 → 总开关/学校闸/额度前置（`can_grade`）；
-    4. 学校池预留 → 平台池预留（各 1 次，双闸门，任一不足即 400）；
-    5. 组装带预算的数据摘要 → `ai_grading._call_model`（唯一外呼入口）。
-
-    Args:
-        db: 数据库会话。
-        assignment_id: 任务 id。
-        user: 当前登录用户（教师 / 学校管理员 / 平台超管）。
-
-    Returns:
-        形如 ``{assignment_id, assignment_title, generated_at, stats, analysis, usage,
-        budget_notes, omitted_count, truncated}`` 的 dict。
-
-    Raises:
-        HTTPException: 404 任务不存在；403 无权访问；400 零提交 / 未配置 / 额度不足；
-            502 模型调用失败或未返回有效内容。
+    拆成独立函数只为让 `analyze_assignment` 用 ``try/finally`` 包住「在途名额」:
+    从预留额度到外呼结束之间的任何异常路径都必须释放名额，否则该任务会被永久锁死
+    （后续请求一律 409，且都不会再去释放它）。
     """
-    distribution = homework_service.score_distribution(db, assignment_id, user)
-    submitted_count = int(distribution.get("submitted_count") or 0)
-    if submitted_count <= 0:
-        # 🔴 这条必须在 `reserve_*` 之前：额度预留即占用且不退还（S21），
-        # 无提交可分析时白扣一次额度是对成本护栏的直接破坏。
-        raise HTTPException(status_code=400, detail="该任务还没有学生提交，无法生成分析")
-
-    assignment = db.get(Assignment, assignment_id)
-    school_id = assignment.school_id if assignment is not None else None
-    title = distribution.get("assignment_title") or (assignment.title if assignment else "")
-
-    # 凭证先行：文案面向教师（谁该去找管理员），与 `can_grade` 的原因串互补而不冲突。
-    # 取到后存成局部变量复用到底：第二次 `active_credential(db)` 既多一次查询，也留了
-    # 「两次调用之间凭证被停用 ⇒ 把 None 传给 `_call_model`」的窗口。
-    cred = active_credential(db)
-    if cred is None:
-        raise HTTPException(status_code=400, detail="AI 服务未配置，请联系管理员")
-
-    allowed, reason = can_grade(db, school_id)
-    if not allowed:
-        raise HTTPException(status_code=400, detail=reason or "当前无法发起 AI 分析")
-
     # 双闸门预留在后（学校池先扣、平台池后扣，顺序照抄 `request_grading`）：
     # `can_grade` 只是前置检查，真正的护栏是这两个原子预留。
     if reserve_school_quota(db, school_id, 1) <= 0:
@@ -477,6 +519,9 @@ def analyze_assignment(db: Session, assignment_id: int, user: User) -> dict:
         if r.get("submission_id")
     ]
     ai_results = _load_ai_results(db, sub_ids)
+    # 一次性取完所有 DB 侧输入：外呼前要把连接还回池，rollback 之后任何 ORM 属性访问
+    # 都会重新开一段事务（见下方 🔴）
+    max_tokens = get_ai_max_tokens(db)
 
     head, head_cut = _head_block(assignment, title)
     stats_text = _stats_block(stats)
@@ -496,13 +541,26 @@ def analyze_assignment(db: Session, assignment_id: int, user: User) -> dict:
             "其余未参与本次分析"
         )
 
+    # 🔴 外呼前结束只读事务，把连接还回池（RBT-67）：`reserve_*` 内部 commit 过，但之后
+    # `_load_ai_results` / `get_ai_max_tokens` 又开了一段隐式事务并**一直攥着** 1 条连接；
+    # `_call_model` 最长 2×AI_ANALYSIS_TIMEOUT（60s×2），这段窗口里 Session 处于
+    # idle-in-transaction。池上限 `pool_size=10 + max_overflow=20` ⇒ 并发 30 个分析请求
+    # 就能吃满整池，其余接口全部排队等连接（`SLOW SQL` 只统计语句执行时间，看不见这种
+    # 「闲在事务里」的占用）。
+    # 位置很关键：必须**在所有取数与文本组装之后**（上面 `_head_block` 读的是 `assignment`
+    # 的 ORM 属性，rollback 会过期它并触发一次补查，等于重新占住连接），且 `max_tokens`
+    # 已提前取出；此后到外呼返回之间不再访问任何 ORM 对象。
+    db.rollback()
+
     try:
         response = _call_model(
             cred,
             messages,
-            get_ai_max_tokens(db),
+            max_tokens,
             db=db,
             school_id=school_id,
+            # 同步链路必须传自己的上限：最坏 2 次外呼，见模块 docstring 的等待上限一节。
+            timeout=settings.AI_ANALYSIS_TIMEOUT,
         )
     except AiClientError as exc:
         raise HTTPException(status_code=502, detail=f"AI 分析失败：{exc}") from exc
@@ -535,3 +593,68 @@ def analyze_assignment(db: Session, assignment_id: int, user: User) -> dict:
         "omitted_count": omitted,
         "truncated": bool(truncated or omitted > 0 or head_cut),
     }
+
+
+def analyze_assignment(db: Session, assignment_id: int, user: User) -> dict:
+    """生成某任务（某班）的 AI 综合分析。**每次调用消耗 1 次 AI 额度**。
+
+    闸门顺序（与 `ai_grading.request_grading` 保持同一套，勿调换）：
+
+    1. `homework_service.score_distribution` —— 404 / 403 / 租户隔离的唯一真源；
+    2. **零提交短路**（必须在任何额度预留之前，见模块 docstring 第 4 条）；
+    3. 凭证 → 总开关/学校闸/额度前置（`can_grade`）；
+    4. **在途去重**（`_acquire_inflight`，同样在预留之前：被拒的请求不扣额度）；
+    5. 学校池预留 → 平台池预留（各 1 次，双闸门，任一不足即 400）；
+    6. 组装带预算的数据摘要 → `ai_grading._call_model`（唯一外呼入口）。
+
+    Args:
+        db: 数据库会话。
+        assignment_id: 任务 id。
+        user: 当前登录用户（教师 / 学校管理员 / 平台超管）。
+
+    Returns:
+        形如 ``{assignment_id, assignment_title, generated_at, stats, analysis, usage,
+        budget_notes, omitted_count, truncated}`` 的 dict。
+
+    Raises:
+        HTTPException: 404 任务不存在；403 无权访问；400 零提交 / 未配置 / 额度不足；
+            409 同一任务已有一次分析在跑（**本次不扣额度**）；
+            502 模型调用失败或未返回有效内容。
+    """
+    distribution = homework_service.score_distribution(db, assignment_id, user)
+    submitted_count = int(distribution.get("submitted_count") or 0)
+    if submitted_count <= 0:
+        # 🔴 这条必须在 `reserve_*` 之前：额度预留即占用且不退还（S21），
+        # 无提交可分析时白扣一次额度是对成本护栏的直接破坏。
+        raise HTTPException(status_code=400, detail="该任务还没有学生提交，无法生成分析")
+
+    assignment = db.get(Assignment, assignment_id)
+    school_id = assignment.school_id if assignment is not None else None
+    title = distribution.get("assignment_title") or (assignment.title if assignment else "")
+
+    # 凭证先行：文案面向教师（谁该去找管理员），与 `can_grade` 的原因串互补而不冲突。
+    # 取到后存成局部变量复用到底：第二次 `active_credential(db)` 既多一次查询，也留了
+    # 「两次调用之间凭证被停用 ⇒ 把 None 传给 `_call_model`」的窗口。
+    cred = active_credential(db)
+    if cred is None:
+        raise HTTPException(status_code=400, detail="AI 服务未配置，请联系管理员")
+
+    allowed, reason = can_grade(db, school_id)
+    if not allowed:
+        raise HTTPException(status_code=400, detail=reason or "当前无法发起 AI 分析")
+
+    # 🔴 在途去重必须在预留之前（见 `_acquire_inflight`）：被 409 挡下的请求一旦先扣了
+    # 额度，就成了「什么都没做却扣了 1~2 次」——正是本条要消灭的路径。
+    _acquire_inflight(assignment_id)
+    try:
+        return _run_analysis(
+            db,
+            assignment_id=assignment_id,
+            assignment=assignment,
+            distribution=distribution,
+            title=title,
+            school_id=school_id,
+            cred=cred,
+        )
+    finally:
+        _release_inflight(assignment_id)

@@ -37,6 +37,7 @@ from app.permissions import (
     ensure_student_operable,
     ensure_student_visible,
     filter_classrooms_by_teacher,
+    find_account_conflict,
     get_account_of_student,
     get_teacher_class_ids,
     is_any_admin,
@@ -45,6 +46,7 @@ from app.permissions import (
     is_teacher_class_owner,
 )
 from app.schemas import StudentCreate, StudentUpdate
+from app.services.student_account import build_student_user, student_account_conflict_detail
 from app.services.student_serialization import student_out, students_out
 from app.services.uploads_service import save_avatar
 from app.security import hash_password, validate_password_strength
@@ -474,6 +476,19 @@ def list_students(
     return {"items": students_out(db, rows), "total": total}
 
 
+def _account_blocked_reason(
+    db: Session, class_id: int | None, name: str | None, *, student_id: int | None = None
+) -> str | None:
+    """「同班同名账号已占用，建不了号」时返回给用户看的说明，可建号时返回 None。
+
+    单一出口，保证「新建学生」「重置密码」「批量重置」「Excel 导入」四处的提示文案
+    完全一致（RBT-66）。判据见 `permissions.find_account_conflict`。
+    """
+    if find_account_conflict(db, class_id, name, student_id=student_id) is None:
+        return None
+    return student_account_conflict_detail(name or "")
+
+
 def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
     """新增学生，并自动同步生成学生登录账号。"""
     name = payload.name.strip()
@@ -492,6 +507,14 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
             raise HTTPException(status_code=403, detail="无权在该班级添加学生")
     if db.query(Student).filter(Student.student_no == student_no).first():
         raise HTTPException(status_code=400, detail="学号已存在")
+    # 🔴 同班同名建号冲突必须在**写库之前**判定（RBT-66）：学生登录名即姓名，同班内
+    # 唯一性由 `uq_user_scope_username` 兜底，同班已有同名账号时建号必然撞唯一键。
+    # 旧实现是「查不到自己的账号就跳过建号、照样返回 200」，教师以为账号已建好，
+    # 直到该生登录失败才发现。这里显式 409（与 `update_student` 转班撞同名同学同一口径），
+    # 且因为判定在 `Student(...)` 之前，失败时不会留下「有档案没账号」的半成品。
+    conflict_reason = _account_blocked_reason(db, class_id, name)
+    if conflict_reason:
+        raise HTTPException(status_code=409, detail=conflict_reason)
     # 归属校验：显式指定的 school_id 必须是本校（平台超管不受限）
     ensure_same_school(user, payload.school_id)
     # 归属学校：优先显式指定，否则从班级推导，再否则取当前用户学校
@@ -522,26 +545,23 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
     )
     db.add(s)
     db.flush()
-    # 自动同步生成学生登录账号（班级 + 姓名，默认密码 123456）
+    # 自动同步生成学生登录账号（登录名 = 姓名，默认密码 123456）
+    # 🔴 一律走 `build_student_user`（唯一建号入口）：它会显式传 `school_id`、回填
+    # `student_id`，并由口令强度自动推导 `must_change_password` —— 原实现手写
+    # `User(...)` 时漏了该标记，默认口令 123456 可长期使用（审计 SMP-24）。
     # 🔴 定位走硬外键（get_account_of_student）；新建时**必须回填 `student_id`**，
     # 否则该账号此后只剩「班级 + 姓名」软匹配可用，改名/转班就会串人（RBT-35）。
+    # 走到这里还能命中账号，只可能是「已删学生遗留的孤儿账号」（同班无同名档案，
+    # 见 `find_account_conflict` 的判据）——认领并回填，而不是再建一个撞唯一键的。
     exists_user = get_account_of_student(db, s)
     if not exists_user:
+        # 🔴 `school_id` 必须显式归属（平台超管上下文 `before_flush` 不回填 ⇒ 落 NULL
+        # ⇒ 变成跨校账号），详见 `build_student_user` 的 docstring。
         db.add(
-            User(
-                username=name,
-                password_hash=hash_password("123456"),
+            build_student_user(
                 name=name,
-                role="student",
-                # 🔴 必须显式归属：`before_flush` 只在**租户上下文非 None** 时回填，平台超管
-                # 上下文为 None ⇒ 不填 ⇒ 落 NULL；而 `school_id=NULL` 的账号在 `tenant.py`
-                # 里**既不过滤也不回填** ⇒ 等于一个**跨校读写全平台**的账号
-                # （2026-09-26 已实证：超管建学生后 `User.school_id=None` 而
-                # `Student.school_id=1`，见 docs/REVIEW-2026-09-25-code-audit.md P1-B）。
-                # 同文件 `reset_student_password` 一直是显式传 `s.school_id`，此处对齐。
                 school_id=school_id,
                 class_id=class_id,
-                # 档案 → 账号的稳定锚点（RBT-35）
                 student_id=s.id,
             )
         )
@@ -552,7 +572,7 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
 
 
 def _sync_account_identity(db: Session, account: User | None, s: Student) -> None:
-    """把学生档案的 ``name`` / ``class_id`` 同步到其登录账号（无账号时直接返回）。
+    """把学生档案的 ``school_id`` / ``name`` / ``class_id`` 同步到其登录账号（无账号时返回）。
 
     🔴 为什么必须同步（2026-10-25 修 RBT-35）：账号唯一性口径是
     ``uq_user_scope_username`` = ``(username_scope, username)``，学生的 scope 是
@@ -563,6 +583,16 @@ def _sync_account_identity(db: Session, account: User | None, s: Student) -> Non
        账号，旧账号仍能登录，一名学生两套身份；
     2. A 转进已有同名 B 的班后，旧账号仍挂原班 ⇒ 删 B 时软匹配可能命中 A 的账号，
        ``purge_user_data`` 连带清掉 A 的作业与成绩。
+
+    🔴 ``school_id`` 也要同步（2026-11-04 修 RBT-59）：跨校转学时档案换了学校而账号没换，
+    后果是「数据在但看不见」—— 原校花名册看不到（不在自己班）、目标校也看不到（档案还在
+    旧校租户分区），该生登录后课程/作业列表为 0，而所有接口都返回 200/404 正常。
+    ``username_scope`` 由 ``models/user.py`` 的 ``before_update`` 事件按新
+    ``(school_id, class_id)`` 重算，不需要在这里手工赋值。
+
+    ⚠️ 换校会让该账号**已签发的 token 全部失效**（`deps.get_current_user` 校验
+    「token 里的 school_id ≠ 账号当前归属」⇒ 401「账号归属已变更，请重新登录」）。
+    这是刻意的：租户上下文不能靠旧 token 延续。
 
     ⚠️ 「转到有同名同学的班」会撞唯一键，这是**真实冲突**（同班同名学生无法各有账号）：
     显式 409 并回滚整次更新，既不静默跳过同步（跳过等于把歧义留给下一次删除），
@@ -580,6 +610,10 @@ def _sync_account_identity(db: Session, account: User | None, s: Student) -> Non
     if account.class_id != s.class_id:
         account.class_id = s.class_id
         # username_scope 由 models/user.py 的 before_update 事件按新 class_id 重算
+        changed = True
+    if account.school_id != s.school_id:
+        # 仅跨校转学会走到这里（同校转班时两者都等于本校，不触发）
+        account.school_id = s.school_id
         changed = True
     if not changed:
         return
@@ -621,12 +655,27 @@ def update_student(db: Session, user: User, student_id: int, payload: StudentUpd
     # 事后再找要么找不到（→ 下次「重置密码」给该生新建第二个账号，旧账号仍能登录），
     # 要么找到同名的别人（→ 删错账号 / 改错密码）。见 RBT-35。
     account = get_account_of_student(db, s)
+    # 🔴 跨校转学要连带换租户归属（RBT-59）：目标班级可能与档案不同校。
+    # 只有平台超管能选到外校班级 —— 学校管理员的 `db.get(Classroom, 外校id)` 会被
+    # `with_loader_criteria` 过滤成 None ⇒ 下面 400「目标班级不存在」，与原有口径一致。
+    new_class_id = data.get("class_id")
+    if new_class_id is not None and new_class_id != s.class_id:
+        target_cls = db.get(Classroom, new_class_id)
+        if target_cls is None:
+            raise HTTPException(status_code=400, detail="目标班级不存在")
+        new_school_id = target_cls.school_id
+    else:
+        new_school_id = s.school_id
     for f in (
         "name", "gender", "birth_date", "class_id", "major",
         "parent_name", "parent_phone", "student_type", "is_dropped_out",
     ):
         if f in data and data[f] is not None:
             setattr(s, f, parse_date_or_400(data[f]) if f == "birth_date" else data[f])
+    # 归属跟着班级走：只改 class_id 不同步 school_id，会出现「两校花名册都看不到」的
+    # 幽灵学生（RBT-59）。历史业务数据（提交/成绩/考勤）**刻意不迁移**：它们属于
+    # 发生时的学校，原校仍可查阅；迁移会把两校的统计口径一起改掉。
+    s.school_id = new_school_id
     # 账号身份同步（RBT-35）：档案改了名/换了班，账号必须跟着改，否则「班级 + 姓名」
     # 这把软钥匙从此指向别人。
     _sync_account_identity(db, account, s)
@@ -658,8 +707,9 @@ def delete_student(db: Session, user: User, student_id: int) -> dict:
     purge_student_data(db, student_id)
 
     # 同步删除对应的登录账号（users，硬外键 `users.student_id` 定位），并清理其头像文件
-    # 🔴 绝不能用「班级 + 姓名」软匹配：学生改名/转班后（update_student 曾不同步账号）
+    # 🔴 绝不能在调用点用「班级 + 姓名」软匹配：学生改名/转班后（update_student 曾不同步账号）
     # 命中 `.first()` 可能是**同名同学**的账号 ⇒ 删 B 会 purge 掉 A 的成绩与作业（RBT-35）。
+    # 软匹配只存在于 `get_account_of_student` 内部，且已校验归属、判不了就返回 None（RBT-65）。
     account = get_account_of_student(db, s)
     avatar_url = account.avatar if account else None
 
@@ -686,21 +736,28 @@ def reset_student_password(db: Session, student_id: int, payload: dict, user: Us
     new_pwd = payload.get("password") or "123456"
     # 弱密码标记首次登录强制改密
     must_change = validate_password_strength(new_pwd) is not None
-    # 硬外键定位（RBT-35）：软匹配会在改名/转班后指向同名的另一名学生
+    # 定位走 `get_account_of_student`：硬外键优先，软匹配只在归属唯一可判定时兜底；
+    # 「会不会串到同名同学」由该函数负责裁决（RBT-35 / RBT-65），调用点不再自带保证。
     u = get_account_of_student(db, s)
     if not u:
-        u = User(
-            username=s.name,
-            password_hash=hash_password(new_pwd),
-            name=s.name,
-            role="student",
-            school_id=s.school_id,
-            class_id=s.class_id,
-            student_id=s.id,
-            must_change_password=must_change,
+        # 🔴 无账号 ≠ 可以建号：同班同名时账号被同学占用，必须明确 409（RBT-66）。
+        # 旧实现直接拿到同学的账号，于是「重置 B 的密码」实际改掉了 A 的密码（RBT-65）。
+        blocked = _account_blocked_reason(db, s.class_id, s.name, student_id=s.id)
+        if blocked:
+            raise HTTPException(status_code=409, detail=blocked)
+        # 无账号时新建，一律走唯一建号入口（显式 school_id + 回填 student_id，
+        # `must_change_password` 由口令强度自动推导，见 `build_student_user`）。
+        db.add(
+            build_student_user(
+                name=s.name,
+                school_id=s.school_id,
+                class_id=s.class_id,
+                student_id=s.id,
+                password=new_pwd,
+            )
         )
-        db.add(u)
     else:
+        # 已有账号：按新口令强度更新强制改密标记（此逻辑不属于建号，保持原样）
         u.password_hash = hash_password(new_pwd)
         u.must_change_password = must_change
     audit(db, user, "reset_student_password", target=f"{s.name} ({s.student_no})", student_id=student_id)
@@ -759,21 +816,27 @@ def batch_reset_student_passwords(db: Session, payload, user: User) -> dict:
             failed.append({"id": sid, "reason": e.detail})
             continue
 
-        # 硬外键定位（RBT-35），与单个改密同一口径
+        # 定位口径与单个改密完全一致（`get_account_of_student`：硬外键优先，
+        # 软匹配的歧义由它裁决 —— RBT-35 / RBT-65）
         u = get_account_of_student(db, s)
         if not u:
-            u = User(
-                username=s.name,
-                password_hash=hash_password(new_pwd),
-                name=s.name,
-                role="student",
-                school_id=s.school_id,
-                class_id=s.class_id,
-                student_id=s.id,
-                must_change_password=must_change,
+            # 同班同名占用账号 ⇒ 该生归入失败清单（不中断整批、更不能去改同学的密码）
+            blocked = _account_blocked_reason(db, s.class_id, s.name, student_id=s.id)
+            if blocked:
+                failed.append({"id": sid, "reason": blocked})
+                continue
+            # 无账号时新建，一律走唯一建号入口（见 `build_student_user` docstring）
+            db.add(
+                build_student_user(
+                    name=s.name,
+                    school_id=s.school_id,
+                    class_id=s.class_id,
+                    student_id=s.id,
+                    password=new_pwd,
+                )
             )
-            db.add(u)
         else:
+            # 已有账号：按新口令强度更新强制改密标记（此逻辑不属于建号，保持原样）
             u.password_hash = hash_password(new_pwd)
             u.must_change_password = must_change
 

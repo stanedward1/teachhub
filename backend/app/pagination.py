@@ -21,8 +21,13 @@
 
 注意：调用方传入的 ``stmt`` 必须是 **未加 offset/limit** 的 ``select()`` 语句
 （可带 where / order_by / options），租户隔离由 ORM 事件自动叠加，无需手动处理。
+
+🔴 这条规则**由运行时断言执行**（RDB-63，2026-11-04）：传 ``Query`` 曾能「看起来跑通」
+（``Query`` 也有 ``add_columns`` / ``offset`` / ``limit``），实际落到 ``db.execute(Query)``
+会打 ``SADeprecationWarning``，SQLAlchemy 2.1 起直接报错。断言把「文档里的硬规则」
+变成「违反即 TypeError」，避免下一个人再靠肉眼检查。
 """
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 
 from app.utils import normalize_page
 
@@ -36,7 +41,14 @@ def paginate(db, stmt, page: int, page_size: int):
     :param stmt: 已带过滤/排序的 ``select()``（不含 offset/limit）
     :param page: 页码，从 1 开始
     :param page_size: 每页条数（钳位 1..200）
+    :raises TypeError: ``stmt`` 不是 ``select()``（典型误用：传了 ``db.query(...)``）
     """
+    if not isinstance(stmt, Select):
+        raise TypeError(
+            "paginate() 只接受 select() 语句，收到 "
+            f"{type(stmt).__name__}；请把 db.query(Model) 改写为 select(Model)"
+            "（SQLAlchemy 2.1 起 db.execute(Query) 会直接失败）"
+        )
     page, page_size = normalize_page(page, page_size)
 
     total_col = func.count().over().label("total_rows")

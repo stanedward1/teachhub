@@ -1,3 +1,5 @@
+from datetime import date, datetime
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.constants import SCORE_MAX, SCORE_MIN
@@ -493,6 +495,115 @@ class StudentCommentOut(_ORMOut):
     created_at: str | None = None
     student_name: str | None = None
     student_no: str | None = None
+
+
+# ============================================================
+# 读接口响应模型（SMP-50 试点，2026-11-04）
+#
+# 背景（2026-11-04 实测）：163 个 operation 里有 **13 个**声明了 response_model
+#   = 10 个写接口（回显刚写的那一行）+ 3 个读接口（本节这 3 个试点）
+# 其余 150 个（列表/详情）在 OpenAPI 里响应体为空 —— 渐进推进，不一次性铺开。
+# 复核（改数字前请先跑，别照抄）：
+#   python -c "from app.main import app; s=app.openapi(); print(sum(1 for p in s['paths'].values() for m,o in p.items() if m in ('get','post','put','delete','patch') and (o.get('responses',{}).get('200') or {}).get('content',{}).get('application/json',{}).get('schema')))"
+# 本节先给**前端最依赖的 3 个读接口**补契约：
+#
+#   GET /api/students               -> StudentListOut
+#   GET /api/classrooms             -> ClassroomListOut
+#   GET /api/homework/assignments   -> AssignmentListOut
+#
+# 两条约定（与既有 *_Out 一致，勿各自发明）：
+# 1. 字段**全部可选**且给默认值：服务层返回的 dict 里个别键可能缺省（如学生端的
+#    `my_submitted` 只对学生角色出现），缺省不该变成 500；
+# 2. 日期字段**声明成原生类型**（`date` / `datetime`），而不是 `str`：这 3 个读接口
+#    不经过 `stringify_dates`（它是给「写接口 + to_dict」准备的），声明 `str` 会在
+#    Pydantic v2 上直接抛 `ResponseValidationError`。原生类型的 JSON 形态与
+#    `jsonable_encoder` 输出完全一致（ISO 8601），前端无感。
+#
+# ⚠️ `extra="ignore"` 意味着「服务层新增但模型没声明」的字段会被**静默丢弃**。
+# 这不是可以放任的：`tests/test_audit_2026_11_04_r6.py` 有一条「字段集合双向一致」的
+# 用例，序列化器与模型任何一方漂移都会红。新增字段时**两处一起改**。
+# ============================================================
+
+class _ReadOut(BaseModel):
+    """读接口响应模型基类：忽略未知字段（漂移由用例把关，不靠运行时炸 500）。"""
+    model_config = ConfigDict(extra="ignore")
+
+
+class StudentRow(_ReadOut):
+    """学生列表的一行（`students_service` → `student_serialization.students_out`）。"""
+    id: int | None = None
+    school_id: int | None = None
+    class_id: int | None = None
+    name: str | None = None
+    gender: str | None = None
+    birth_date: date | None = None
+    student_no: str | None = None
+    major: str | None = None
+    parent_name: str | None = None
+    parent_phone: str | None = None
+    student_type: str | None = None
+    status: str | None = None
+    is_dropped_out: bool | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    # 序列化时附加（非 students 表列）
+    class_name: str | None = None
+    avatar: str | None = None
+
+
+class StudentListOut(_ReadOut):
+    items: list[StudentRow] = Field(default_factory=list)
+    total: int = 0
+
+
+class ClassroomRow(_ReadOut):
+    """班级列表的一行（`students_service.list_classrooms`）。"""
+    id: int | None = None
+    school_id: int | None = None
+    name: str | None = None
+    code: str | None = None
+    major: str | None = None
+    grade: str | None = None
+    teacher_id: int | None = None
+    is_graduated: bool | None = None
+    created_at: datetime | None = None
+    # 序列化时附加
+    teacher_name: str | None = None
+    student_count: int | None = None
+
+
+class ClassroomListOut(_ReadOut):
+    items: list[ClassroomRow] = Field(default_factory=list)
+    total: int = 0
+
+
+class AssignmentRow(_ReadOut):
+    """作业列表的一行（`homework_service.list_assignments`）。
+
+    `my_submitted` 仅学生角色出现，因此必须可选 —— 声明成必填会让教师端列表 500。
+    """
+    id: int | None = None
+    title: str | None = None
+    description: str | None = None
+    content: str | None = None
+    deadline: str | None = None
+    created_by: int | None = None
+    class_id: int | None = None
+    school_id: int | None = None
+    short_name: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    # 序列化时附加
+    class_name: str | None = None
+    creator_name: str | None = None
+    attachment_count: int | None = None
+    submission_count: int | None = None
+    my_submitted: bool | None = None
+
+
+class AssignmentListOut(_ReadOut):
+    items: list[AssignmentRow] = Field(default_factory=list)
+    total: int = 0
 
 
 # ============ 刷新令牌（F3） ============

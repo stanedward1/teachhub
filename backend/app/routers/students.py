@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user, require_teacher
 from app.models import User
-from app.schemas import StudentBatchPassword, StudentCreate, StudentUpdate
+from app.schemas import (
+    ClassroomListOut,
+    StudentBatchPassword,
+    StudentCreate,
+    StudentListOut,
+    StudentUpdate,
+)
 from app.services import students_service
 
 router = APIRouter(prefix="/api", tags=["基础数据"])
@@ -49,7 +55,7 @@ def set_school_status(
 
 
 # ---------------- 班级 ----------------
-@router.get("/classrooms")
+@router.get("/classrooms", response_model=ClassroomListOut)
 def list_classrooms(
     graduated: str = "",
     user: User = Depends(require_teacher),
@@ -93,7 +99,7 @@ def remove_class_teacher(class_id: int, teacher_id: int, user: User = Depends(ge
 
 
 # ---------------- 学生 ----------------
-@router.get("/students")
+@router.get("/students", response_model=StudentListOut)
 def list_students(
     class_id: int | None = None,
     keyword: str = "",

@@ -1094,8 +1094,20 @@ def history(db: Session, assignment_id: int, user: User) -> dict:
 def clear(db: Session, assignment_id: int, user: User) -> dict:
     """清空学生本人在该作业下的会话消息（设计 §4.2）。
 
-    **只删本会话消息**（``school_id`` 由 ORM 过滤），**不影响额度**（额度是平台级外呼
-    计数，与消息行生命周期解耦 —— 这正是 ``AiUsageDailyCompanion`` 刻意设计的语义）。
+    **不影响额度**（额度是平台级外呼计数，与消息行生命周期解耦 —— 这正是
+    ``AiUsageDailyCompanion`` 刻意设计的语义）。
+
+    ⚠️ 真实护栏是 **``conversation_id`` 作用域**，不是 ORM 的租户过滤（审计 RDB-24）：
+    下面这条 ``Query.delete()`` 是 **bulk DELETE**，**不经过** ``do_orm_execute`` 事件，
+    ``with_loader_criteria`` 的租户注入只作用于 SELECT —— 所以这条 DELETE 上**根本
+    没有** ``school_id`` 条件，写「``school_id`` 由 ORM 过滤」是错的。之所以不存在
+    跨租户删除路径，是因为 ``conversation_id`` 并非用户入参：它来自
+    ``_find_conversation(student.id, assignment_id)``，其中 ``student`` 由当前登录学生
+    解析、``assignment`` 已过 ``_check_student_access``。
+
+    ⚠️ 因此：**不要**给这里的删除补 ``school_id`` 过滤当「护栏」—— 历史消息行的
+    ``school_id`` 可能为 NULL，加了反而删不干净；也**不要**因为「ORM 会过滤」就放宽成
+    按 ``assignment_id`` / ``student_id`` 批量删（那才会真的跨会话误删）。
 
     Raises:
         HTTPException: 404 作业不存在；403 越权。

@@ -7,6 +7,8 @@
 >
 > 链路追踪：所有响应均带 `X-Request-ID` 响应头（请求头传入则透传，否则服务端生成 `uuid4`）；服务端日志每行带 `[rid=...]`，可用该 ID 串联同一请求的全部日志。
 >
+> 响应契约（2026-11-04 起试点）：`GET /api/students`、`GET /api/classrooms`、`GET /api/homework/assignments` 已声明 `response_model`（`StudentListOut` / `ClassroomListOut` / `AssignmentListOut`），字段可直接从 `/openapi.json` 或 `/docs` 读取，并与服务层序列化输出由用例双向校验。**其余读接口仍为裸 dict**，字段以本文档为准。
+>
 > 规模（2026-10-01 实测）：**业务接口 157 条**（`/api/**`）+ **7 条非业务路由**（`/openapi.json`、`/docs`、`/docs/oauth2-redirect`、`/redoc`、`/`、`/health`、`/metrics`），合计 **164 条带方法的已注册路由**。本文件所有计数均以 `len(app.routes)=165` 为分母核对：165 = 164 条带方法路由 + 1 个 `/uploads` 静态目录**挂载**（挂载不是路由，不并入接口计数）。
 
 ## 角色权限说明
@@ -59,13 +61,13 @@
 | GET | `/assignments/{id}/submissions` | 登录 | 提交列表（教师侧附 `ai_grading_status` / `ai_score` / `ai_excellent_candidate`，用于「AI 批改」按钮的结果反馈） |
 | GET | `/assignments/{id}/unsubmitted` | 教师+ | 未交名单（应交 = 班级在籍学生，未交 = 应交 − 已交） |
 | GET | `/assignments/{id}/score-distribution` | 教师+ | **分数段分布**（教师端「分数段查询」）：汇总（`total`/`submitted_count`/`scored_count`/`unscored_count`/`unsubmitted_count`）+ 五段人数（`segments[]`：每段仅含 `key`/`name`/`label`/`min`/`count`，**无 `max`** —— 分段是「只写下界」的半开区间：优秀 `min=90`／良好 80／中等 70／及格 60／不及格 0，`105`、`120`、`89.5` 均不会再落空）+ 三类名单（`scored_students` / `unscored_students` / `unsubmitted`），用于「按分数段查看学生」。**2026-10-11 契约扩展**：三类明细每条记录均带 `teacher_score` / `ai_score`（`int|null`，**缺失为 `null` 而非 `0`**——`0` 是合法分数须展示；前端据此决定「教师评分 / AI 评分」两列各自是否展示，单元格级缺失渲染为灰「—」，**不做整列隐藏**）。三类明细每条另带 `submission_id`（`int|null`）：**已提交学生（`scored_students` / `unscored_students`）为真实提交 id，供前端「点姓名跳转该生任务完成情况」详情页 `/admin/homework/{assignmentId}/submissions/{submissionId}`；未交（`unsubmitted`）恒为 `null`（无提交记录，不可跳转）**。⚠️ 明细里的 `id` 仍是 **student.id**（学生档案），与 `submission_id` 语义不同，勿混用。`scored_students` 另**保留**兼容字段 `score`（有效分 = 教师分优先、AI 兜底）/ `segment`（0-4）/ `segment_label`（旧柱状图与分段标记不受影响）。🔴 **AI 分仅 `status=success` 且有分才计入**（`pending` / `failed` 一律视为无分）——2026-10-11 修复：此前只过滤 `score IS NOT NULL`，会把失败/在跑的分误当成绩。口径自洽：`total = submitted_count + unsubmitted_count`、`submitted_count = scored_count + unscored_count`、`scored_count = Σ segments[].count`；三类名单**互斥**。「未交」口径同 `/unsubmitted`（本班在籍 `is_dropped_out=False` 且未提交者）。📌 **分段口径唯一真源 = `backend/app/constants.py::SCORE_BANDS`**（五段、**良好线 80**；教务看板「成绩分布」与学情评语档位共用同一常量，**禁止在 service 内另设阈值**——2026-10-18 统一前此处为 5 段/80、看板为 4 段/75，导致 78 分两处等级不同，见 REVIEW S-01）。权限 `require_teacher`（教师 = 本班班主任 ∪ 科任 ∪ 作业创建者；管理员不受限）；作业不存在 → **404**；学生 → **403** |
-| POST | `/assignments/{id}/ai-analysis` | 教师+ | **任务 AI 综合分析**（教师端「分数段分布」弹窗内的「AI 综合分析」按钮）：读取该任务的**分数段统计 + 已提交内容 + 已有 AI 批改结果**，压缩成一份受输入预算约束的摘要后**同步外呼一次**模型，返回**班级层面**的 Markdown 综合评价。返回 `{assignment_id, assignment_title, generated_at, stats, analysis, usage, budget_notes, omitted_count, truncated}`：`stats` 与 `/score-distribution` 同源（`total`/`submitted_count`/`scored_count`/`unscored_count`/`unsubmitted_count`/`segments[]` 逐项相等，另加 `avg_teacher_score`/`avg_ai_score`/`score_gap`/`ai_reviewed`/`ai_reviewed_pct`，**均分保留 1 位小数、无数据为 `null` 而非 0**）；`analysis` 为四节固定结构的 Markdown（总体情况 / 主要亮点 / 共性问题 / 教学建议）；`usage` 为 token 与耗时；`budget_notes` + `omitted_count` 如实说明「有多少学生明细因预算未参与」。🔴 **额度**：一次分析按「一次 AI 批改类调用」计费，**学校池与平台池各预留 1 次**（顺序同 `/ai-grade`：先学校后平台）；模型输出被截断时 `_call_model` 会自动重试一次并补记，故实际最多消耗 **2 次**（前端确认弹窗已按此措辞）。🔴 **零提交短路**：`submitted_count == 0` → **400「该任务还没有学生提交，无法生成分析」，且在预留额度之前拦截**（不扣任何额度、不写计数行）。其余 400：AI 服务未配置 / 总开关或本校闸关闭 / 校池或平台池耗尽；模型调用失败或返回空正文 → **502**。🔴 **只读不写**：本接口**不写** `ai_grading_results`、不改教师评语与任何成绩，也不落缓存 —— 每次点击都是一次新的真实调用。**只采信 `status=success` 的 AI 结果**（`pending`/`failed` 不参与，与 `/score-distribution` 同口径）；学生明细按五个分数段轮转抽样，超预算的被跳过并留痕。可见性与 `/score-distribution` 完全一致（作业不存在 404；学生 403；同校非本班教师 403；跨校 404）。 |
+| POST | `/assignments/{id}/ai-analysis` | 教师+ | **任务 AI 综合分析**（教师端「分数段分布」弹窗内的「AI 综合分析」按钮）：读取该任务的**任务要求 + 分数段统计 + 逐生 AI 批改结论（不含学生提交原文）**，压缩成一份受输入预算约束的摘要后**同步外呼一次**模型，返回**班级层面**的 Markdown 综合评价。返回 `{assignment_id, assignment_title, generated_at, stats, analysis, usage, budget_notes, omitted_count, truncated}`：`stats` 与 `/score-distribution` 同源（`total`/`submitted_count`/`scored_count`/`unscored_count`/`unsubmitted_count`/`segments[]` 逐项相等，另加 `avg_teacher_score`/`avg_ai_score`/`score_gap`/`ai_reviewed`/`ai_reviewed_pct`，**均分保留 1 位小数、无数据为 `null` 而非 0**）；`analysis` 为四节固定结构的 Markdown（总体情况 / 主要亮点 / 共性问题 / 教学建议）；`usage` 为 token 与耗时；`budget_notes` + `omitted_count` 如实说明「有多少学生明细因预算未参与」。🔴 **额度**：一次分析按「一次 AI 批改类调用」计费，**学校池与平台池各预留 1 次**（顺序同 `/ai-grade`：先学校后平台）；模型输出被截断时 `_call_model` 会自动重试一次并补记，故实际最多消耗 **2 次**（前端确认弹窗已按此措辞）。🔴 **零提交短路**：`submitted_count == 0` → **400「该任务还没有学生提交，无法生成分析」，且在预留额度之前拦截**（不扣任何额度、不写计数行）。其余 400：AI 服务未配置 / 总开关或本校闸关闭 / 校池或平台池耗尽；**409**（同一任务已有一次分析在跑，本次不预留额度、不扣费）；模型调用失败或返回空正文 → **502**。⏱ **超时口径**：同步外呼，单次上限 `AI_ANALYSIS_TIMEOUT`（默认 60s），截断重试最坏 2 次 ⇒ 前端该请求超时 180s。🔴 **只读不写**：本接口**不写** `ai_grading_results`、不改教师评语与任何成绩，也不落缓存 —— 每次点击都是一次新的真实调用。**只采信 `status=success` 的 AI 结果**（`pending`/`failed` 不参与，与 `/score-distribution` 同口径）；学生明细按五个分数段轮转抽样，超预算的被跳过并留痕。可见性与 `/score-distribution` 完全一致（作业不存在 404；学生 403；同校非本班教师 403；跨校 404）。 |
 | POST | `/assignments/{id}/ai-grade` | 教师+ | **触发 AI 批改（教师手动，批量）**：批改该作业下**尚未成功批改、且未在批改中**的提交；已批改（`success`）与**正在批改中（`pending`）**的一律跳过，剩余额度不足时按额度截断。返回 `{queued, skipped, already_graded, reason}`（全部已批改或全部在批改中 → **200** 且 `queued=0`，`reason` 区分「全部提交均已批改」/「其余提交正在批改中，请稍候」；`skipped` 恒为「未投递总数」）。**2026-10-08 修复：此前只剔除 `success`，教师双击会在后端非阻塞返回后二次投递 → 重复外呼 + 重复预扣配额。**非阻塞（仅入队）。400 档位：平台开关关「AI 批改总开关未开启」/ **学校闸关「本校已停用 AI 批改功能」** / 无凭证 / **校池尽「本学校今日 AI 批改次数已用完（今日已用 X 次），请明天再试」** / 平台池尽 |
 | GET | `/assignments/{id}/ai-grade/progress` | 教师+ | **查询某作业批量 AI 批改进度**（前端轮询用）。返回 `{total, success, failed, pending, ungraded, done, finished}`：`done = success + failed`，`ungraded = total − success − failed − pending`。终止字段 `finished = (pending == 0)`（表示「没有在跑的任务了」，**不是** `done == total`——额度截断时会出现 `ungraded > 0` 但 `pending == 0`，此时即应停止轮询并如实展示「还有 N 份未批改」）。纯聚合、无写操作、无外呼。作业不存在 → 404，非本班且非创建者教师 → 403 |
 | POST | `/assignments/{id}/companion/ask` | **学生** | **AI 学伴提问（学生专属，同步阻塞，超时 25s）**。请求体仅 `{"question": str}`（**走 `AiCompanionAsk` schema**：字段缺省/null → service 层 400；非字符串 → 422；长度 1..1500 在 service 层校验）；**题干 / 历史 / 开关一律由服务端自取**，前端禁止传入。成功返回 `{conversation_id, answer, refused, turns, truncated}`。⚠️ **无幂等性**：同一次提问重试会**再消耗 1 次学伴额度**。**双闸门**（每生配额 + 平台池，叠加生效）：每生配额耗尽 → **429**「你今天使用 AI 学伴的次数已用完，明天再来吧」；平台池耗尽（每生仍有余）→ **429**「AI 学伴今天实在太忙了，明天再来试试吧」（**不向学生泄露平台成本口径**）。**校级闸门叠加后为三闸**（每生 → 学校 → 平台）：**学校闸关 → 403**「AI 学伴在你所在的学校暂未开放」；**学校池尽 → 429**（与平台池共用「太忙了」同款文案，不区分层级）。开关关 `ai_companion_enabled`（平台或本校任一关） → **403**（零外呼）；作业不存在 → **404**；非本班学生 → **403**；提问为空 / 超 1500 字 → **400**；无可用凭证 → **503**；模型调用失败 / 被截断 → **502**（两种差异化文案）。`refused=true` 时 `answer` 是**标准引导话术**（非模型原文）。教师调用 → **403** |
 | GET | `/assignments/{id}/companion/history` | **学生** | **取本学生在该作业下的学伴会话历史**。返回 `{conversation_id, turns, messages: [{id, role, content, refused, created_at}]}`（`role` = `user` / `assistant`，`created_at` 为 ISO 字符串）。**无会话时 `conversation_id=null` + 空数组（不 404）**；开关关闭时同样返回空历史（不 403），前端首屏不报错。作业不存在 → 404；非本班学生 → 403 |
 | GET | `/assignments/{id}/companion/quota` | **学生** | **取本学生今日的学伴额度读数**（每生独立配额，docs/DESIGN-AI学伴配额.md D4）。只读、无副作用。返回 `{enabled: bool, remaining: int, limit: int, used: int, day: "YYYY-MM-DD"}`（**`remaining = min(每生剩余, 学校剩余, 平台池剩余)`**——三池取最小才是真实可问次数，平台池耗尽时显示 0（2026-10-01 修订，此前不并入平台池）；`limit`/`used` 仍为每生口径；开关关闭时 `remaining=0`）。**`day` 已 `stringify_dates`**（硬约束：否则 Pydantic v2 在落库后抛错 → 500）。学生端抽屉打开 / 提问成功后调用，显示「今日剩余 N 次」（**重拉权威值，不本地减一**）。🔴 只挂 `require_student`：教师调用 → **403**。作业不存在 → **404**；非本班学生 → **403** |
-| DELETE | `/assignments/{id}/companion` | **学生** | **清空本学生在该作业下的学伴会话消息**。返回 `{deleted: int}`（删除的消息条数）。**只删本会话**（`school_id` 由 ORM 过滤），**不影响额度**（额度是平台级外呼计数，与消息行生命周期解耦）。作业不存在 → 404；非本班学生 → 403 |
+| DELETE | `/assignments/{id}/companion` | **学生** | **清空本学生在该作业下的学伴会话消息**。返回 `{deleted: int}`（删除的消息条数）。**只删本会话（`conversation_id` 作用域）**——⚠️ `Query.delete()` 是 bulk DELETE，**不经过** `do_orm_execute`，租户注入只作用于 SELECT，所以这条 DELETE 上**没有** `school_id` 条件；护栏是 `conversation_id` 来自 `_find_conversation(student.id, assignment_id)`（`student` 由当前登录学生解析、`assignment` 已过 `_check_student_access`，且 `conversation_id` 不是用户入参）⇒ 不存在跨租户删除路径。**不影响额度**（额度是平台级外呼计数，与消息行生命周期解耦）。作业不存在 → 404；非本班学生 → 403 |
 | GET | `/assignments/{id}/companion/conversations` | **教师（仅）** | **列出该作业下本班学生的学伴会话**（一个学生会话 = 一行，**不含消息内容**）。分页 `page` / `page_size`（默认 20），返回 `{items: [{conversation_id, student_id, student_name, student_avatar, class_id, turn_count, refused_count, has_refused, last_active_at}], total}`。权限口径 = 班主任 ∪ 科任（`apply_teacher_student_filter` 统一收口），作业级入口另放行**该作业创建者**（「创建者保留管理权」，2026-10-09）。**管理员（school_admin / super_admin）本轮不放行 → 403**（路由依赖 `require_teacher_only`）。非本班且非创建者 → 403；创建者若已不带该班，则学生范围为空 ⇒ **200 且 `items=[]`**（放行 ≠ 泄露）；作业不存在 → 404。审计 action = `companion_view_list` |
 | GET | `/companion/conversations/{conversation_id}` | **教师（仅）** | **取单个学伴会话的完整消息**（含**学生提问原文 + AI 全文**；仅元数据无法判断学生卡在哪）。返回 `{conversation_id, student_id, student_name, assignment_id, assignment_title, messages: [{id, role, content, refused, created_at}], turns}`。🔴 **三重硬校验**：① 会话存在；② 其作业本班可访问（或系该教师所创建）；③ 该会话 `student_id` 落在教师可见班级范围内。**任一不满足一律 404**（不泄露会话存在性；跨校、跨班、越权均为 404，**非 403**）。管理员本轮不放行 → 403（`require_teacher_only`）。教师侧**只读**，无任何写端点。审计 action = `companion_view_detail` |
 | POST | `/assignments/{id}/submissions` | 学生 | 提交作业（**不触发任何 AI 调用**） |
@@ -109,11 +111,11 @@
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/api/students` | 教师+ | 学生列表（keyword/class_id/dropped_out 筛选） |
-| POST | `/api/students` | 教师+ | 创建学生（自动建账号，并回填硬外键 `users.student_id` —— 2026-10-25 修 RBT-35：此前该列只在迁移里回填过，新建账号全是 NULL） |
+| POST | `/api/students` | 教师+ | 创建学生（自动建账号，并回填硬外键 `users.student_id` —— 2026-10-25 修 RBT-35：此前该列只在迁移里回填过，新建账号全是 NULL）。🔴 同班已有**同名账号**时 **409**「同班已存在同名账号…」（学生登录名即姓名、同班内必须唯一，`uq_user_scope_username`）——2026-11-04 修 RBT-66：此前是**跳过建号仍返回 200**，教师看不出这名学生没有账号；判定在建档之前，409 不会留下「有档案没账号」的半成品 |
 | PUT | `/api/students/{id}` | 登录 | 修改学生。🔴 **改名/转班会同步其登录账号的 `name`/`username`/`class_id`**（2026-10-25 修 RBT-35：此前不同步，导致「重置密码给该生新建第二个账号」「删同学删到他头上」）；目标班级已存在同名学生账号时 **409**「目标班级已存在同名学生账号」，整次更新回滚，不部分生效 |
-| DELETE | `/api/students/{id}` | 登录 | 删除学生（级联清理）。账号定位走**硬外键** `users.student_id`（`get_account_of_student`），不再用「班级 + 姓名」软匹配 —— 改名/转班后不会删错人 |
-| PUT | `/api/students/{id}/password` | 登录 | 重置学生密码；成功后**吊销该学生全部会话**（同 `/api/auth/password` 的 `token_version` 机制）。账号定位同上走硬外键，改名后不会「查不到 ⇒ 新建第二个账号」；确实无账号时新建并回填 `student_id` |
-| PUT | `/api/students/password/batch` | 登录 | **批量**重置/修改学生密码（body `{student_ids:[int], password?:str}`，留空=默认 123456）；不存在/无权限/已退学的目标**跳过**并计入 `failed`，返回 `{ok, updated, failed:[{id,reason}]}` |
+| DELETE | `/api/students/{id}` | 登录 | 删除学生（级联清理）。账号定位走**硬外键** `users.student_id`（`get_account_of_student`）；软匹配仅在历史数据 `student_id` 为空**且同班同名唯一**时兜底 ——2026-11-04 修 RBT-65：此前兜底不校验归属，同班同名时删 B 会 `purge_user_data` 并删掉**同学 A 的账号**（不可逆） |
+| PUT | `/api/students/{id}/password` | 登录 | 重置学生密码；成功后**吊销该学生全部会话**（同 `/api/auth/password` 的 `token_version` 机制）。账号定位同上走硬外键，改名后不会「查不到 ⇒ 新建第二个账号」；确实无账号时新建并回填 `student_id`。🔴 无账号但同班同名账号已被同学占用时 **409**（RBT-65/66：此前会改掉**同学**的密码） |
+| PUT | `/api/students/password/batch` | 登录 | **批量**重置/修改学生密码（body `{student_ids:[int], password?:str}`，留空=默认 123456）；不存在/无权限/已退学/**同班同名账号被占用**的目标**跳过**并计入 `failed`，返回 `{ok, updated, failed:[{id,reason}]}` |
 | POST | `/api/students/{id}/avatar` | 登录 | 上传学生头像 |
 | GET | `/api/students/{id}/profile` | 登录 | 学生画像（四维雷达） |
 | POST | `/api/students/{id}/tags` | 登录 | 添加标签 |
@@ -122,7 +124,7 @@
 | GET | `/api/students/board-type-stats` | 登录 | 通学/寄宿统计 |
 | GET | `/api/students/export` | 登录 | 导出花名册 |
 | GET | `/api/students/template` | 教师+ | 导入模板 |
-| POST | `/api/students/import` | 教师+ | 批量导入 |
+| POST | `/api/students/import` | 教师+ | 批量导入。同班已有同名账号的**行判失败**并在 `errors` 里给出原因（RBT-66：此前该行「成功但没建账号」）；失败行不落档案 |
 
 ## 五、教师工作台
 
@@ -277,7 +279,7 @@
 > **AI 批改触发点**：**仅** `POST /api/homework/assignments/{id}/ai-grade` 与 `POST /api/homework/submissions/{id}/ai-grade`
 > （教师+，班级归属校验）。学生提交接口 `/assignments/{id}/submissions` **不做任何 AI 调用**。
 > ⚠️ 另有**一处新的 AI 外呼**（不是批改、不写批改结果）：`POST /api/homework/assignments/{id}/ai-analysis`。
-> 它把已有批改结果与提交内容**只读**地交给模型，产出班级综合评价，同样走 `ai_grading._call_model` 单一外呼入口、
+> 它把**分数段统计与逐生 AI 批改结论**（不含提交原文）**只读**地交给模型，产出班级综合评价，同样走 `ai_grading._call_model` 单一外呼入口、
 > 同样受平台总开关 / 学校闸 / 双池额度约束。改变这条链路前请先看 `services/ai_analysis.py` 的模块 docstring。
 > 学生重交时其提交的 AI 批改结果行被删除（旧结果只对旧版本内容成立）。
 >
@@ -291,5 +293,5 @@
 
 - **分页**：`page`（默认 1）、`page_size`（默认 20，最大 200），返回 `{items, total}`
 - **错误响应**：统一 `{detail: "中文提示"}`；状态码 400（参数）/ 401（未认证）/ 403（无权限）/ 404（不存在）/ 409（冲突）/ 413（文件过大）/ 422（校验）/ 423（锁定）/ 429（限流）/ 500（服务器错误）
-- **学生语义**：所有业务表 `student_id` 均指向 `students.id`（学生档案），学生登录账号（`users.id`）通过「班级 + 姓名」软关联
+- **学生语义**：所有业务表 `student_id` 均指向 `students.id`（学生档案）；学生登录账号（`users.id`）通过 **`users.student_id` 硬外键**关联到学生档案（`students.id`）——**仅在历史数据未回填该列时**才回落「班级 + 姓名」软匹配，且必须**唯一命中**（≥2 条同名一律跳过，宁可留孤儿档案也不串人，见 RBT-35 / RBT-57）。🔴 **两个方向都判歧义**（2026-11-04 修 RBT-65）：档案→账号（`get_account_of_student`）命中同学的账号时返回 None，绝不返回；账号→档案（`get_student_by_account`）同班同名有 ≥2 份档案时同样返回 None，绝不猜 —— 猜错等于把这名学生的请求接到**同学的数据**上
 - **多租户隔离**：由 **ORM 层事件统一按 `school_id` 隔离**（查询自动注入过滤、写入自动回填），平台超管（`school_id=NULL`）跨校

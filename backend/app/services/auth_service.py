@@ -32,6 +32,7 @@ from app.security import (
     verify_password,
 )
 from app.services import uploads_service
+from app.services.student_account import build_student_user
 from app.utils import gen_student_no, to_dict
 
 # 登录失败锁定策略（连续失败 15 次锁定 15 分钟）
@@ -389,28 +390,44 @@ def register(db: Session, payload, user_agent: str | None = None) -> dict:
         raise HTTPException(status_code=403, detail="该班级已毕业，无法注册")
     _school_active_or_403(db, cls.school_id)
 
-    # 校验是否已存在「班级 + 姓名」的学生账号
+    # 校验是否已存在「班级 + 姓名」的学生账号。
+    # 🔴 文案不能只说「已有账号，请直接登录」（RBT-65）：同班同名时这个账号很可能是
+    # **同学的**，让学生「直接登录」等于把他送进别人的账号。改为告知「同名账号已存在」
+    # 并把处理路径指给班主任。
     exists = get_student_account(db, payload.class_id, name)
     if exists:
-        raise HTTPException(status_code=409, detail="该学生已有账号，无需重复注册，请直接登录")
+        raise HTTPException(
+            status_code=409,
+            detail="该班级已存在同名账号，无法重复注册；若该账号不是你的，请联系班主任处理重名",
+        )
+    # 🔴 同班同名有多份档案时，`_ensure_student_profile` 的「班级+姓名」软匹配会
+    # 随机命中其中一份 —— 新注册的账号就被绑到**同学**的档案上（RBT-65 的同类路径）。
+    # 归属无从判定时明确拒绝，绝不猜。
+    if (
+        db.query(Student)
+        .filter(Student.class_id == payload.class_id, Student.name == name)
+        .count()
+        > 1
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="该班级存在多份同名档案，无法确定归属；请联系班主任处理重名后再注册",
+        )
 
     # 同步创建学生档案，否则教师后台（花名册/考勤/作业/成绩）查不到该生
     student = _ensure_student_profile(db, payload.class_id, name)
 
-    user = User(
-        username=name,  # 用户名 = 姓名
-        password_hash=hash_password(payload.password),
-        name=name,
-        role="student",
-        school_id=cls.school_id,  # 租户归属，缺失会被教师查询的 school_id 过滤掉
+    # 账号一律走唯一建号入口 `build_student_user`（审计 SMP-24）：它显式传
+    # `school_id`（租户归属，缺失会被教师查询的 school_id 过滤掉）、回填
+    # `student_id`（档案 ↔ 账号的唯一稳定锚点，缺了此后只能靠班级+姓名软匹配，
+    # 改名/转班就会串人，见 RBT-35），并由口令强度**自动推导**
+    # `must_change_password`（弱口令不直接拒绝、保持既有注册体验，但强制登录后修改）。
+    user = build_student_user(
+        name=name,  # 用户名 = 姓名
+        school_id=cls.school_id,
         class_id=payload.class_id,
-        # 档案 → 账号的稳定锚点：缺了它，此后一切「档案 ↔ 账号」只能靠班级+姓名软匹配，
-        # 学生改名/转班就会串人（删错账号、改错密码，见 RBT-35）
         student_id=student.id,
-        # 自助注册同样遵守密码强度口径：弱口令不直接拒绝（保持既有注册体验），
-        # 但强制其登录后修改，与教师建号路径（students_service 里
-        # `must_change_password=validate_password_strength(pwd) is not None`）一致。
-        must_change_password=validate_password_strength(payload.password) is not None,
+        password=payload.password,
     )
     db.add(user)
     db.flush()

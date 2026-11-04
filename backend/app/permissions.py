@@ -1,10 +1,13 @@
 """班级权限检查模块"""
+import logging
 from typing import List
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import Classroom, ClassTeacher, School, Student, User
+
+logger = logging.getLogger("teachhub.permissions")
 
 
 # ---------------- 角色与租户辅助 ----------------
@@ -252,6 +255,12 @@ def get_student_account(db: Session, class_id: int, name: str) -> User | None:
     软匹配会在改名/转班后命中错人（2026-10-25 修 RBT-35：删 B 的账号删掉了 A 的、
     重置 B 的密码改掉了 A 的）。
 
+    🔴 本函数**只回答「这把软钥匙当前指向哪个账号」，不回答「这个账号是不是他的」**
+    （RBT-65：同班同名时它会返回**同学**的账号）。因此它的返回值**绝不能**用于
+    删除账号 / 改密码 / 改身份这类写操作，只能用于「查重时要不要提示已存在」。
+    要判断归属，用 ``get_account_of_student``（唯一可判定的兜底）或
+    ``find_account_conflict``（把冲突讲清楚）。
+
     本函数本身仍保留软匹配语义：入参只有班级与姓名，没有可用于改写的 ``student_id``。
     账号唯一性由 ``users.username_scope`` 复合唯一约束在库层保证（见 models/user.py）。
     """
@@ -264,15 +273,114 @@ def get_student_account(db: Session, class_id: int, name: str) -> User | None:
     )
 
 
+def _same_name_student_count(db: Session, class_id: int | None, name: str | None) -> int:
+    """同班同名**档案**数（判定「班级 + 姓名」这把软钥匙是否还有唯一候选）。"""
+    return (
+        db.query(Student)
+        .filter(Student.class_id == class_id, Student.name == name)
+        .count()
+    )
+
+
+def _legacy_account(db: Session, student: Student) -> User | None:
+    """软匹配兜底：**只在归属唯一可判定时**返回账号，否则返回 None 并记 warning。
+
+    调用方：``get_account_of_student``（档案 → 账号，命中后回填硬外键）、
+    ``get_student_avatar``（只读，不回填）。
+
+    判据（缺一不可，RBT-65）：
+
+    1. 命中账号的 ``student_id`` 必须为空 —— 非空且指向别的档案，说明这把软钥匙
+       指向的是**同班同名同学**，返回它等于把「删错账号 / 改错密码」重新引回来；
+    2. 同班同名档案必须**恰好一份** —— 有多份时「这个 ``student_id`` 为空的账号是
+       谁的」根本无从判定，回填等于随机认领，宁可不认（返回 None，让调用方给出
+       「同班同名无法自动建号」的明确提示）。
+    """
+    if not student or not student.class_id or not student.name:
+        return None
+    u = get_student_account(db, student.class_id, student.name)
+    if u is None:
+        return None
+    if u.student_id is not None:
+        if u.student_id == student.id:
+            # 硬外键已命中（正常不会走到这里），防御性保留
+            return u
+        logger.warning(
+            "软匹配命中同班同名账号#%s（属于档案#%s），与当前档案#%s 归属不同，已拒绝采用",
+            u.id, u.student_id, student.id,
+        )
+        return None
+    same_name = _same_name_student_count(db, student.class_id, student.name)
+    if same_name > 1:
+        logger.warning(
+            "同班同名档案共 %s 份（班级#%s 姓名「%s」），账号#%s 的 student_id 为空、"
+            "归属无法唯一判定，已拒绝采用（可用 find_account_conflict 向调用方说明原因）",
+            same_name, student.class_id, student.name, u.id,
+        )
+        return None
+    return u
+
+
+def find_account_conflict(
+    db: Session,
+    class_id: int | None,
+    name: str | None,
+    *,
+    student_id: int | None = None,
+) -> User | None:
+    """返回**挡住**为 ``(class_id, name)`` 建号的账号，没有则 None。
+
+    用途单一：把「为什么这个学生建不了登录账号」讲成人话（409 文案 / 导入行错误），
+    避免「静默不建号但接口 200」（RBT-66）。**绝不能**拿返回值去做删除 / 改密 / 改身份
+    —— 它正是 ``get_account_of_student`` 刻意拒绝返回的那个账号。
+
+    Args:
+        class_id / name: 目标学生档案的班级与姓名。
+        student_id: **该学生自己的档案 id**；建号前档案还没入库时传 None（默认）。
+            ``None`` 与「已入库」的判据差异只出现在「账号 ``student_id`` 为空」这一支：
+            档案已入库时它可能是**这名学生本人**的历史账号（同班同名仅此一份即可认领）；
+            档案尚未入库时则要看同班是否已有同名档案 —— 有（说明账号是同学的）判冲突，
+            没有（说明是已删学生遗留的**孤儿账号**）放行，由 ``get_account_of_student``
+            在建档后认领回填，而不是让教师先去清理孤儿。
+
+    与 ``_legacy_account`` 严格互补：``get_account_of_student`` 返回 None 时，本函数
+    要么给出被占用的账号，要么返回 None（说明确实没有账号，可以安全建号）。
+    """
+    if not class_id or not name:
+        return None
+    u = get_student_account(db, class_id, name)
+    if u is None:
+        return None
+    if u.student_id is not None:
+        return None if u.student_id == student_id else u
+    # 账号 student_id 为空：档案未入库 ⇒ 看是否已有同名档案（无 ⇒ 孤儿账号，可认领）；
+    # 档案已入库 ⇒ 同班同名唯一才可能是它的，否则归属无从判定，判冲突。
+    same_name = _same_name_student_count(db, class_id, name)
+    if student_id is None:
+        return u if same_name > 0 else None
+    return u if same_name > 1 else None
+
+
 def get_account_of_student(db: Session, student: Student) -> User | None:
-    """由**学生档案**定位其登录账号：硬外键优先，软匹配仅作历史数据兜底。
+    """由**学生档案**定位其登录账号：硬外键优先，软匹配仅在归属唯一可判定时兜底。
 
     🔴 这是「档案 → 账号」的**唯一正路**（2026-10-25 修 RBT-35）。顺序：
 
     1. ``users.student_id == student.id`` —— 唯一、且不受改名/同班同名影响；
     2. 回落 ``(class_id, name)`` 软匹配，覆盖迁移期尚未回填 ``student_id`` 的历史行；
-    3. 回落命中且该账号 ``student_id`` 为空时**顺手回填**（调用方随后都会 commit），
-       下一次定位就命中硬外键 —— 无需额外的数据修复脚本，软匹配会随使用逐步收敛掉。
+    3. 回落命中且该账号 ``student_id`` 为空、**且同班同名档案只有这一份**时顺手回填
+       （调用方随后都会 commit），下一次定位就命中硬外键 —— 无需额外的数据修复脚本。
+
+    🔴 **兜底必须校验归属（2026-11-03 修 RBT-65）**：旧实现在第 2 步只做
+    ``(class_id, name)`` 查询就返回结果，于是同班同名的 B 会拿到 A 的账号，后果全部
+    落在写操作上、且不可逆：``delete_student`` 会 ``purge_user_data`` 并删掉 A 的账号，
+    ``reset_student_password`` 改掉 A 的密码，``update_student`` 把 A 的登录身份改掉。
+    「同班同名 + 其中一人没有账号」不需要攻击者，正常业务就会产生（见 RBT-66）。
+
+    因此第 2 步命中后一律经 ``_legacy_account`` 过滤：账号属于别人、或归属无从判定
+    （同班同名多份档案 + ``student_id`` 为空）时**返回 None**，并记 warning。
+    调用方拿到 None 时应把它当作「该生没有可用账号」——建号前先用
+    ``find_account_conflict`` 区分「真没有」与「被同名账号占用」，后者给出明确错误。
 
     为什么不覆盖已有 ``student_id``：非空但指向别的档案属于**脏数据**，静默改写会把
     「账号挂错人」变成看不出发生过的事；保留它，交由 ``get_student_by_account`` 的
@@ -287,8 +395,8 @@ def get_account_of_student(db: Session, student: Student) -> User | None:
     )
     if u is not None:
         return u
-    u = get_student_account(db, student.class_id, student.name)
-    if u is not None and u.student_id is None:
+    u = _legacy_account(db, student)
+    if u is not None:
         u.student_id = student.id
     return u
 
@@ -307,14 +415,26 @@ def get_student_by_account(db: Session, user: User) -> Student | None:
     在 **fresh session** 下，它会正常触发 ``do_orm_execute``，``with_loader_criteria``
     的 ``school_id`` 条件被注入，跨租户 PK 返回 None（探针实测：SQL 1 次、返回 None）。
     真正会绕过的是**同一 Session 内该对象已在 identity map 中**：若它此前被某条
-    ``execution_options(skip_tenant_filter=True)`` 的查询（全项目 16 处，2026-10-01 实测：
-    platform_settings / admin_service / ai_grading / auth_service / homework_service）
-    或平台超管分支加载过，
+    ``execution_options(skip_tenant_filter=True)`` 的查询，或平台超管分支加载过，
     则 ``db.get`` 直接返回缓存对象、**零 SQL、零事件** ⇒ 过滤无从生效。
+
+    这条推理的规模有多大，请**现算，别引用历史数字**（RDB-62：本注释原写「全项目 16 处」，
+    2026-11-03 复核已在 25 处量级，多出来的正是 AI 链路）：
+
+    ```
+    grep -rn "skip_tenant_filter=True" app --include=*.py | wc -l
+    # 2026-11-04 实测 27 行 = 代码调用 25 处 + 本文件 docstring 里的 2 处说明文字
+    # 25 处分布：ai_grading 7 + homework_service 7 + platform_settings 5
+    #           + auth_service 3 + ai_analysis 2 + admin_service 1
+    ```
+
     （注：``skip_tenant_filter`` 见 ``app/tenant.py::_apply_tenant_filter``。）
 
     因此显式 ``school_id`` 比对是对上述短路的兜底：即便拿到跨租户缓存对象，
     也会被这里拦下返回 None。平台超管（``school_id is None``）跨租户属预期，放行。
+
+    软匹配兜底同样要判歧义：``(class_id, name)`` 命中多份档案时返回 None（见下方注释），
+    这是 RBT-65 的反方向 —— 猜错档案等于把**同学的数据**返回给当前学生。
     """
     if not user:
         return None
@@ -335,6 +455,18 @@ def get_student_by_account(db: Session, user: User) -> Student | None:
     # 回落：软匹配（历史账号 student_id 尚未回填）
     if user.class_id is None:
         return None
+    # 🔴 反方向也要判歧义（RBT-65 的另一半）：同班同名多份档案时 `.first()` 是随机认领，
+    # 一旦认到别人档案，该生这个请求看到的就是**同学的作业/成绩/学伴记录**（越权读）。
+    # 宁可查不到（调用方按无档案处理），也不猜。实测库中 `student_id` 为空的学生账号
+    # 0 条（2026-11-04），该分支只服务于迁移期数据。
+    same_name = _same_name_student_count(db, user.class_id, user.name)
+    if same_name > 1:
+        logger.warning(
+            "账号#%s 的 student_id 为空且班级#%s 姓名「%s」有 %s 份档案，"
+            "归属无从判定，已拒绝按软匹配返回（避免读到同学数据）",
+            user.id, user.class_id, user.name, same_name,
+        )
+        return None
     return (
         db.query(Student)
         .filter(Student.class_id == user.class_id, Student.name == user.name)
@@ -348,8 +480,10 @@ def get_student_avatar(db: Session, student) -> str | None:
     头像统一存于 users.avatar，students 表不再冗余存储。
 
     优先走硬外键：用 ``student.id`` 反查 ``users.student_id``（有索引
-    ``ix_users_student_id``）；查不到再回落到 ``(class_id, name)`` 软匹配。
-    该 queries 走 ORM ``query()``，因此自然受租户过滤管辖，无需额外显式校验。
+    ``ix_users_student_id``）；查不到再回落到 ``(class_id, name)`` 软匹配 —— 但必须
+    与 ``get_account_of_student`` 同一套归属校验（``_legacy_account``），否则同班同名的
+    B 会显示 A 的头像（RBT-65 的同类表现）。该 queries 走 ORM ``query()``，因此自然
+    受租户过滤管辖，无需额外显式校验；**只读，不回填** ``student_id``。
     """
     if not student:
         return None
@@ -359,6 +493,6 @@ def get_student_avatar(db: Session, student) -> str | None:
         .first()
     )
     if u is None:
-        # 回落：软匹配
-        u = get_student_account(db, student.class_id, student.name)
+        # 回落：软匹配（仅当归属唯一可判定，见 `_legacy_account`）
+        u = _legacy_account(db, student)
     return u.avatar if u else None

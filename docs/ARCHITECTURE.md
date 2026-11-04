@@ -55,7 +55,7 @@ teachhub/
 │   │   ├── platform_settings.py # 平台级全局配置（school_id IS NULL 作用域）：get/set_global_setting、is_registration_allowed、AI 批改开关与限额、**AI 学伴开关 + 平台池限额（`ai_companion_enabled` / `ai_companion_daily_limit`）+ 每生配额限额（`ai_companion_per_student_daily_limit`）**（查询显式 skip_tenant_filter）
 │   │   ├── school_settings.py # 校级 AI 配置（settings 表 school 级行，`school_ai_*` 4 key）：get/set_school_setting（写 None=删行）、校级开关（缺省开 = 跟随平台闸）与校池限额（缺省不限）；读用 query() 禁 db.get、不加 skip_tenant_filter（实测依据见模块 docstring）
 │   │   ├── observability.py   # 可观测性：访问日志中间件 + /metrics（Prometheus 指标，零依赖）
-│   │   ├── pagination.py      # 单查询分页：paginate(db, stmt, page, page_size)（COUNT(*) OVER () 一次往返取「数据 + 总数」）
+│   │   ├── pagination.py      # 单查询分页：paginate(db, stmt, page, page_size)（COUNT(*) OVER () 一次往返取「数据 + 总数」；只接受 select()，传 Query 抛 TypeError）
 │   │   ├── logging_config.py  # 结构化日志：X-Request-ID 透传 + RequestIdFilter + StructuredFormatter + setup_logging()
 │   │   ├── schemas.py         # Pydantic 请求/响应模型
 │   │   ├── cleanup.py         # 级联清理（purge_student_data / purge_user_data，叶子→根拓扑倒序）
@@ -98,7 +98,7 @@ teachhub/
 │   │   │   ├── ai_companion.py / ai_companion_teacher.py  # AI 学伴：学生问答链路（上下文组装 + 模型调用 + V1 启发式护栏 + 落库 + **平台池四原语 + 每生配额三原语 + 校池原语（三闸：每生→学校→平台）**）/ 教师侧**只读**查询（本班会话列表 + 单会话详情 + 审计）
 │   │   │   └── workbench/     #   工作台子包：_common.py + scores/leaves/communications/resources/exams/seats/imports/profile/reports_service.py
 │   │   └── seed.py            # 假数据生成（多租户：默认校 + 第二校）
-│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 35 个 revision，head b7c8d9e0f1a2）
+│   ├── alembic/               # 数据库迁移（Alembic，schema 唯一来源，当前 36 个 revision，head aa11bb22cc33）
 │   ├── logs/                  # 运行日志（teachhub.log，按天滚动保留 30 天，不入库）
 │   ├── tests/                 # pytest 自动化测试（含 test_multi_tenant.py）
 │   ├── pytest.ini            # pytest 配置（testpaths = tests，仅收集 tests/）
@@ -206,11 +206,12 @@ teachhub/
 
 ### 5.3 外键删除策略（分层）
 
-外键共 83 个（模型定义口径，2026-10-01 实测 `Base.metadata` 逐列统计）。删除规则分三层：**24 个显式声明 `ondelete`（CASCADE 22 / SET NULL 2）**，其余 59 个**未显式设置**（`ondelete=None`，InnoDB 默认行为等价 RESTRICT）：
+外键共 83 个（模型定义口径，2026-11-03 实测 `Base.metadata` 逐列统计）。删除规则分四层：**25 个显式声明 `ondelete`（CASCADE 22 / SET NULL 2 / RESTRICT 1）**，其余 58 个**未显式设置**（`ondelete=None`，InnoDB 默认行为等价 RESTRICT）：
 
 - **CASCADE（22 个，纯从属关系）**：作业链（`assignment_attachments`/`submissions`→`assignments`、`excellent_works`/`submission_comments`→`submissions`、`work_comments`→`excellent_works`、`ai_grading_results`→`submissions`）+ **AI 学伴链（`ai_companion_conversations`→`students`/`assignments`、`ai_companion_messages`→`ai_companion_conversations`、`ai_companion_usage_daily_student`→`students`）** + 学生业务链（`scores`/`attendance`/`leaves`/`performances`/`communications`/`talks`/`return_records`/`student_comments`/`student_profile_tags`/`student_board_history`/`submissions`→`students`）。删父记录自动级联删子记录。
-- **默认 RESTRICT 语义（59 个，`ondelete` 未显式设置）**：这些列在模型中**未声明** `ondelete`，依赖 InnoDB 默认行为（不级联、不置空）：`classrooms.teacher_id`、`class_teachers.teacher_id`、`assignments.created_by`、`excellent_works.selected_by`、`ai_credentials.updated_by`、各日志表的 `teacher_id`/`created_by`/`changed_by` 等，以及所有 `school_id`/`class_id` 引用（含 `ai_grading_results.school_id`、`ai_companion_conversations.school_id`、`ai_companion_messages.school_id`、`ai_companion_usage_daily_student.school_id`、**两张 AI 校池表的 `school_id`**：`ai_usage_daily_school` / `ai_usage_daily_companion_school`）。删归属主体时保留业务数据，由应用层显式处理。
 - **SET NULL（2 个，归属可空）**：`refresh_tokens.school_id` → `schools.id`（学校删除后令牌保留但失去租户归属；平台超管的令牌本即 `NULL`）；`users.student_id` → `students.id`（学生档案删除后登录账号保留但断开硬关联，回退「班级+姓名」软关联）。
+- **RESTRICT（1 个，显式声明）**：`users.class_id` → `classrooms.id`（班级下有账号时禁止删班，由 DB 兜底；应用层另有 `delete_classroom` 的前置校验）。
+- **默认 RESTRICT 语义（58 个，`ondelete` 未显式设置）**：这些列在模型中**未声明** `ondelete`，依赖 InnoDB 默认行为（不级联、不置空）：`classrooms.teacher_id`、`class_teachers.teacher_id`、`assignments.created_by`、`excellent_works.selected_by`、`ai_credentials.updated_by`、各日志表的 `teacher_id`/`created_by`/`changed_by` 等，以及所有 `school_id`/`class_id` 引用（含 `ai_grading_results.school_id`、`ai_companion_conversations.school_id`、`ai_companion_messages.school_id`、`ai_companion_usage_daily_student.school_id`、**两张 AI 校池表的 `school_id`**：`ai_usage_daily_school` / `ai_usage_daily_companion_school`）。删归属主体时保留业务数据，由应用层显式处理。
 - **代码双保险**：`cleanup.py` 的 `purge_student_data`/`purge_user_data` 按「叶子→根」拓扑倒序先删子表再删父表，与 DB CASCADE 兼容（先显式清空，CASCADE 无副作用）。
 
 > 说明一：模型大多**不定义 ORM relationship**，关联查询通过 `db.get()` / `filter()` 手动完成，以避免模块间循环 import；唯一例外是同文件内的 `Assignment ↔ AssignmentAttachment`（一对多，用 `relationship` + `cascade="all, delete-orphan"` 实现附件级联删除）。

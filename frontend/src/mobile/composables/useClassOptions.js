@@ -18,7 +18,9 @@ export function useClassOptions(onSelected) {
         classId.value = classOptions.value[0].value
         await onSelected()
       }
-    } catch (e) {}
+    } catch (e) {
+      // 已由全局拦截器提示（request.js 在 /m* 路由走 showToast）；这里只 degrade 成空选项
+    }
   }
 
   return { classId, classOptions, loadClasses }

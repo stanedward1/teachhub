@@ -3,7 +3,7 @@
 - 批量查询：消除列表接口的 N+1 问题（一次 IN 查询，替代循环内逐条 db.get）。
 - 审计：关键写操作记录到 operation_logs 表。
 """
-from sqlalchemy import and_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Classroom, OperationLog, Student, User
@@ -25,33 +25,53 @@ AUDIT_UPDATE_SCHOOL_AI_SETTINGS = "update_school_ai_settings"
 
 
 def active_student_id_query(db: Session):
-    """在籍（未退学）学生 id 子查询，供 `Model.student_id.in_(...)` 过滤使用。"""
-    return db.query(Student.id).filter(Student.is_dropped_out.is_(False))
+    """在籍（未退学）学生 id 子查询，供 `Model.student_id.in_(...)` 过滤使用。
+
+    🔴 返回 ``select()`` 而非 ``Query``（2026-11-04）：``in_(Query)`` 会触发
+    ``SADeprecationWarning: Coercing Query object into a select()``，SQLAlchemy 2.1 起不再
+    接受。全部调用点都只把它当子查询用（``.in_(...)``），换成 ``select()`` 语义完全一致。
+    """
+    return select(Student.id).where(Student.is_dropped_out.is_(False))
 
 
 def active_classroom_id_query(db: Session):
-    """未毕业班级 id 子查询，供 `Model.class_id.in_(...)` 过滤使用。"""
-    return db.query(Classroom.id).filter(Classroom.is_graduated.is_(False))
+    """未毕业班级 id 子查询，供 `Model.class_id.in_(...)` 过滤使用（同上：返回 ``select()``）。"""
+    return select(Classroom.id).where(Classroom.is_graduated.is_(False))
 
 
 def batch_student_avatar_map(db: Session, student_ids) -> dict:
     """{student_id: avatar}，一次 join 查询避免 N+1。
 
-    头像统一存于 users.avatar（学生登录账号），通过 class_id + name 关联到学生档案。
+    头像统一存于 users.avatar（学生登录账号）。🔴 必须按**硬外键**
+    ``users.student_id == students.id`` 关联（RBT-65）：旧实现用
+    ``(class_id, name)`` 软关联，同班同名的两名学生会被映射到**同一个**账号上，
+    B 的头像列显示的是 A 的照片。
+
+    历史账号（``student_id`` 尚未回填）逐条回落到 ``get_student_avatar`` —— 那里有
+    与 ``get_account_of_student`` 同源的归属校验，且这类行在实测库里为 0 条
+    （2026-11-04：37 个学生账号、NULL 0 条），N+1 只发生在真正的历史数据上。
     """
     ids = [i for i in (student_ids or []) if i is not None]
     if not ids:
         return {}
     rows = (
         db.query(Student.id, User.avatar)
-        .join(
-            User,
-            and_(User.class_id == Student.class_id, User.name == Student.name, User.role == "student"),
-        )
+        .join(User, User.student_id == Student.id)
         .filter(Student.id.in_(ids))
         .all()
     )
-    return {sid: avatar for sid, avatar in rows}
+    result = {sid: avatar for sid, avatar in rows}
+    missing = [i for i in ids if i not in result]
+    if missing:
+        # 延迟导入：`app.permissions` 反向不依赖本模块，此处仅为把循环 import 的可能
+        # 彻底挡在函数体内（audit 被 models 之外的层次广泛引用）。
+        from app.permissions import get_student_avatar
+
+        for s in db.query(Student).filter(Student.id.in_(missing)).all():
+            avatar = get_student_avatar(db, s)
+            if avatar:
+                result[s.id] = avatar
+    return result
 
 
 def batch_student_map(db: Session, student_ids) -> dict:

@@ -4,6 +4,7 @@
 - 不 import 任何 router 模块。
 """
 from datetime import date, datetime, time, timedelta
+import logging
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -51,6 +52,8 @@ from app.models.user import compute_username_scope
 from app.security import hash_password, validate_password_strength
 from app.utils import gen_student_no, to_dict, normalize_page
 from app.pagination import paginate
+
+logger = logging.getLogger("teachhub.admin")
 
 def _score_distribution(values) -> dict:
     """按全站统一分段统计成绩分布，返回 ``{展示标签: {count, percent}}``。
@@ -506,16 +509,66 @@ def delete_user(db: Session, user_id: int, user: User) -> dict:
     if is_platform_admin(u) and db.query(User).filter(User.role == "super_admin").count() <= 1:
         raise HTTPException(status_code=400, detail="至少保留一个平台超管账号")
 
-    # 删除学生账号时，级联清理对应的学生档案及其业务数据，避免孤儿数据导致后续接口异常
+    # 删除学生账号时，级联清理对应的学生档案及其业务数据，避免孤儿数据导致后续接口异常。
+    #
+    # 🔴 定位档案的优先级（审计 RBT-57）：**硬外键优先，软匹配仅在唯一命中时才敢动**。
+    # `users.student_id` 是「账号 → 档案」唯一锚点，不受学生改名 / 同班同名影响；
+    # 旧实现只用 `class_id + name` 软匹配并 `.first()`，同班同名时会「删 A 的账号、
+    # 顺手把 B 的档案（及作业/成绩/考勤）不可逆 purge 掉」。
     if u.role == "student":
-        stu = (
-            db.query(Student)
-            .filter(Student.class_id == u.class_id, Student.name == u.name)
-            .first()
-        )
-        if stu:
+        stu = None
+        if u.student_id is not None:
+            stu = db.get(Student, u.student_id)
+        if stu is None:
+            # 硬外键为空（历史账号）或指向的档案已不存在 ⇒ 才回落软匹配，且必须唯一命中。
+            candidates = (
+                db.query(Student)
+                .filter(Student.class_id == u.class_id, Student.name == u.name)
+                .limit(2)
+                .all()
+            )
+            if len(candidates) == 1:
+                stu = candidates[0]
+                logger.warning(
+                    "delete_user: 账号#%s 缺少有效 users.student_id，按班级+姓名兜底定位到档案#%s，"
+                    "本次将一并清理该档案",
+                    u.id,
+                    stu.id,
+                )
+            elif len(candidates) >= 2:
+                # ⚠️ 同班同名是真实冲突：宁可留一个孤儿档案（后续可手工清理），
+                # 也绝不能 purge 错人——`purge_student_data` 会不可逆删除该生的
+                # 作业/成绩/考勤数据。
+                stu = None
+                logger.warning(
+                    "delete_user: 账号#%s 缺少有效 users.student_id，且班级#%s 内存在 %s 名同名"
+                    "（%s）学生档案，无法唯一确定归属，已跳过档案清理以免误删",
+                    u.id,
+                    u.class_id,
+                    len(candidates),
+                    u.name,
+                )
+        # 🔴 跨校护栏（defense-in-depth）：硬外键优先意味着**不再按 `class_id` 过滤**，
+        # 若 `users.student_id` 被脏数据指向**外校**档案，本校管理员删账号就会 purge 到
+        # 外校学生的作业/成绩/考勤。当前不可被利用 —— `student_id` 没有任何写入入口
+        # （`update_user` 的字段白名单只有 name / phone / role / class_id），但这道校验
+        # 让「将来某个新接口写了 student_id」不会静默升级成跨租户数据删除。
+        # ⚠️ 刻意**不抛 4xx**：账号该删还是要删，只是不动档案（跳过即可，别把删除变成 500/403）。
+        if stu is not None and u.school_id is not None and stu.school_id != u.school_id:
+            logger.warning(
+                "delete_user: 账号#%s 归属学校#%s，但其 users.student_id 指向的档案#%s 归属"
+                "学校#%s，已跳过档案清理以免跨校误删（请人工核对这条脏数据）",
+                u.id,
+                u.school_id,
+                stu.id,
+                stu.school_id,
+            )
+            stu = None
+        if stu is not None:
             purge_student_data(db, stu.id)
             db.delete(stu)
+        # ⚠️ 反方向（档案 → 账号）已由 `permissions.get_account_of_student` 走硬外键
+        # （RBT-35）；这里补的是「账号 → 档案」这一半。
 
     # 删除账号前，级联清理所有引用该 users.id 的业务数据，
     # 否则 MySQL 外键约束会拒绝删除（返回 500）

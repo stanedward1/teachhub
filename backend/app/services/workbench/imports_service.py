@@ -11,15 +11,15 @@ from app.models import (
     Classroom,
     ImportHistory,
     Student,
-    User,
 )
 from app.pagination import paginate
 from app.permissions import (
+    find_account_conflict,
     get_account_of_student,
     get_teacher_class_ids,
     is_any_admin,
 )
-from app.security import hash_password
+from app.services.student_account import build_student_user, student_account_conflict_detail
 from app.services.workbench.importer import (
     ROW_FAIL,
     ROW_OK,
@@ -115,6 +115,16 @@ def import_students(db: Session, user, file) -> dict:
         if first_school[0] is None:
             first_school[0] = class_school.get(class_id)
 
+        # 🔴 同班同名建号冲突必须在**写入之前**判定（RBT-66）：学生登录名即姓名，
+        # 同班内唯一性由 `uq_user_scope_username` 兜底。旧实现在冲突时只是跳过建号、
+        # 该行仍然算「成功」，教师核对花名册时看不出这名学生没有账号。
+        # 这里判成**行失败**：本行档案与账号都不写，教师在错误列表里看到原因后处理重名。
+        blocked = find_account_conflict(session, class_id, data["name"])
+        if blocked is not None:
+            return ROW_FAIL, [
+                f"第{row_num}行：{student_account_conflict_detail(data['name'])}"
+            ]
+
         student = Student(
             student_no=data["student_no"],
             name=data["name"],
@@ -130,14 +140,14 @@ def import_students(db: Session, user, file) -> dict:
         session.add(student)
         session.flush()
 
-        # 定位走硬外键（RBT-35）；新建账号时回填 student_id，否则此后只剩软匹配可用
+        # 定位走硬外键（RBT-35）；新建账号一律走唯一建号入口 `build_student_user`
+        # —— 它会显式传 school_id、回填 student_id，并**由口令强度自动推导**
+        # `must_change_password`。原实现手写 `User(...)` 时漏了该标记，导入的学生
+        # 默认口令 123456 可长期使用（审计 SMP-24）。
         exists_user = get_account_of_student(session, student)
         if not exists_user:
-            session.add(User(
-                username=data["name"],
-                password_hash=hash_password("123456"),
+            session.add(build_student_user(
                 name=data["name"],
-                role="student",
                 school_id=class_school.get(class_id),
                 class_id=class_id,
                 student_id=student.id,

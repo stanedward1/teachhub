@@ -16,7 +16,7 @@ import logging
 import os
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -125,8 +125,14 @@ def _remove_upload_files(paths) -> None:
             pass
 
 
-def _sync_attachments(a: Assignment, attachments) -> None:
-    """同步作业附件（传入 [{filename, filepath}, ...]，整体替换旧附件），并清理被移除的附件文件。
+def _sync_attachments(a: Assignment, attachments) -> list[str]:
+    """同步作业附件（传入 [{filename, filepath}, ...]，整体替换旧附件）。
+
+    **只收集待删文件，不删文件**：返回被移除附件的 `filepath` 列表，由调用方在
+    `db.commit()` **成功之后**交给 `_remove_upload_files`（RBT-71）。理由：事务能回滚，
+    `os.remove()` 不能 —— 先删文件再校验/提交，一旦后续任何一步 raise，记录回滚复原、
+    文件却已物理消失，附件永久 404 且无日志。正确顺序的样板见
+    `admin_service.delete_user` / `students_service.delete_student`（commit 后再删）。
 
     🔴 每个 `filepath` 都要先过 `ensure_upload_path`（非法 ⇒ **400**）：附件路径同样来自
     请求体，落库后会成为 `delete_assignment` / `_sync_attachments` 的删除目标
@@ -146,7 +152,7 @@ def _sync_attachments(a: Assignment, attachments) -> None:
         a.attachments.append(
             AssignmentAttachment(filename=att["filename"], filepath=att["filepath"])
         )
-    _remove_upload_files(removed)
+    return removed
 
 
 def _ai_grading_out(result: AiGradingResult | None, *, for_student: bool = False) -> dict | None:
@@ -285,15 +291,19 @@ def _assignment_submission_ids(db: Session, assignment_id: int) -> list[int]:
     ]
 
 
-def _paginate_or_all(db: Session, q, page: int | None, page_size: int | None):
-    """列表分页双路径：传了 page/page_size 走分页，否则保持原全量行为。"""
+def _paginate_or_all(db: Session, stmt: Select, page: int | None, page_size: int | None):
+    """列表分页双路径：传了 page/page_size 走分页，否则保持原全量行为。
+
+    🔴 入参必须是 ``select()``，不能是 ``db.query(...)``（RBT-68 / RDB-63）：分页路径直接
+    喂给 ``paginate``（它现在有类型断言），全量路径走 ``db.scalars``。
+    """
     if page is not None or page_size is not None:
         # 分页路径：规范参数（page_size 上限 200，防 `?page_size=100000` 放大查询）
         page, page_size = normalize_page(page, page_size)
-        rows, total = paginate(db, q, page, page_size)
+        rows, total = paginate(db, stmt, page, page_size)
     else:
         # 兼容路径：不传 page/page_size 时保持原全量行为与返回结构不变
-        rows = q.all()
+        rows = list(db.scalars(stmt).all())
         total = len(rows)
     return rows, total
 
@@ -410,25 +420,26 @@ def list_assignments(
 ) -> dict:
     # 学生角色：预取学生档案，用于判断是否已提交
     stu = get_student_by_account(db, user) if user.role == "student" else None
-    q = db.query(Assignment)
+    # 🔴 用 select() 而不是 db.query()（RBT-68）：分页路径要交给 paginate，它只收 select()
+    stmt = select(Assignment)
     if user.role == "student":
-        q = q.filter(Assignment.class_id == user.class_id)
+        stmt = stmt.where(Assignment.class_id == user.class_id)
     elif user.role == "teacher":
         # 教师看自己负责班级的作业，外加**自己创建**的（「创建者保留管理权」）
-        q = q.filter(
+        stmt = stmt.where(
             or_(
                 Assignment.class_id.in_(get_teacher_class_ids(db, user.id)),
                 Assignment.created_by == user.id,
             )
         )
     elif class_id:
-        q = q.filter(Assignment.class_id == class_id)
+        stmt = stmt.where(Assignment.class_id == class_id)
 
     # 预加载附件，避免逐行懒加载（N+1）
-    q = q.options(selectinload(Assignment.attachments)).order_by(
+    stmt = stmt.options(selectinload(Assignment.attachments)).order_by(
         Assignment.created_at.desc(), Assignment.id.desc()
     )
-    rows, total = _paginate_or_all(db, q, page, page_size)
+    rows, total = _paginate_or_all(db, stmt, page, page_size)
 
     # 批量查询：班级名 / 创建者名 / 各作业提交数 / 当前学生已提交的作业，消除逐行 db.get 与 count
     assign_ids = [a.id for a in rows]
@@ -533,10 +544,13 @@ def create_assignment(db: Session, payload: dict, user: User) -> dict:
         school_id=cls_row.school_id,
         short_name=payload.get("short_name") or title,
     )
-    _sync_attachments(a, payload.get("attachments"))
+    # 新建作业时 `a.attachments` 为空 ⇒ pending 恒为空列表；仍走同一收尾，
+    # 是为了让「文件只在提交成功后才删」在两条路径上口径一致（RBT-71）。
+    pending = _sync_attachments(a, payload.get("attachments"))
     db.add(a)
     audit(db, user, "create_assignment", target=f"布置作业", class_id=class_id)
     db.commit()
+    _remove_upload_files(pending)
     db.refresh(a)
     d = to_dict(a)
     d["attachments"] = _attachments_out(a)
@@ -549,14 +563,20 @@ def update_assignment(db: Session, assignment_id: int, payload: dict, user: User
         raise HTTPException(status_code=404, detail="任务不存在")
     if a.created_by != user.id and not is_any_admin(user):
         raise HTTPException(status_code=403, detail="只能编辑自己创建的任务")
+    # 待删文件先暂存，`db.commit()` 成功之后才动磁盘（RBT-71）：
+    # 本函数在附件同步之后还有 3 个 400/403 分支（目标班级不存在 / 已毕业 / 非自己带的班），
+    # 而前端编辑弹窗是「整行原样提交」（附带 attachments）。先前先删文件再校验 ⇒
+    # 教师同时把班级填成一个非法 id，就会服务端删掉旧附件、再收到 400。
+    pending: list[str] = []
     for field in ("title", "description", "content", "deadline", "short_name"):
         if field in payload and payload[field] is not None:
             setattr(a, field, payload[field])
     if "attachments" in payload:
-        _sync_attachments(a, payload["attachments"])
+        pending = _sync_attachments(a, payload["attachments"])
     if payload.get("class_id") and payload["class_id"] != a.class_id:
         new_cid = payload["class_id"]
-        if not db.get(Classroom, new_cid):
+        cls_row = db.get(Classroom, new_cid)
+        if not cls_row:
             raise HTTPException(status_code=400, detail="目标班级不存在")
         # 毕业限制：不可将作业转移到已毕业班级
         ensure_class_operable(db, new_cid)
@@ -564,8 +584,18 @@ def update_assignment(db: Session, assignment_id: int, payload: dict, user: User
         if not is_any_admin(user) and not is_teacher_class_owner(db, user.id, new_cid):
             raise HTTPException(status_code=403, detail="只能将任务转移到自己负责的班级")
         a.class_id = new_cid
+        # 🔴 跨校转班必须**同步租户归属**（RBT-58）：`with_loader_criteria` 按 `school_id`
+        # 过滤，只改 `class_id` 会把作业留在原校的租户分区里 —— 目标校教师看不到（被过滤），
+        # 原校教师也看不到（已不在自己任何班），学生端按班查同样为空。接口却返回 200，
+        # 制造出一份「谁都看不见、只能进数据库改」的幽灵作业。
+        # 取法与 `create_assignment` 一致：归属永远跟着班级走。跨校转移只有平台超管能到达
+        # 这里（学校管理员的 `db.get(Classroom, 外校id)` 会被租户过滤成 None ⇒ 上面 400）。
+        a.school_id = cls_row.school_id
     audit(db, user, "update_assignment", target=f"作业#{assignment_id}", class_id=a.class_id)
     db.commit()
+    # 提交成功后才删磁盘文件（RBT-71）：此时被移除的附件行已经不在库里，
+    # 晚删几百毫秒没有副作用；而提前删会在回滚后留下「记录在、文件没了」。
+    _remove_upload_files(pending)
     db.refresh(a)
     d = to_dict(a)
     d["attachments"] = _attachments_out(a)
@@ -578,10 +608,13 @@ def delete_assignment(db: Session, assignment_id: int, user: User) -> dict:
         raise HTTPException(status_code=404, detail="任务不存在")
     if a.created_by != user.id and not is_any_admin(user):
         raise HTTPException(status_code=403, detail="只能删除自己创建的任务")
-    _remove_upload_files([att.filepath for att in a.attachments])
+    # 先记下附件路径，提交成功后再删文件（RBT-71）。已删的行不会再被读到，
+    # 晚删几百毫秒没有副作用；反过来（先删文件）一旦 commit 失败就是不可逆丢文件。
+    pending = [att.filepath for att in a.attachments]
     db.delete(a)
     audit(db, user, "delete_assignment", target=f"作业#{assignment_id}", class_id=a.class_id)
     db.commit()
+    _remove_upload_files(pending)
     return {"ok": True}
 
 
@@ -598,14 +631,15 @@ def list_submissions(
         raise HTTPException(status_code=404, detail="任务不存在")
     _check_student_access(a, user)
     check_teacher_assignment_access(db, user, a)
-    q = db.query(Submission).filter(Submission.assignment_id == assignment_id)
+    # 🔴 select() 而非 db.query()：见 list_assignments 的同款说明（RBT-68）
+    stmt = select(Submission).where(Submission.assignment_id == assignment_id)
     if user.role == "student":
         stu = get_student_by_account(db, user)
         if not stu:
             return {"items": [], "total": 0}
-        q = q.filter(Submission.student_id == stu.id)
-    q = q.order_by(Submission.created_at.desc(), Submission.id.desc())
-    rows, total = _paginate_or_all(db, q, page, page_size)
+        stmt = stmt.where(Submission.student_id == stu.id)
+    stmt = stmt.order_by(Submission.created_at.desc(), Submission.id.desc())
+    rows, total = _paginate_or_all(db, stmt, page, page_size)
     # 批量查询，避免 N+1（姓名/学号 + 头像各一次）
     stu_map = batch_student_map(db, [s.student_id for s in rows])
     avatar_map = batch_student_avatar_map(db, [s.student_id for s in rows])
@@ -996,12 +1030,14 @@ def submit(db: Session, assignment_id: int, payload: dict, user: User) -> dict:
     if existing:
         existing.content = content
         new_filepath = filepath or existing.filepath
-        # 替换附件时清理旧文件，避免泄漏
-        if new_filepath != existing.filepath:
-            _remove_upload_files([existing.filepath])
+        # 替换附件：旧文件**先记下**，commit 成功后再删（RBT-71）。
+        # 提交失败（含下面的 IntegrityError 兜底）时旧文件仍然可用，不会出现
+        # 「库里指向的文件已被删掉」。
+        replaced = existing.filepath if new_filepath != existing.filepath else None
         existing.filepath = new_filepath
         existing.filename = filename or existing.filename
         db.commit()
+        _remove_upload_files([replaced])
         db.refresh(existing)
         # AI 批改是教师手动触发的（§F3），提交接口不再外呼；但学生重交后旧结果已
         # 不再对应当前内容 —— 留着会让师生看到「已批改」，实际批的是旧版本。
@@ -1154,27 +1190,32 @@ def unmark_excellent(db: Session, submission_id: int, user: User) -> dict:
 
 
 def list_excellent(db: Session, page: int, page_size: int, user: User) -> dict:
-    q = select(ExcellentWork)
+    # 变量名用 stmt：这里一直是 select()，历史上叫 q 让人误以为又是 db.query()（RBT-68 的
+    # 误报就来自这个名字），交给 paginate 的语句必须是 select()。
+    stmt = select(ExcellentWork)
     if user.role == "student":
         # 学生仅查看本班作业的优秀作品
-        q = (
-            q.join(Submission, ExcellentWork.submission_id == Submission.id)
+        stmt = (
+            stmt.join(Submission, ExcellentWork.submission_id == Submission.id)
             .join(Assignment, Submission.assignment_id == Assignment.id)
             .where(Assignment.class_id == user.class_id)
         )
     elif user.role == "teacher":
         # 教师仅查看自己班级的优秀作品
-        q = (
-            q.join(Submission, ExcellentWork.submission_id == Submission.id)
+        stmt = (
+            stmt.join(Submission, ExcellentWork.submission_id == Submission.id)
             .join(Assignment, Submission.assignment_id == Assignment.id)
             .where(Assignment.class_id.in_(get_teacher_class_ids(db, user.id)))
         )
-    # ⚠️ 必须规范分页参数：本函数此前是全项目**唯一**漏了 normalize_page 的列表接口，
-    # 因此 `?page_size=100000` 会原样落到 LIMIT，成为放大查询的入口（其余列表接口
-    # 都已在 service 层调用 normalize_page，上限 200）。
+    # ⚠️ 分页参数规范化：本函数曾漏掉这一行，`?page_size=100000` 会原样落到 LIMIT，
+    # 成为放大查询的入口（当时全项目只此一处漏，靠人读代码才发现）。
+    # 现在**两道**都做：这里显式调用 + `paginate` 内部也调用（见 app/pagination.py）。
+    # 保留显式调用的理由：若将来改成「先按 page_size 取一批 id、再查明细」，
+    # 少这一行就绕过了 `paginate` 的钳位。复核：
+    #   grep -n "normalize_page" app/pagination.py app/services/homework_service.py
     page, page_size = normalize_page(page, page_size)
-    q = q.order_by(ExcellentWork.created_at.desc())
-    rows, total = paginate(db, q, page, page_size)
+    stmt = stmt.order_by(ExcellentWork.created_at.desc())
+    rows, total = paginate(db, stmt, page, page_size)
     if not rows:
         return {"items": [], "total": total}
 

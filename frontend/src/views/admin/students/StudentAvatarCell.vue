@@ -75,6 +75,8 @@ async function handleStudentAvatar(options, row) {
     const res = await studentApi.uploadAvatar(row.id, fd)
     emit('updated', res.avatar)
     ElMessage.success('头像更新成功')
-  } catch (e) {}
+  } catch (e) {
+    // 已由全局拦截器提示（request.js），不重复弹窗；头像缺失时渲染占位符
+  }
 }
 </script>

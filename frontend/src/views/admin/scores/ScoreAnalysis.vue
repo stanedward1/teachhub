@@ -138,7 +138,10 @@ async function loadAnalysisOptions() {
     const res = await scoreApi.analysis({})
     analysisSubjects.value = res.subjects || []
     analysisExams.value = res.exams || []
-  } catch (e) {}
+  } catch (e) {
+    // 已由全局拦截器提示（request.js），不重复弹窗；下拉为空时用户可切班级重新加载，
+    // 主表的失败另有 analysisError + StateView 兜住
+  }
 }
 
 async function loadAnalysis() {
@@ -169,7 +172,9 @@ async function viewTrend(row) {
     trendData.value = res.trend || []
     await nextTick()
     renderTrendChart()
-  } catch (e) {}
+  } catch (e) {
+    // 已由全局拦截器提示（request.js），不重复弹窗；趋势为空即渲染空图
+  }
 }
 
 function renderTrendChart() {

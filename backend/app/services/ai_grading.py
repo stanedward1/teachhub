@@ -1015,12 +1015,19 @@ def _call_model(
     max_tokens: int,
     db: Session | None = None,
     school_id: int | None = None,
+    timeout: int | None = None,
 ) -> dict:
     """调用模型；输出被截断（含正文被思考挤空）时用更大预算重试**一次**。
 
     推理模型下，思考 token 与正文共用 max_tokens 预算，极端情况下正文仍可能被挤空
     （finish_reason == "length" 但 content 为空，或 content 非空但被截断）。此时用更大
     预算重试一次，可能拿到完整正文；超过上限（AI_MAX_TOKENS_CEILING）则不再放大。
+
+    Args:
+        timeout: 单次外呼超时（秒），``None`` 取 `settings.AI_REQUEST_TIMEOUT`。
+            批改走后台线程、无人等结果，缺省即可；**同步**链路（`ai_analysis`）必须
+            显式传入自己的更短上限 —— 它最坏会外呼 2 次，而教师在弹窗里线性等待，
+            单次超时直接决定「前端会不会先于后端放弃」。
 
     🔴 额度记账：一次提交的额度预留只在 `request_grading` 记 **1** 次（按提交数）。
     本函数若因截断而**额外 invoke 一次**，会在重试前调用 `_record_extra_grade_call`
@@ -1034,6 +1041,7 @@ def _call_model(
             model=cred.model,
             messages=messages,
             max_tokens=budget,
+            timeout=timeout,
             thinking=settings.AI_THINKING_MODE or None,
             reasoning_effort=settings.AI_REASONING_EFFORT or None,
         )
