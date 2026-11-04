@@ -67,24 +67,37 @@ def checkin(db: Session, user: User, payload: AttendanceCheckin) -> dict:
         deduped.setdefault(r.student_id, r)
     records = list(deduped.values())
 
+    # 两条批量查询代替循环里的逐条 `db.get(Student)` + `query(Attendance)...first()`：
+    # 50 人的班原为 153 条 SQL（每个学生 1 次 db.get + 1 次 SELECT + 1 次 INSERT），
+    # 一次早读点名 20 个班就是 3000+ 条（RBT-73）。批量后为 2 条 SELECT + N 条 INSERT。
+    # 语义与原写法一致：同 session、同租户上下文，`in_` 只是把逐条查询合并成一次。
+    # 用实体查询（而非 `query(Student.id, ...)`）以确保租户过滤照常注入。
+    student_ids = [r.student_id for r in records]
+    students = {
+        s.id: s
+        for s in db.query(Student).filter(Student.id.in_(student_ids)).all()
+    }
+    existing_map = {
+        a.student_id: a
+        for a in db.query(Attendance)
+        .filter(
+            Attendance.class_id == class_id,
+            Attendance.date == date,
+            Attendance.student_id.in_(student_ids),
+        )
+        .all()
+    }
+
     saved = 0
     for r in records:
         student_id = r.student_id
         status = r.status
         # 仅接受本班在籍学生
-        student = db.get(Student, student_id)
+        student = students.get(student_id)
         if not student or student.class_id != class_id or student.is_dropped_out:
             continue
 
-        existing = (
-            db.query(Attendance)
-            .filter(
-                Attendance.class_id == class_id,
-                Attendance.student_id == student_id,
-                Attendance.date == date,
-            )
-            .first()
-        )
+        existing = existing_map.get(student_id)
         if existing:
             existing.status = status
             # 顺带修复历史脏行：school_id 落 NULL 的行在全租户下都不可见

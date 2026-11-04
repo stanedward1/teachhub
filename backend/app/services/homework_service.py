@@ -212,22 +212,29 @@ def _ai_status_map(db: Session, submission_ids: list[int]) -> dict[int, dict]:
     }
 
 
-def _discard_ai_grading(db: Session, submission_id: int) -> None:
-    """作废某次提交的 AI 批改结果（学生重交后调用，失败静默）。
+def _discard_ai_grading(db: Session, submission_id: int) -> int:
+    """作废某次提交的 AI 批改结果（学生重交后调用），**不自行 commit**。
 
     批改结果是**对某一版提交内容**的评价，重交后不再成立；
     留着会让师生误以为当前内容已被批改过。删除后教师可再次手动触发。
+
+    🔴 为什么不再自带事务（RBT-74）：原实现是「delete + 内部 commit + except 里 rollback
+    并只记日志」，而调用点 `submit()` 在**自己的 commit 之后**才调它 —— 于是「重交成功、
+    作废失败」会静默留下上一版的批改结论，师生看到的仍是旧内容的评价。降级的恰是数据
+    正确性。现在删除动作挂在调用方 session 上：重交与作废同生共死，要么都生效，要么
+    一起回滚（学生看到重交失败，库里的内容与批改结果仍互相一致）。
+
+    调用方契约：必须在同一事务内修改提交内容后立即调用，随后 `db.commit()`。
+    返回删除的结果行数（0 表示本就没有旧结果）。
     """
-    try:
-        # 注意：ORM 的批量 delete/update **不受**租户过滤（`tenant.py` 只对 SELECT 注入），
-        # 因此这里是全局按 submission_id 删除 —— 这正是我们要的（含归属异常的历史行）。
-        db.query(AiGradingResult).filter(
-            AiGradingResult.submission_id == submission_id
-        ).delete()
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("作废旧 AI 批改结果失败 submission=%s", submission_id)
+    # 注意：ORM 的批量 delete/update **不受**租户过滤（`tenant.py` 只对 SELECT 注入），
+    # 因此这里是全局按 submission_id 删除 —— 这正是我们要的（含归属异常的历史行）。
+    # `synchronize_session=False`：本路径不加载 AiGradingResult 实体，无需回写 session。
+    return (
+        db.query(AiGradingResult)
+        .filter(AiGradingResult.submission_id == submission_id)
+        .delete(synchronize_session=False)
+    )
 
 
 # ---------------- AI 批改（教师手动触发，§F3） ----------------
@@ -916,10 +923,17 @@ def get_submission(db: Session, submission_id: int, user: User) -> dict:
         .order_by(SubmissionComment.id.asc())
         .all()
     )
+    # 点评教师一次批量取（RBT-73）：逐条 `db.get(User, ...)` 是「每条点评 1 条 SQL」。
+    teacher_ids = {c.teacher_id for c in comments if c.teacher_id}
+    teachers = (
+        {u.id: u for u in db.query(User).filter(User.id.in_(teacher_ids)).all()}
+        if teacher_ids
+        else {}
+    )
     comment_items = []
     for c in comments:
         cd = to_dict(c)
-        t = db.get(User, c.teacher_id)
+        t = teachers.get(c.teacher_id)
         cd["teacher_name"] = t.name if t else None
         comment_items.append(cd)
     d["comments"] = comment_items
@@ -1036,13 +1050,14 @@ def submit(db: Session, assignment_id: int, payload: dict, user: User) -> dict:
         replaced = existing.filepath if new_filepath != existing.filepath else None
         existing.filepath = new_filepath
         existing.filename = filename or existing.filename
+        # AI 批改是教师手动触发的（§F3），提交接口不再外呼；但学生重交后旧结果已
+        # 不再对应当前内容 —— 留着会让师生看到「已批改」，实际批的是旧版本。
+        # 作废必须与本次重交**同一事务**（RBT-74）：放在 commit 之后 + 内部自己 commit，
+        # 一旦作废失败就只剩日志，师生继续看到旧内容的批改结论。
+        _discard_ai_grading(db, existing.id)
         db.commit()
         _remove_upload_files([replaced])
         db.refresh(existing)
-        # AI 批改是教师手动触发的（§F3），提交接口不再外呼；但学生重交后旧结果已
-        # 不再对应当前内容 —— 留着会让师生看到「已批改」，实际批的是旧版本。
-        # 因此重交即作废旧结果，教师可再次点击「AI 批改」重新批改。
-        _discard_ai_grading(db, existing.id)
         return to_dict(existing)
 
     s = Submission(
@@ -1075,9 +1090,10 @@ def submit(db: Session, assignment_id: int, payload: dict, user: User) -> dict:
         if filepath:
             existing.filepath = filepath
             existing.filename = filename or existing.filename
+        # 同上（RBT-74）：作废旧批改与本次重交同属一个事务
+        _discard_ai_grading(db, existing.id)
         db.commit()
         db.refresh(existing)
-        _discard_ai_grading(db, existing.id)
         return to_dict(existing)
     db.refresh(s)
     # 提交接口不做任何 AI 外呼：批改由教师在「上机作业管理」手动触发（§F3）
@@ -1305,27 +1321,37 @@ def get_excellent(db: Session, excellent_id: int, user: User) -> dict:
         .order_by(WorkComment.created_at.asc())
         .all()
     )
+    # 聚合该提交的「批改评语」（submission_comments），与评优时的 note 打通展示
+    tcs = (
+        db.query(SubmissionComment)
+        .filter(SubmissionComment.submission_id == s.id)
+        .order_by(SubmissionComment.id.asc())
+        .all()
+        if s
+        else []
+    )
+    # 两张评论表的作者/教师一次批量取（RBT-73），替代逐条 `db.get(User, ...)`
+    author_ids = {c.user_id for c in comments if c.user_id} | {
+        tc.teacher_id for tc in tcs if tc.teacher_id
+    }
+    authors = (
+        {u.id: u for u in db.query(User).filter(User.id.in_(author_ids)).all()}
+        if author_ids
+        else {}
+    )
     comment_items = []
     for c in comments:
         cd = to_dict(c)
-        cu = db.get(User, c.user_id)
+        cu = authors.get(c.user_id)
         cd["user_name"] = cu.name if cu else None
         cd["user_avatar"] = cu.avatar if cu else None
         comment_items.append(cd)
-    # 聚合该提交的「批改评语」（submission_comments），与评优时的 note 打通展示
     teacher_comments = []
-    if s:
-        tcs = (
-            db.query(SubmissionComment)
-            .filter(SubmissionComment.submission_id == s.id)
-            .order_by(SubmissionComment.id.asc())
-            .all()
-        )
-        for tc in tcs:
-            tcd = to_dict(tc)
-            t = db.get(User, tc.teacher_id)
-            tcd["teacher_name"] = t.name if t else None
-            teacher_comments.append(tcd)
+    for tc in tcs:
+        tcd = to_dict(tc)
+        t = authors.get(tc.teacher_id)
+        tcd["teacher_name"] = t.name if t else None
+        teacher_comments.append(tcd)
     # AI 批改意见：优秀作品详情页同样展示（与提交详情同口径；学生侧不返回 error）
     ai_result = None
     if s:
