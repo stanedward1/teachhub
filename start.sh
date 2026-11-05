@@ -3,12 +3,16 @@
 # TeachHub 一键启动脚本（本地开发 / 服务器部署通用）
 #
 # 用法:
-#   bash start.sh                 # 启动（缺依赖会自动安装），默认 SQLite
+#   bash start.sh                 # 开发：后端 :8080 + Vite dev :5173（热更新）
+#   bash start.sh --prod          # 生产：构建前端 + 静态服务 :5173 + 后端 API :8080
+#   bash start.sh --prod-single   # 生产（单端口）：构建前端 + 后端 :8080 托管产物
 #   DB_ENGINE=mysql bash start.sh # 使用 MySQL（需先填写下方连接信息）
 #   bash start.sh --install-only  # 只装依赖，不启动服务
 #
-# 数据库默认 SQLite（零配置，与项目默认一致）。
-# 生产环境见 README「生产环境部署」（进程化运行 + 可选反向代理）。
+# ⚠️ 生产环境必须用 --prod 或 --prod-single。默认（dev）模式跑的是 `npm run dev` ——
+# Vite 开发服务器按模块原样下发、不做压缩、每个模块都带 `Cache-Control: no-cache`，
+# 首屏实测 23 个请求 / 4.5MB，公网访问会表现为「页面很久加载不出来」。
+# 两个生产模式都用构建产物 + gzip：首屏 5 个请求 / 约 84KB。
 # ============================================================
 
 # 必须用 bash 运行（脚本使用了 bash 数组等特性）
@@ -341,21 +345,41 @@ setup_frontend() {
   info "前端依赖 OK"
 }
 
-# ---------- 启动服务 ----------
-start_services() {
-  # 清理旧进程（按进程名 + 端口多管齐下，避免端口被残留进程占用导致换端口/绑定失败）
+# ---------- 停止旧进程 ----------
+# 按进程名 + 端口多管齐下：残留实例会让新实例绑定失败，表现为「改了配置没生效」。
+stop_existing_services() {
   pkill -f "uvicorn" 2>/dev/null || true
   pkill -f "run.py" 2>/dev/null || true
   pkill -f "vite" 2>/dev/null || true
   pkill -f "npm run dev" 2>/dev/null || true
+  pkill -f "serve.mjs" 2>/dev/null || true
   if command -v fuser >/dev/null 2>&1; then
     fuser -k 8080/tcp 2>/dev/null || true
     fuser -k 5173/tcp 2>/dev/null || true
   fi
   sleep 2
+}
+
+# ---------- 构建前端 ----------
+build_frontend() {
+  info "构建前端（npm run build）..."
+  cd "$FRONTEND_DIR"
+  # NODE_OPTIONS 置空：部分环境的全局 --max-old-space-size 会让 vite 构建失败
+  if ! NODE_OPTIONS="" npm run build; then
+    error "前端构建失败，终止部署（未改动线上服务）"
+    exit 1
+  fi
+  info "构建产物: $FRONTEND_DIR/dist"
+}
+
+# ---------- 启动服务 ----------
+start_services() {
+  stop_existing_services
 
   info "启动后端 (uvicorn :8080)..."
   cd "$BACKEND_DIR"
+  # 开发态前端走 Vite dev，后端只做 API（防止 .env 里残留 SERVE_FRONTEND=1）
+  export SERVE_FRONTEND=0
   nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 > /tmp/teachhub_backend.log 2>&1 &
   echo "  后端日志: /tmp/teachhub_backend.log"
 
@@ -397,6 +421,100 @@ start_services() {
   echo ""
 }
 
+# ---------- 生产模式 A（默认）：前端 :5173 静态服务 + 后端 :8080 API ----------
+# 用 frontend/serve.mjs 而不是 `npm run dev` / `vite preview`：
+#   npm run dev   → 首屏 23 请求 / 4.5MB，逐模块 no-cache（线上卡顿的根因）
+#   vite preview  → 面向本地验收，不压缩（sirv 只在磁盘已有 .gz 时才走压缩）
+#   serve.mjs     → 构建产物 + gzip + /assets 一年 immutable + SPA 回落 + /api 反代，零依赖
+start_services_prod() {
+  stop_existing_services
+  build_frontend
+
+  info "启动后端 (uvicorn :8080，仅 API)..."
+  cd "$BACKEND_DIR"
+  # 前端已由 :5173 提供，后端不该再托管一份产物。
+  # 用显式 export 0 而不是 unset：.env 里若写了 SERVE_FRONTEND=1，unset 环境变量
+  # 是盖不住文件值的（pydantic-settings 的优先级是 环境变量 > .env）。
+  export SERVE_FRONTEND=0
+  nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 \
+    --workers "${WORKERS:-1}" > /tmp/teachhub_backend.log 2>&1 &
+  echo "  后端日志: /tmp/teachhub_backend.log"
+
+  info "启动前端 (静态服务 :5173)..."
+  cd "$FRONTEND_DIR"
+  nohup env PORT=5173 HOST=0.0.0.0 API_ORIGIN="http://127.0.0.1:8080" \
+    node serve.mjs > /tmp/teachhub_frontend.log 2>&1 &
+  echo "  前端日志: /tmp/teachhub_frontend.log"
+
+  info "等待服务启动..."
+  local ok=0
+  for ((i=0; i<30; i++)); do
+    if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1 && \
+       curl -sf -o /dev/null http://127.0.0.1:5173/ >/dev/null 2>&1; then
+      ok=1
+      break
+    fi
+    sleep 1
+  done
+
+  echo ""
+  echo "======================================================"
+  if [ "$ok" = "1" ]; then
+    echo "  TeachHub 启动完成（生产模式：前端 :5173 / 后端 :8080）!"
+    echo "  前端:  http://<本机IP>:5173/   (局域网同地址)"
+    echo "  后端:  http://<本机IP>:8080/   (API 文档: /docs)"
+    echo "  数据库: $DB_ENGINE"
+    echo "  校验:  curl -sI http://127.0.0.1:5173/assets/ -H 'Accept-Encoding: gzip'"
+    echo ""
+    echo "  注意：后续改前端代码需重新执行 bash start.sh --prod（静态产物不热更新）"
+  else
+    echo "  服务可能未就绪，请查看日志排查："
+    echo "    后端: tail -50 /tmp/teachhub_backend.log"
+    echo "    前端: tail -50 /tmp/teachhub_frontend.log"
+  fi
+  echo "======================================================"
+  echo ""
+}
+
+# ---------- 生产模式 B：前端产物由后端单端口 :8080 托管 ----------
+# 适合「只对外开放一个端口」的服务器（或已在前置反向代理里统一入口）。
+start_services_single() {
+  stop_existing_services
+  build_frontend
+
+  info "启动后端 (uvicorn :8080，托管前端产物)..."
+  cd "$BACKEND_DIR"
+  # SERVE_FRONTEND 让后端下发 dist 并启用 GZip + 长缓存（见 app/main.py）。
+  # workers 默认 1：应用在 import 期执行 alembic 迁移与启动兜底，多 worker 会并发跑迁移。
+  export SERVE_FRONTEND=1
+  nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080 \
+    --workers "${WORKERS:-1}" > /tmp/teachhub_backend.log 2>&1 &
+  echo "  后端日志: /tmp/teachhub_backend.log"
+
+  info "等待服务启动..."
+  local ok=0
+  for ((i=0; i<30; i++)); do
+    if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; then ok=1; break; fi
+    sleep 1
+  done
+
+  echo ""
+  echo "======================================================"
+  if [ "$ok" = "1" ]; then
+    echo "  TeachHub 启动完成（生产模式，单端口）!"
+    echo "  访问:  http://<本机IP>:8080/   (API 文档: /docs)"
+    echo "  数据库: $DB_ENGINE"
+    echo "  校验:  curl -sI http://127.0.0.1:8080/assets/ | grep -i cache"
+    echo ""
+    echo "  注意：后续改前端代码需重新执行 bash start.sh --prod-single（不会热更新）"
+  else
+    echo "  服务可能未就绪，请查看日志:"
+    echo "    tail -50 /tmp/teachhub_backend.log"
+  fi
+  echo "======================================================"
+  echo ""
+}
+
 # ---------- 主流程 ----------
 main() {
   check_system_deps
@@ -411,7 +529,11 @@ main() {
     exit 0
   fi
 
-  start_services
+  case "${1:-}" in
+    --prod)        start_services_prod ;;
+    --prod-single) start_services_single ;;
+    *)             start_services ;;
+  esac
 }
 
 main "$@"

@@ -17,8 +17,13 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { showConfirmDialog } from 'vant'
+import { showConfirmDialog, showToast } from '../vant-fn'
 import { useLogout } from '../../composables/useLogout'
+import { registerMobileToast } from '../../utils/mobileToast'
+
+// 把移动端 Toast 注册给 request 层：request 因此完全不 import Vant，
+// PC 端（同样加载 request）不必为移动端组件库买单。
+registerMobileToast((message) => showToast({ message, position: 'top' }))
 
 const route = useRoute()
 const logout = useLogout()

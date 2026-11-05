@@ -87,7 +87,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { showConfirmDialog, showSuccessToast, showToast } from 'vant'
+import { showConfirmDialog, showSuccessToast, showToast } from '../vant-fn'
 import { leaveApi } from '../../api'
 import { mobileApi } from '../api/mobile'
 import { formatDate } from '../../utils/date'

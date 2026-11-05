@@ -2,11 +2,13 @@ import ipaddress
 import logging
 import os
 from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -219,6 +221,12 @@ async def tenant_context_middleware(request, call_next):
             reset_tenant(tokens)
 
 
+# GZip 必须注册在 CORS **之前**：Starlette 是「后注册 = 更外层」，这样 CORS 仍是最外层，
+# 预检与早期 401 不会因压缩而丢跨域头。前端静态产物（单文件 1.3MB）靠它把传输量压到约 1/7，
+# 也是线上「页面加载不出来」的首要修复项（详见 docs/DEVELOPMENT.md §7.1）。
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+
 # CORS 中间件必须注册在租户中间件**之后**：Starlette 是「后注册 = 更外层」，
 # 这样 CORS 才在租户中间件外层，租户中间件对旧版 token 的早期 401 也会带上 CORS 头。
 # 仍注册在日志中间件之前，日志保持最外层、可记录到所有请求的最终状态与耗时。
@@ -229,6 +237,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _frontend_cache_headers(request: Request, call_next):
+    """给前端静态产物补缓存头（仅在 `SERVE_FRONTEND` 开启时有意义）。
+
+    - `/assets/*` 的文件名带内容哈希 ⇒ 可长期缓存，构建变化时 URL 自然改变；
+    - `index.html` / SPA 回落出的 HTML ⇒ 必须 `no-cache`，否则发版后用户仍按旧清单
+      去请求已删除的旧 chunk，表现为白屏或「页面卡住不动」。
+    """
+    response = await call_next(request)
+    if not settings.SERVE_FRONTEND:
+        return response
+    path = request.url.path
+    if path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path in ("", "/") or path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 
 # 访问日志 + 指标中间件（置于最外层，确保能记录到所有请求的最终状态与耗时）
 app.middleware("http")(request_logging_middleware)
@@ -278,6 +306,12 @@ _reconcile_interrupted_grading()
 
 @app.get("/")
 def root():
+    # 单端口部署时根路径必须给前端入口：否则用户打开域名看到的是下面这段 JSON。
+    # 注意 FastAPI 按**注册顺序**匹配，此路由先于文件末尾的 SPA 回落注册，无法被后者覆盖。
+    if settings.SERVE_FRONTEND:
+        index = Path(settings.FRONTEND_DIST).resolve() / "index.html"
+        if index.is_file():
+            return FileResponse(index)
     info = {"name": settings.APP_NAME, "version": settings.APP_VERSION}
     if settings.ENV != "production":
         info["docs"] = "/docs"
@@ -335,3 +369,40 @@ def metrics(request: Request):
     if not _is_internal_client(request):
         raise HTTPException(status_code=403, detail="仅允许内网访问")
     return PlainTextResponse(render_metrics(), media_type="text/plain; version=0.0.4")
+
+
+# ---------------- 前端静态产物托管（生产单端口部署，SERVE_FRONTEND=1 时启用） ----------------
+def _mount_frontend() -> None:
+    """把 `frontend/dist` 挂到后端根路径，替代生产环境里的 Vite dev server。
+
+    设计要点：
+    - `/assets` 交给 StaticFiles 直出（文件名带内容哈希，配合长缓存）；
+    - 其余非 API 路径统一回落到 `index.html`，保证 `/students` 这类前端路由可直接刷新
+      （SPA history 模式否则会 404 —— 这是切到静态托管后最容易漏的一步）；
+    - 只在 `SERVE_FRONTEND` 开启时注册，开发态与测试态的路由表完全不变。
+    """
+    dist = Path(settings.FRONTEND_DIST).resolve()
+    index = dist / "index.html"
+    if not index.is_file():
+        logger.warning(
+            "SERVE_FRONTEND 已开启，但未找到构建产物 %s —— 请先执行 `npm run build`", dist
+        )
+        return
+
+    assets = dist / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="spa-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa_fallback(full_path: str):
+        """SPA 回落：真实存在的静态文件直接返回，其余（前端路由）交给 index.html。"""
+        if full_path:
+            candidate = (dist / full_path).resolve()
+            # 防目录穿越：realpath 之后仍须落在 dist 之内
+            if candidate.is_file() and str(candidate).startswith(str(dist) + os.sep):
+                return FileResponse(candidate)
+        return FileResponse(index)
+
+
+if settings.SERVE_FRONTEND:
+    _mount_frontend()

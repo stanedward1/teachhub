@@ -71,7 +71,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
-import { showToast, showSuccessToast } from 'vant'
+import { showToast, showSuccessToast } from '../vant-fn'
 import { mobileApi } from '../api/mobile'
 import { performanceApi, talkApi } from '../../api'
 import VirtualList from '../../components/VirtualList.vue'

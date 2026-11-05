@@ -134,7 +134,7 @@ TeachHub 将**上机作业提交平台**、**班级日志管理系统**、**教�
 | Excel 处理 | openpyxl | 3.1 |
 | AI 批改 | httpx（OpenAI 兼容接口）+ cryptography（Fernet）+ python-docx / pypdf（附件解析） | — |
 | 测试 | pytest + FastAPI TestClient | — |
-| 部署 | 一键脚本 `start.sh` / `stop.sh`（后端 `run.py` :8080 + 前端 Vite :5173）；**不依赖 Docker / nginx**（仓库不附带容器化方案） | — |
+| 部署 | 一键脚本 `start.sh` / `stop.sh`；生产 `--prod` = 前端静态服务 :5173 + 后端 API :8080（`--prod-single` 则单端口 :8080）；**不依赖 Docker / nginx**（仓库不附带容器化方案） | — |
 
 ## 项目结构
 
@@ -216,7 +216,7 @@ teachhub/
 ├── commitlint.config.cjs       # 提交信息规范（Conventional Commits；type 限 feat/fix/refactor/docs/chore/test/perf/build/ci，scope 限 backend/frontend/docs/deps）
 ├── .lintstagedrc.json          # 暂存文件 lint/格式化规则（frontend/src 下 js/vue 跑 eslint --fix + prettier --write）
 ├── .gitattributes              # 换行符约定
-├── start.sh                    # 一键启动脚本（Linux/macOS 本机，后端 :8080 + 前端 Vite :5173）
+├── start.sh                    # 一键启动脚本（Linux/macOS 本机）：dev = :8080 + Vite :5173；--prod = 构建产物 :5173
 ├── stop.sh                     # 一键停止脚本（跨平台：按 PID/端口清理前后端进程）
 └── README.md
 ```
@@ -237,6 +237,12 @@ cd teachhub
 
 # 仅安装依赖、不启动服务（适合先准备环境）
 ./start.sh --install-only
+
+# 生产模式：构建前端 → 前端静态服务 :5173 + 后端 API :8080
+./start.sh --prod
+
+# 生产模式（单端口）：产物由后端 :8080 直接托管，适合只开放一个端口的服务器
+./start.sh --prod-single
 ```
 
 启动完成后：
@@ -321,9 +327,19 @@ npm run dev
 
 ## 生产环境部署
 
-> ℹ️ **本项目当前形态（重要）**：**无 Docker、无 Nginx** ——
-> 后端 `python run.py`（:8080），前端 `npm run dev -- --host 0.0.0.0`（**Vite 开发服务器**，:5173），
-> 由仓库根 `start.sh` 一键拉起。
+> ℹ️ **本项目当前形态（重要）**：**无 Docker、无 Nginx**，两条进程化部署路径：
+>
+> | 命令 | 前端入口 | 谁在提供前端 |
+> | --- | --- | --- |
+> | `bash start.sh --prod`（**默认生产**） | `:5173` | `frontend/serve.mjs` 下发构建产物：gzip + `/assets` 一年 immutable + SPA 回落，并把 `/api`、`/uploads` 反代到 :8080 |
+> | `bash start.sh --prod-single` | `:8080` | 后端 `SERVE_FRONTEND=1` 直接托管 `dist`（同一套压缩与缓存头） |
+>
+> 两条路径首屏都是 **5 个请求 / 约 84KB（gzip）**，区别只在谁监听前端入口。
+>
+> ⚠️ **不要用 `npm run dev` 承载生产流量**（旧部署形态即如此，是「页面很久加载不出来」的根因）：
+> Vite 开发服务器按模块原样下发、不做压缩、每个模块都带 `Cache-Control: no-cache`，
+> 实测首屏 **23 个请求 / 4.5MB**。开发态才用 Vite dev（`bash start.sh` 不带参数）。
+>
 > 仓库**不附带容器化方案**：`docker-compose.yml`、各级 `Dockerfile` / `.dockerignore`、`docker-entrypoint.py` 均已移除；
 > `frontend/nginx.conf` 亦早于 2026-09-20 删除。下方为**进程化（裸机）部署**指南；
 > 如需前置反向代理（Nginx 等），属可选的、由你自行管理的运维步骤，**非仓库自带方案**。
@@ -336,7 +352,7 @@ npm run dev
 | ---- | -------- |
 | Python | 3.10+ |
 | Node.js | 18+ |
-| Nginx | 1.20+ |
+| Nginx（可选，自行管理） | 1.20+ |
 | 数据库 | MySQL/MariaDB 8.0+ / 10.4+（推荐，生产默认） |
 
 ### 1. 构建前端
@@ -348,6 +364,17 @@ npm run build          # 产物输出到 dist/ 目录
 ```
 
 构建产物位于 `frontend/dist/`，包含压缩后的静态资源（JS/CSS/HTML），Vite 自动按路由拆分 chunk。
+
+产物就绪后二选一提供前端入口（两条都是 gzip + 长缓存，首屏 5 请求 / 约 84KB）：
+
+```bash
+# 方式 A（默认）：独立静态服务 :5173，/api、/uploads、/docs 反代到 :8080
+cd frontend
+npm run serve        # 等价于 node serve.mjs；可用 PORT/API_ORIGIN 覆盖
+# PORT=5173 API_ORIGIN=http://127.0.0.1:8080 node serve.mjs
+
+# 方式 B：交给后端托管（启动后端时设 SERVE_FRONTEND=1，见 §5），只开 :8080 一个端口
+```
 
 ### 2. 配置后端环境变量
 
@@ -398,6 +425,9 @@ python -m app.seed
 ```
 
 ### 5. 启动后端服务
+
+> 若前端走上面的「方式 B」（后端托管 dist），启动前设 `SERVE_FRONTEND=1` 并确认
+> `FRONTEND_DIST` 指向 `frontend/dist`；走「方式 A」（前端 :5173）时保持默认 0 即可。
 
 **方式 A：直接启动（单机小规模）**
 

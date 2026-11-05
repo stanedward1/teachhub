@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import { showToast } from 'vant'
 import { clearAuth, getToken, getRefreshToken, getUser, setAuth } from '../utils/auth'
+import { getMobileToast } from '../utils/mobileToast'
 import router from '../router'
 
 // 归一化后端返回的 detail：可能是 string / 数组（Pydantic 校验）/ 对象，统一转为可读文案
@@ -29,11 +29,16 @@ function normalizeDetail(detail, fallback = '操作失败') {
 function notifyError(message, config) {
   if (config?._silent) return
   const path = router.currentRoute.value?.path || ''
-  if (path.startsWith('/m')) {
-    showToast({ message, position: 'top' })
-  } else {
+  if (!path.startsWith('/m')) {
     ElMessage.error(message)
+    return
   }
+  // 移动端用移动端布局注册进来的 Vant Toast（样式与页面一致）；
+  // 尚未注册时（组件还没挂载）回退 ElMessage，保证错误提示不丢。
+  // 这里刻意**不** import 任何 Vant 模块：request 是 PC 端也会加载的共享模块。
+  const toast = getMobileToast()
+  if (toast) toast(message)
+  else ElMessage.error(message)
 }
 
 // 会话过期后跳转对应端的登录页（保持既有路径规则不变）

@@ -35,9 +35,13 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { showToast } from 'vant'
+import { showToast } from '../vant-fn'
 import { authApi } from '../../api'
 import { getToken, getUser, setAuth } from '../../utils/auth'
+import { registerMobileToast } from '../../utils/mobileToast'
+
+// 改密页不在 MobileLayout 内，自己注册 Toast 给 request 层
+registerMobileToast((message) => showToast({ message, position: 'top' }))
 
 const router = useRouter()
 const old_password = ref('')

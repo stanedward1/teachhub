@@ -82,6 +82,16 @@ class Settings(BaseSettings):
     # 注意：这是磁盘路径，与前端访问的 URL 前缀「/uploads/avatars/」无关。
     AVATAR_DIR: str = os.path.join(UPLOAD_DIR, "avatars")
 
+    # ---------------- 前端静态产物托管（生产单端口部署） ----------------
+    # 开启后由本服务直接下发 `frontend/dist`（含 GZip 与带哈希资源的长缓存），
+    # 关闭时后端只提供 API —— 开发态仍由 Vite dev server 承载，行为不变。
+    # 为什么需要：Vite dev server 按模块原样下发、无压缩、Cache-Control: no-cache，
+    # 首屏实测 23 个请求 / 4.5MB；同一份代码构建后 gzip 首屏约 570KB。
+    SERVE_FRONTEND: bool = False
+    FRONTEND_DIST: str = os.path.normpath(
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "frontend", "dist")
+    )
+
     # 上传约束
     MAX_UPLOAD_SIZE: int = 20 * 1024 * 1024  # 默认 20MB
     ALLOWED_UPLOAD_EXTS: set[str] = ALLOWED_UPLOAD_EXTS

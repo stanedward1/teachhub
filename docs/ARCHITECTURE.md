@@ -34,7 +34,7 @@ TeachHub 是一套面向中职学校的「教学 + 班主任一体化工作平�
 | AI 批改 | httpx + cryptography + python-docx / pypdf | — | OpenAI 兼容 Chat Completions；凭证 Fernet 加密；附件文本解析 |
 | 代码规范 | ESLint + Prettier | 10 / 3 | flat config + 格式化 |
 | 测试 | pytest | — | 后端自动化测试 |
-| 部署 | 一键脚本（`start.sh` / `stop.sh`） | — | **线上形态**：后端 `run.py` :8080 + 前端 Vite :5173（无 Docker / Nginx）；仓库不附带容器化方案 |
+| 部署 | 一键脚本（`start.sh` / `stop.sh`） | — | 开发 = 后端 :8080 + Vite dev :5173；生产 `--prod` = 前端静态服务 :5173 + 后端 API :8080，`--prod-single` = 单端口 :8080（无 Docker / Nginx） |
 
 ## 3. 目录结构
 
@@ -128,12 +128,13 @@ teachhub/
 │   │   └── views/admin/       # 管理端页面（29 个，含 Schools 学校管理、PlatformSettings 平台设置）
 │   │       ├── students/      #   Students 子件：表单/密码/变更历史/饼图/头像单元格
 │   │       └── scores/        #   Scores 子件：成绩分析 / 录入弹窗
-│   ├── vite.config.js         # dev 代理 /api、/uploads → 8080
+│   ├── vite.config.js         # dev 代理 /api、/uploads → 8080（:5173）
+│   ├── serve.mjs              # 生产静态服务：dist + gzip + 长缓存 + SPA 回落 + API 反代（:5173）
 │   ├── eslint.config.js       # ESLint 10（flat config）
 │   └── package.json
 ├── docs/                      # 本文档集（架构 / 接口 / ER / 规范 / 需求与技术方案 / 变更日志）
 ├── scripts/                   # 运维与造数脚本（班主任一致性诊断 / 作业与班级假数据）
-├── start.sh / stop.sh         # 一键启动 / 停止（后端 :8080 + 前端 Vite :5173）
+├── start.sh / stop.sh         # 一键启动 / 停止（dev: :8080+:5173；--prod: 构建产物 :5173）
 ├── commitlint.config.cjs      # 提交信息规范；.lintstagedrc.json 暂存文件校验规则
 └── README.md
 
@@ -288,13 +289,18 @@ teachhub/
 浏览器 → Vite(:5173) ──/api,/uploads──▶ FastAPI(:8080) ──▶ MySQL(teachhub)
 ```
 
-### 线上当前形态（实际）
-```
-浏览器 → Vite 开发服务器(:5173，server.proxy 转发 /api、/uploads) ──▶ FastAPI(:8080) ──▶ MySQL(teachhub)
-```
-- 由仓库根 `start.sh` 拉起：后端 `python run.py`（:8080）+ 前端 `npm run dev -- --host 0.0.0.0`（:5173）
+### 部署形态（2026-11-05 起，三种并存）
+
+| 模式 | 命令 | 拓扑 |
+| --- | --- | --- |
+| 开发 | `bash start.sh` | 浏览器 → Vite dev(:5173) ──/api,/uploads──▶ FastAPI(:8080) |
+| **生产（默认）** | `bash start.sh --prod` | 浏览器 → 前端静态服务(:5173，`serve.mjs`) ──/api,/uploads──▶ FastAPI(:8080) |
+| 生产（单端口） | `bash start.sh --prod-single` | 浏览器 → FastAPI(:8080，`SERVE_FRONTEND=1` 直接托管 dist) |
+
+- **生产默认仍在 :5173 提供入口**，但该端口上跑的是 `frontend/serve.mjs`（构建产物 + gzip + `/assets` 一年 immutable + SPA 回落 + API 反向代理），**不是** Vite dev server。dev server 只用于本地热更新。
+- 两条生产路径的首屏都是 5 个请求 / 约 84KB（gzip）；差别只在谁监听前端入口。
 - **无 Docker、无 Nginx**；仓库不附带容器化方案（`docker-compose.yml` / 各级 `Dockerfile` / `.dockerignore` / `docker-entrypoint.py` 均已移除，`frontend/nginx.conf` 早于 2026-09-20 删除）
-- 因不再记录客户端 IP，`vite.config.js` 的 `server.proxy` **刻意未开 `xfwd`**；若日后需要还原客户端 IP，改回该处即可
+- 因不再记录客户端 IP，`vite.config.js` 的 `server.proxy` 与 `serve.mjs` 的反向代理均**刻意未开 `xfwd` / `X-Forwarded-For`**；若日后需要还原客户端 IP，改这两处即可
 
 ### 生产环境（裸机，可选）
 ```

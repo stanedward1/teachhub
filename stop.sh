@@ -79,11 +79,13 @@ stop_backend() {
 
 # ---------- 停止前端 ----------
 stop_frontend() {
-  info "停止前端 (vite :5173) ..."
+  info "停止前端 (:5173：Vite dev 或 serve.mjs) ..."
 
   if [ "$HAS_PKILL" = "1" ]; then
     pkill -f "vite" 2>/dev/null && info "  已停止 vite 进程" || true
     pkill -f "npm run dev" 2>/dev/null && info "  已停止 npm run dev 进程" || true
+    # 生产模式（start.sh --prod）的前端是 `node serve.mjs`，命令行不含 vite
+    pkill -f "serve.mjs" 2>/dev/null && info "  已停止 serve.mjs 进程" || true
   fi
 
   kill_port 5173

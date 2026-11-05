@@ -1,6 +1,6 @@
 # TeachHub 数据库 ER 图
 
-> 更新：2026-10-01 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：43 张 ｜ 外键：83 个（模型定义口径，实测：CASCADE 22 / SET NULL 2 / 未显式设置（默认 RESTRICT 语义）59）｜ 迁移：35 个 revision（线性单链，head `b7c8d9e0f1a2`）
+> 更新：2026-11-03 ｜ 数据库：MySQL 8.0（InnoDB，外键强制）｜ 表数：43 张 ｜ 外键：83 个（模型定义口径，实测：CASCADE 22 / SET NULL 2 / 显式 RESTRICT 1 / 未显式设置（默认 RESTRICT 语义）58）｜ 迁移：36 个 revision（线性单链，head `aa11bb22cc33`）
 
 ## 一、实体关系总览（Mermaid）
 
@@ -89,7 +89,7 @@ erDiagram
 | | `classrooms` | school_id、teacher_id、is_graduated | 班级（班主任 + 毕业标记） |
 | | `class_teachers` | class_id + teacher_id（联合唯一） | 班级-教师多对多（科任） |
 | | `students` | class_id、student_no(唯一)、is_dropped_out | 学生档案（通学/寄宿） |
-| 认证 | `users` | username、role、school_id、class_id、student_id | 登录账号（4 角色 + 安全字段）；`student_id` 为学生档案硬关联外键（可空，SET NULL：档案删除后回退「班级+姓名」软关联） |
+| 认证 | `users` | username、role、school_id、class_id、student_id | 登录账号（4 角色 + 安全字段）；`student_id` 为学生档案硬关联外键（可空，SET NULL：档案删除后回退「班级+姓名」软关联）。⚠️ 2026-10-25 起**所有建号路径都会回填该列**（建学生 / 重置密码 / 批量重置 / Excel 导入 / 自助注册 / 超管建号 / 种子数据），历史 NULL 行由 `get_account_of_student` 命中软匹配时自愈回填 —— 删除学生与重置密码**一律走该硬外键**（RBT-35） |
 | | `refresh_tokens` | user_id、school_id、token_hash(唯一) | 刷新令牌（F3）：仅存 sha256 摘要，`expires_at` 过期 / `revoked_at` 撤销 / `replaced_by` 轮换链；`user_id` 级联删、`school_id` 置空删。**不含 `ip` 列**——客户端 IP 记录已下线，该列由迁移 `e2f3a4b5c6d7` 删除 |
 | 作业 | `assignments` | class_id、created_by、deadline | 作业任务 |
 | | `assignment_attachments` | assignment_id | 作业附件（一对多） |

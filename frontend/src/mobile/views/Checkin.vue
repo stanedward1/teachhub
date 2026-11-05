@@ -72,7 +72,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { showToast, showSuccessToast } from 'vant'
+import { showToast, showSuccessToast } from '../vant-fn'
 import { attendanceApi } from '../../api'
 import { formatDate } from '../../utils/date'
 import { useClassOptions } from '../composables/useClassOptions'

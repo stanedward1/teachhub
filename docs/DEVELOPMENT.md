@@ -288,6 +288,33 @@ python -m pytest tests/ -v
 - 提交前确保 `npm run lint` 0 error（warning 可接受）。
 - **工程规范（仓库根）**：提交信息遵循 Conventional Commits，校验由 commitlint + lint-staged 承担 —— 规则文件在仓库内（`commitlint.config.cjs`：type 限 `feat/fix/refactor/docs/chore/test/perf/build/ci`，scope 限 `backend/frontend/docs/deps`；`.lintstagedrc.json`：`frontend/src/**/*.{js,vue}` 跑 `eslint --fix` + `prettier --write`）。⚠️ **`.husky/` 钩子目录当前未纳入版本控制**（`git config core.hooksPath` 指向 `.husky/_`，但该目录不存在）—— 需在**仓库根**执行一次 `npm install` 生成后才生效，未生成前提交不会触发校验；后端测试用 `pytest`（`backend/pytest.ini` 已限定 `testpaths = tests`）。
 
+### 4.6 构建体积与按需引入
+
+前端首屏从「全量引入」改为「按需」后，构建产物的体积与请求数由三条规则共同决定（详见 `CHANGELOG.md` 2026-11-05 第二条）：
+
+1. **组件按需由 `unplugin-vue-components` 自动完成**（`vite.config.js` 的 `Components` 插件）。
+   模板里写 `<el-xxx>` / `<van-xxx>` 即可，**不要**再 `import ElementPlus from 'element-plus'`
+   或 `app.use(Vant)` —— 那会把整包拉回首屏。
+2. **图标必须登记白名单**（`src/plugins/icons.js`）。图标是**全局注册**的，模板里的
+   `<Edit />` 和 `menuConfig` 里的 `icon: 'Edit'` 都靠它解析；漏登记不会报错，只会
+   静默渲染空白。新增图标时：先 `import` 进 `icons.js`、再加进 `ICONS` 表。
+   开发模式下 `assertMenuIcons()` 会校验菜单树并 console.error。
+3. **函数式组件（`ElMessage` / `ElMessageBox` / `ElLoading`）的样式要在 `main.js` 手动引**
+   （`element-plus/es/components/<name>/style/css`），按需插件只处理模板里的组件。
+   `v-loading` 指令同理已显式注册。
+
+其他约定：
+
+- `manualChunks` 用**函数式**而非对象式：对象式 `{ x: ['echarts'] }` 会以该包为入口把整包
+  塞进 chunk，`echarts/core` 的按需注册就失效了。
+- **Vant 只能出现在 `/m` 相关代码里**。`api/request.js` 这类 PC 端也加载的共享模块
+  **不得** import 任何 Vant 模块 —— 移动端 Toast 通过 `utils/mobileToast.js` 的
+  `registerMobileToast` 由移动端页面注入（`main.js` 里已有说明）。这条踩过：曾用
+  动态 `import()`，Rollup 仍把 Vant 绑进 `request` chunk，PC 端每页多下 34KB。
+- 改完构建配置务必 `npm run build` 后实测（`npm run serve` 起 :5173 静态服务，或
+  `SERVE_FRONTEND=1` 单端口）：**渲染无 `Failed to resolve component` 报错**、
+  首屏请求数与 gzip 体积没有明显回退（基线：5 请求 / 约 84KB）。
+
 ## 5. Git 规范
 
 ### 5.1 分支模型（简化 Git Flow）
@@ -335,8 +362,41 @@ docs: 补充架构设计文档
 2. `cd frontend && npm run build` 构建成功
 3. 生产 `.env` 覆盖 `SECRET_KEY`、`DATABASE_URL`，并设置 `ENV=production`
 4. 数据库迁移：`cd backend && alembic upgrade head`
-5. 部署：`./start.sh` 拉起前后端（后端 `run.py` :8080 + 前端 Vite :5173），验证 `/health` 与登录链路
+5. 部署（二选一，首屏效果相同）：
+   - `bash start.sh --prod`（**默认**）—— 前端静态服务 `:5173`（`frontend/serve.mjs`）+ 后端 API `:8080`；
+   - `bash start.sh --prod-single` —— 后端 `:8080` 单端口托管产物（`SERVE_FRONTEND=1`）。
+   两种都要验证：`/health` 返回 JSON、前端 `/` 返回 **HTML**（不是 JSON）、`/admin/students`
+   深链可用、`/assets/*.js` 带 `Content-Encoding: gzip` 与 `max-age=31536000, immutable`
 6. 打 tag：`git tag v1.0.0 && git push --tags`
+
+> ⚠️ 前端改动必须重新跑 `start.sh --prod` / `--prod-single`（静态产物不热更新）。
+> `--prod` 模式下 `SERVE_FRONTEND` 关闭，后端只提供 API；`serve.mjs` 把 `/api`、`/uploads`、
+> `/docs` 等反代到 `:8080`，所以浏览器侧仍是同源，不需要额外 CORS 配置。
+
+### 7.1 为什么生产不能用 Vite dev server（实测数据）
+
+2026-11-05 线上「页面卡顿、很难加载出来」的根因就是生产跑的是 `npm run dev`。实测：
+
+| 指标 | Vite dev（旧） | 构建产物 + gzip（现，两条生产模式相同） |
+|---|---|---|
+| 首屏请求数 | 23 | **5**（1 HTML + 4 JS/CSS） |
+| 首屏传输量 | 4.54 MB（未压缩） | **约 84 KB（gzip）** |
+| 单个最大文件 | `element-plus.js` 2.02 MB | `vendor-vue.js` 108 KB（42 KB gzip） |
+| 缓存 | 每个模块 `no-cache` | `/assets/*` 一年 immutable |
+| 压缩 | 无 | gzip ≥1KB 自动 |
+
+dev 模式必然如此的三个原因：① 按模块原样下发（预构建产物不压缩）；② 不发送
+`Content-Encoding`；③ 全部带 `Cache-Control: no-cache`。带宽 2Mbps 时 4.5MB ≈ 18 秒。
+
+浏览器侧复现（无需账号）：
+
+```bash
+# --prod：前端静态服务 :5173
+curl -sI -H 'Accept-Encoding: gzip' http://<host>:5173/assets/index-*.js
+# --prod-single：后端托管 :8080（响应头一致）
+curl -sI -H 'Accept-Encoding: gzip' http://<host>:8080/assets/index-*.js
+# 期望：Content-Encoding: gzip + Cache-Control: public, max-age=31536000, immutable + Vary
+```
 
 ## 8. 文档维护
 

@@ -11,6 +11,30 @@ export default [
   js.configs.recommended,
   // Vue 3 推荐规则（含模板校验）
   ...pluginVue.configs['flat/recommended'],
+  // Node 脚本（frontend/serve.mjs 等）：上一条的浏览器全局不适用，需显式声明 Node 全局
+  {
+    files: ['**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        Buffer: 'readonly',
+        URL: 'readonly',
+        URLSearchParams: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        fetch: 'readonly',
+      },
+    },
+    rules: {
+      'no-console': 'off',
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none' }],
+    },
+  },
   // 关闭与 Prettier 冲突的格式规则（必须放最后）
   prettier,
   {

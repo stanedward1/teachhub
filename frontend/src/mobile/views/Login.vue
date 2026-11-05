@@ -56,9 +56,13 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { showToast } from 'vant'
+import { showToast } from '../vant-fn'
 import { authApi } from '../../api'
 import { getLastSchoolId, setAuth, setLastSchoolId } from '../../utils/auth'
+import { registerMobileToast } from '../../utils/mobileToast'
+
+// 登录页不在 MobileLayout 内，需要自己把 Toast 注册给 request 层
+registerMobileToast((message) => showToast({ message, position: 'top' }))
 
 const router = useRouter()
 const loading = ref(false)
