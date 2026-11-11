@@ -366,7 +366,23 @@ function openCreate() {
   dialog.value = true
 }
 
-function openEdit(row) {
+async function openEdit(row) {
+  // 🔴 列表接口（GET /api/homework/assignments）只返回 attachment_count，**不含**
+  // attachments 数组；而保存时后端 `_sync_attachments` 是「整体替换」语义
+  // （先 clear 再重填，被移除的附件在 commit 后物理删除）。
+  // 若直接用列表行回填，form.attachments 恒为空 ⇒ 编辑任意字段都会清空全部附件。
+  // 因此必须先取详情（含 attachments）再打开弹窗；取不到就中止，绝不用空数组覆盖。
+  let attachments = []
+  try {
+    const detail = await homeworkApi.assignment(row.id)
+    attachments = (detail.attachments || []).map((a) => ({
+      filename: a.filename,
+      filepath: a.filepath,
+    }))
+  } catch {
+    // 全局拦截器已提示具体原因，这里只保证不进入「用空数组保存」的状态
+    return
+  }
   editing.value = row
   Object.assign(form, {
     title: row.title,
@@ -375,10 +391,7 @@ function openEdit(row) {
     deadline: row.deadline,
     class_id: row.class_id,
     short_name: row.short_name,
-    attachments: (row.attachments || []).map((a) => ({
-      filename: a.filename,
-      filepath: a.filepath,
-    })),
+    attachments,
   })
   dialog.value = true
 }

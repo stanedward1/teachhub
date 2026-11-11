@@ -229,7 +229,9 @@ function renderTrendChart() {
     yAxis: {
       type: 'value',
       min: 0,
-      max: 100,
+      // 上限自适应：常规 100 分制就是 0–100；出现 150 分制的分数（如 132）时按数据上取整
+      // 到 10 的倍数。原先写死 `max: 100`，超过 100 的点会被画到网格外（RBT-100）
+      max: (v) => Math.max(100, Math.ceil((v.max || 0) / 10) * 10),
       splitLine: { lineStyle: { color: '#f3f4f6' } },
       axisLabel: { color: '#9ca3af', fontSize: 11 },
     },

@@ -6,6 +6,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.database import get_db
 from app.deps import require_teacher, get_current_user
 from app.models import ClassPlan, TeacherPlan, User
@@ -28,7 +29,7 @@ dep = require_teacher
 
 # ---------------- 工作日志 ----------------
 @router.get("/work-logs")
-def list_work_logs(page: int = 1, page_size: int = 20, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_work_logs(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.list_work_logs(db, page, page_size, user)
 
 
@@ -50,7 +51,7 @@ def delete_work_log(log_id: int, user: User = Depends(get_current_user), db: Ses
 # ---------------- 班级计划 / 教师计划 ----------------
 def _plan_routes(model, prefix):
     @router.get(f"/{prefix}")
-    def list_plans(page: int = 1, page_size: int = 20, plan_type: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    def list_plans(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, plan_type: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
         return classlog_service.list_plans(db, model, page, page_size, plan_type, user)
 
     @router.post(f"/{prefix}")
@@ -93,7 +94,7 @@ def delete_schedule(schedule_id: int, user: User = Depends(get_current_user), db
 
 # ---------------- 班级活动 ----------------
 @router.get("/activities")
-def list_activities(page: int = 1, page_size: int = 20, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_activities(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.list_activities(db, page, page_size, user)
 
 
@@ -109,7 +110,7 @@ def delete_activity(activity_id: int, user: User = Depends(get_current_user), db
 
 # ---------------- 师生谈心 ----------------
 @router.get("/talks")
-def list_talks(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_talks(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.list_talks(db, page, page_size, student_id, class_id, user)
 
 
@@ -125,7 +126,7 @@ def delete_talk(talk_id: int, user: User = Depends(get_current_user), db: Sessio
 
 # ---------------- 返校记录 ----------------
 @router.get("/return-records")
-def list_return_records(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_return_records(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.list_return_records(db, page, page_size, student_id, class_id, user)
 
 
@@ -141,7 +142,7 @@ def delete_return_record(record_id: int, user: User = Depends(get_current_user),
 
 # ---------------- 学生表现 ----------------
 @router.get("/performances")
-def list_performances(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, ptype: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_performances(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, ptype: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.list_performances(db, page, page_size, student_id, class_id, ptype, user)
 
 
@@ -172,7 +173,7 @@ def suggest_student_comment(student_id: int, user: User = Depends(get_current_us
 
 
 @router.get("/student-comments")
-def list_student_comments(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_student_comments(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return classlog_service.list_student_comments(db, page, page_size, student_id, class_id, user)
 
 

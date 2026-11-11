@@ -25,6 +25,7 @@ from app.observability import render_metrics, request_logging_middleware
 from app.routers import admin, attendance, auth, classlog, homework, meta, mobile, students, uploads, workbench
 from app.security import decode_token
 from app.tenant import reset_tenant, set_tenant  # 导入即注册 ORM 租户隔离事件
+from app.upload_serving import SafeUploadsStaticFiles
 
 # 基础日志配置（结构化单行日志 + request-id）
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
@@ -262,7 +263,11 @@ async def _frontend_cache_headers(request: Request, call_next):
 app.middleware("http")(request_logging_middleware)
 
 
-app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
+# 上传目录的静态直读。**不能**换回裸 `StaticFiles`（RBT-78）：
+# 白名单里有 .html/.js/.css（网页/编程课的作业类型，不能拒收），同源直出即可执行任意 JS
+# 并读走 localStorage 里的令牌。`SafeUploadsStaticFiles` 对可渲染类型强制
+# `Content-Disposition: attachment` + `nosniff` + `CSP: sandbox`（见 app/upload_serving.py）。
+app.mount("/uploads", SafeUploadsStaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
 app.include_router(auth.router)
 app.include_router(meta.router)

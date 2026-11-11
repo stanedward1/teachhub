@@ -162,6 +162,24 @@ const historyItems = ref([])
 const previewDialog = ref(false)
 const previewHtml = ref('')
 
+/**
+ * 「最后一次请求胜出」序号（与 `composables/useCrudList.js` 同款）。
+ *
+ * `api/request.js` 的并发去重 key 里含 params ⇒「A 班的数据」与「B 班的数据」互不取消。
+ * 没有序号保护时，先查 A（慢）、再切到 B，A 的统计会最后落到 `weeklyData` 上：
+ * 页面上班级是 B、数字是 A，点「生成周报」还会以 B 的标题装 A 的统计（RBT-101）。
+ */
+let loadSeq = 0
+
+/**
+ * 作废在途的周报请求（切换班级 / 打开历史报告时调用）。
+ * 只自增序号并复位 loading：被作废的请求回来时 `my !== loadSeq`，不会再写数据。
+ */
+function invalidateLoads() {
+  loadSeq += 1
+  loading.value = false
+}
+
 const dataCards = computed(() => {
   if (!weeklyData.value) return []
   const d = weeklyData.value
@@ -184,6 +202,8 @@ onMounted(async () => {
 })
 
 function onClassChange() {
+  // 切班即作废在途请求：否则旧班的统计会在切班后落到新班级的标题下
+  invalidateLoads()
   weeklyData.value = null
   reportContent.value = null
   error.value = false
@@ -191,19 +211,25 @@ function onClassChange() {
 
 async function loadWeeklyData() {
   if (!classId.value) return
+  const my = ++loadSeq
   loading.value = true
   error.value = false
   try {
     const [start, end] = dateRange.value || ['', '']
-    weeklyData.value = await reportApi.weeklyData({
+    const res = await reportApi.weeklyData({
       class_id: classId.value,
       week_start: start,
       week_end: end,
     })
+    // 期间又发起了新的查询（切班/改日期）：本次结果已过期，直接丢弃
+    if (my !== loadSeq) return
+    weeklyData.value = res
   } catch (e) {
+    if (my !== loadSeq) return
     error.value = true
   } finally {
-    loading.value = false
+    // 只有最新一次请求才能结束 loading
+    if (my === loadSeq) loading.value = false
   }
 }
 
@@ -291,6 +317,9 @@ async function loadHistory() {
 }
 
 function viewReport(row) {
+  // 打开历史报告前先作废在途查询：否则上一次「查询数据」的响应会把视图里的
+  // 快照 data 顶掉，看到的是 A 班的数字配 B 班的报告
+  invalidateLoads()
   reportTitle.value = row.title
   reportContent.value = row.content || ''
   // 回填该报告的班级 / 周期 / 数据快照：否则随后点「保存报告」会用当前表单的

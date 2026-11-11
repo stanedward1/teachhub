@@ -50,7 +50,7 @@ from app.permissions import (
     ensure_class_operable,
     resolve_school_id_or_400,
 )
-from app.utils import stringify_dates, to_dict, normalize_page, parse_date_or_400
+from app.utils import stringify_dates, to_dict, normalize_page, parse_date_or_400, clamp_points
 
 
 # ---------------- 内部辅助 ----------------
@@ -644,6 +644,9 @@ def create_performance(db: Session, payload: dict, user: User) -> dict:
     points = payload.get("points")
     if points is None:
         points = 1 if ptype == "积极" else -1
+    # 🔴 越界钳位（RBT-82）：schema 刻意不加 ge/le（要保住「留空按类型默认」的语义），
+    # 于是值域收口放在写库前 —— 否则一条 ±21 亿的记录会把班级积分排名永久拉满。
+    points = clamp_points(points)
 
     x = Performance(
         student_id=payload["student_id"],

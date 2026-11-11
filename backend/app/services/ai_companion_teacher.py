@@ -26,6 +26,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.audit import (
     AUDIT_COMPANION_VIEW_DETAIL,
     AUDIT_COMPANION_VIEW_LIST,
@@ -52,7 +53,7 @@ def list_companion_conversations(
     assignment_id: int,
     user: User,
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = DEFAULT_PAGE_SIZE,
 ) -> dict:
     """列出**该作业下**本班学生的学伴会话（一个学生会话 = 一行）。
 

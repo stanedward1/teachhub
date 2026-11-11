@@ -32,6 +32,8 @@ ALLOWED_UPLOAD_EXTS = {
     ".txt", ".md", ".zip", ".rar", ".7z",
     # 代码 / 作业
     ".c", ".cpp", ".py", ".java", ".js", ".ts", ".html", ".css",
+    # 网络实验：Cisco Packet Tracer 工程文件（二进制，浏览器按 octet-stream 下载）
+    ".pkt",
 }
 
 # backend/.env 绝对路径

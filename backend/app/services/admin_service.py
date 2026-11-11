@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.audit import audit
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
 from app.constants import SCORE_BANDS, segment_index
@@ -338,12 +339,15 @@ def create_user(db: Session, payload: dict, user: User) -> dict:
             User.class_id == target_class_id,
             User.username == username,
         ).first():
-            raise HTTPException(status_code=400, detail="该班级内已存在同名用户名")
+            # 409 而非 400（RDB-71）：与 `students_service` / `auth_service` 的「同名账号
+            # 冲突」同码。同一次「建号」不该因为走超管还是教师路径返回不同状态码 ——
+            # 调用方靠 409 判断「换个名字可重试」，400 会被当成「参数写错了」。
+            raise HTTPException(status_code=409, detail="该班级内已存在同名用户名")
     else:
         if db.query(User).filter(
             User.school_id == target_school_id, User.username == username
         ).first():
-            raise HTTPException(status_code=400, detail="该校已存在同名用户名")
+            raise HTTPException(status_code=409, detail="该校已存在同名用户名")
     # 新用户默认密码 123456 不满足强度要求时，标记首次登录强制改密
     must_change = validate_password_strength(password) is not None
     u = User(
@@ -415,8 +419,9 @@ def update_user(db: Session, user_id: int, payload: dict, user: User) -> dict:
             User.username == u.username,
             User.id != u.id,
         ).first():
+            # 409：与 `students_service.update_student` 的「转班撞同名」完全同口径（RDB-71）
             raise HTTPException(
-                status_code=400,
+                status_code=409,
                 detail=(
                     "该班级内已存在同名用户名"
                     if eff_role == "student"
@@ -752,7 +757,7 @@ def audit_log_stats(db: Session, days: int = 30, user: "User | None" = None) -> 
     }
 
 
-def list_audit_logs(db: Session, action: str = "", keyword: str = "", date: str = "", page: int = 1, page_size: int = 20, user: "User | None" = None) -> dict:
+def list_audit_logs(db: Session, action: str = "", keyword: str = "", date: str = "", page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, user: "User | None" = None) -> dict:
     page, page_size = normalize_page(page, page_size)
     """查询操作审计日志。管理员看全部；班主任看自己班级；科任老师不可见。"""
     class_ids = _visible_audit_class_ids_or_403(db, user)

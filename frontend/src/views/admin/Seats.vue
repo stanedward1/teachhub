@@ -14,7 +14,7 @@
       <div class="spacer"></div>
       <el-button @click="sortByNo">按学号排序</el-button>
       <el-button @click="shuffle">随机排座</el-button>
-      <el-button type="primary" :loading="saving" :disabled="saving" @click="save"
+      <el-button type="primary" :loading="saving" :disabled="saving || loading" @click="save"
         >保存布局</el-button
       >
     </div>
@@ -55,6 +55,25 @@ const selectedIndex = ref(null)
 const loading = ref(false)
 const saving = ref(false)
 
+/**
+ * 「最后一次请求胜出」序号（与 `composables/useCrudList.js` 同款）。
+ *
+ * 切换班级会连发两次请求（先读已保存布局、再读学生名单），而 `api/request.js` 的
+ * 并发去重 key 里含 url/params，两个班级的请求互不取消。没有序号保护时，
+ * 先切 A（慢）、再切 B，A 的名单会最后落到 `seats` 上；此时点「保存布局」就是把
+ * **B 班的 class_id 配上 A 班的学生**写库，直接覆盖掉 B 班已保存的座位表（RBT-101）。
+ */
+let loadSeq = 0
+
+/**
+ * 当前 `seats` 是从哪个班级加载出来的（`null` = 名单未就绪）。
+ *
+ * 与 `loadSeq` 互补：序号保证只有最新一次请求能写 `seats`，本字段在**保存前**再比对一次
+ * 「这批名单是否还是当前班级的」—— 双保险，避免以后新增加载路径漏掉序号守卫时
+ * 又把 A 班名单按 B 班写库（座位表被覆盖后无法从接口恢复）。
+ */
+const seatsClassId = ref(null)
+
 onMounted(async () => {
   // 使用 studentApi.classrooms()：管理员看全部，教师只看自己负责的班级
   const res = await studentApi.classrooms()
@@ -62,44 +81,65 @@ onMounted(async () => {
 })
 
 async function onClassChange() {
+  const my = ++loadSeq
+  // 固定本次请求的目标班级：await 之间可能再切一次班级，不能读实时的 classId
+  const targetClassId = classId.value
   selectedIndex.value = null
+  // 名单尚未就绪，此期间禁止保存（切换过程中 seats 里还是上一个班的人）
+  seatsClassId.value = null
   // 清空选择时无需请求，直接清空座位，避免用 null 班级去查接口
-  if (!classId.value) {
+  if (!targetClassId) {
     seats.value = []
     return
   }
   loading.value = true
   try {
     // 尝试加载已保存布局
-    const saved = await seatApi.get(classId.value)
+    const saved = await seatApi.get(targetClassId)
+    if (my !== loadSeq) return
     columns.value = saved.columns || 6
-    const students = await loadStudents()
-    const map = new Map(students.map((s) => [s.id, s]))
-    const layout = saved.layout.flat()
-    const ordered = []
-    const used = new Set()
-    for (const id of layout) {
-      if (map.has(id) && !used.has(id)) {
-        ordered.push(map.get(id))
-        used.add(id)
-      }
-    }
-    for (const s of students) if (!used.has(s.id)) ordered.push(s)
-    seats.value = ordered
+    const students = await loadStudents(targetClassId)
+    if (my !== loadSeq) return
+    seats.value = arrangeStudents(students, saved.layout)
+    seatsClassId.value = targetClassId
   } catch (e) {
     // 无已保存布局（后端返回空 / 404）或加载失败：回退为按学号的学生列表
+    if (my !== loadSeq) return
     try {
-      seats.value = await loadStudents()
+      const students = await loadStudents(targetClassId)
+      if (my !== loadSeq) return
+      seats.value = students
+      seatsClassId.value = targetClassId
     } catch (e2) {
+      if (my !== loadSeq) return
       seats.value = []
+      seatsClassId.value = null
     }
   } finally {
-    loading.value = false
+    // 只有最新一次请求才能结束 loading，否则旧请求会提前撤掉新请求的骨架
+    if (my === loadSeq) loading.value = false
   }
 }
 
-async function loadStudents() {
-  const res = await studentApi.list({ class_id: classId.value, page: 1, page_size: 9999 })
+/** 按已保存布局排列学生：布局里仍在本班的学生按原顺序在前，其余补在后面。 */
+function arrangeStudents(students, layout) {
+  const map = new Map(students.map((s) => [s.id, s]))
+  const ordered = []
+  const used = new Set()
+  // 旧布局可能残留转班/退学学生的 id：`map.has` 过滤掉，不让幽灵座位占位
+  for (const id of (Array.isArray(layout) ? layout : []).flat()) {
+    if (map.has(id) && !used.has(id)) {
+      ordered.push(map.get(id))
+      used.add(id)
+    }
+  }
+  for (const s of students) if (!used.has(s.id)) ordered.push(s)
+  return ordered
+}
+
+/** 读指定班级的学生名单（显式传 id：不使用可能已被改掉的 `classId`） */
+async function loadStudents(id) {
+  const res = await studentApi.list({ class_id: id, page: 1, page_size: 9999 })
   return res.items
 }
 
@@ -136,6 +176,12 @@ async function save() {
     return ElMessage.warning('请先选择班级')
   }
   if (saving.value) return
+  // 名单必须来自当前班级：切班请求还没回来时保存，会把上一个班的名单按当前 class_id
+  // 写库，覆盖掉当前班已保存的座位表且不可恢复（RBT-101；后端 seats_service 亦已加
+  // 学生归属校验，这里是第一道拦截，让用户看到「请稍候」而不是一个 400）
+  if (seatsClassId.value !== classId.value) {
+    return ElMessage.warning('班级名单还在加载，请稍候再保存')
+  }
   saving.value = true
   try {
     const layout = seats.value.map((s) => s.id)

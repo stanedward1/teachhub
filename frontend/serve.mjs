@@ -36,7 +36,14 @@ const PORT = Number(process.env.PORT || 5173)
 const HOST = process.env.HOST || '0.0.0.0'
 const API_ORIGIN = new URL(process.env.API_ORIGIN || 'http://127.0.0.1:8080')
 
-/** 这些前缀不属于前端路由，原样转发给后端（/docs 等是 FastAPI 自带页面）。 */
+/**
+ * 这些前缀不属于前端路由，原样转发给后端（/docs 等是 FastAPI 自带页面）。
+ *
+ * ⚠️ `/uploads` 的**安全响应头由后端负责**（`Content-Disposition: attachment` /
+ * `nosniff` / `CSP: sandbox`，见 backend/app/upload_serving.py）。本代理
+ * `writeHead(upRes.statusCode, upRes.headers)` 原样透传，**不得在这里加白名单或过滤头** ——
+ * 否则同一份规则会有两个真源，改一处必漏一处（RBT-78 的教训）。
+ */
 const PROXY_PREFIXES = [
   '/api',
   '/uploads',

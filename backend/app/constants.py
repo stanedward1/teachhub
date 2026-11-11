@@ -55,6 +55,24 @@ GOOD_LINE = SCORE_BANDS[1]["min"]  # 80
 PASS_LINE = SCORE_BANDS[3]["min"]  # 60
 
 
+# 分页口径（R8 SMP-62）
+# --------------------
+# 默认页大小与钳位上限曾是散落在 12 个 router / 8 个 service 里的字面量（`page_size: int = 20`
+# 21 处、`max_size: int = 200` 硬编码在 `utils.normalize_page`）。改上限时要挨个改，
+# 漏一处就会出现「列表说 200、导出按 20」的口径错位。**新增分页参数一律引用这里**。
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 200
+
+
+# 单条表现记录的积分钳位区间（RBT-82）
+# ----------------------------------
+# `Performance.points` 原先是裸整数，教师可以录 ±21 亿，直接污染 `sum(Performance.points)`
+# 的班级积分排名。schema 层刻意不加 `ge/le`（要让「留空按类型默认 ±1」的语义保持 200），
+# 因此在**服务层**统一钳位：超出 ±100 的按边界入库，而不是 500 或静默脏数据。
+POINTS_PER_RECORD_MIN = -100
+POINTS_PER_RECORD_MAX = 100
+
+
 def segment_index(score: int | float) -> int:
     """返回分数落在 ``SCORE_BANDS`` 中的下标（0=优秀 … 4=不及格）。
 

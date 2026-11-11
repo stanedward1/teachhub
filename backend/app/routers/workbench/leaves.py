@@ -2,6 +2,7 @@
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.routers.workbench._common import get_current_user, get_db, new_router
 from app.schemas import LeaveCreate, LeaveOut, LeaveUpdate
 from app.services.workbench import leaves_service
@@ -12,7 +13,7 @@ router = new_router("请假/考勤")
 @router.get("/leaves")
 def list_leaves(
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = DEFAULT_PAGE_SIZE,
     student_id: int | None = None,
     class_id: int | None = None,
     status: str = "",

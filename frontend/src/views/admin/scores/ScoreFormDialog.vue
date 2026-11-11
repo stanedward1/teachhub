@@ -5,9 +5,14 @@
         ><StudentSelect v-model="form.student_id" show-class-filter
       /></el-form-item>
       <el-form-item label="科目" required><el-input v-model="form.subject" /></el-form-item>
-      <el-form-item label="成绩" required
-        ><el-input-number v-model="form.score" :min="0" :max="100"
-      /></el-form-item>
+      <!-- 上下界取 `utils/constants.js`（与后端 SCORE_MIN/SCORE_MAX 同源）：
+           原先写死 `:max="100"`，150 分制的 132 分会被控件静默钳成 100 存库（RBT-100） -->
+      <el-form-item label="成绩" required>
+        <div style="display: flex; align-items: center; gap: 8px">
+          <el-input-number v-model="form.score" :min="SCORE_MIN" :max="SCORE_MAX" />
+          <span style="font-size: 12px; color: #9ca3af">{{ SCORE_MIN }}–{{ SCORE_MAX }} 分</span>
+        </div>
+      </el-form-item>
       <el-form-item label="考试名称"><el-input v-model="form.exam_name" /></el-form-item>
     </el-form>
     <template #footer>
@@ -23,12 +28,18 @@
  *
  * 从 Scores.vue 原样搬迁而来（模板 99-110 行 + dialog/editing/saving/form 状态
  * 与 openCreate/openEdit/save 逻辑），仅把 v-model / 方法调用改为 props/emits 链路。
- * 对外行为（校验文案、接口调用、提示文案、关闭时机、字段透传语义）保持完全等价。
+ * 对外行为（接口调用、提示文案、关闭时机、字段透传语义）与原实现等价。
+ *
+ * 唯一的**有意差异**（R9 RBT-100）：成绩上下界改为 `utils/constants.js` 的
+ * SCORE_MIN/SCORE_MAX（= 后端 `constants.py` 的 0/150），并在 `save()` 里显式校验
+ * 范围。原实现把上限写死成 100，`el-input-number` 会把 150 分制的 132 分静默钳成
+ * 100 存库 —— 学生的分数、班级均分、分数段与周报全线偏低且无报错。
  */
 import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import StudentSelect from '../../../components/StudentSelect.vue'
 import { scoreApi } from '../../../api'
+import { SCORE_MIN, SCORE_MAX } from '../../../utils/constants'
 
 const props = defineProps({
   /** 弹窗显隐（v-model） */
@@ -72,6 +83,15 @@ function init() {
 
 async function save() {
   if (!form.student_id || !form.subject) return ElMessage.warning('请选择学生并填写科目')
+  // 成绩必须是 [SCORE_MIN, SCORE_MAX] 内的数字：控件会把超界值钳到边界、清空后为 null
+  // （后端 schema 会 422）。这里显式拦一次，避免「以为存了 132、其实存了 150/空」（RBT-100）
+  const score = Number(form.score)
+  if (form.score === null || form.score === '' || !Number.isFinite(score)) {
+    return ElMessage.warning(`请填写 ${SCORE_MIN}-${SCORE_MAX} 之间的成绩`)
+  }
+  if (score < SCORE_MIN || score > SCORE_MAX) {
+    return ElMessage.warning(`成绩需在 ${SCORE_MIN}-${SCORE_MAX} 之间`)
+  }
   saving.value = true
   try {
     // 显式构造载荷：只提交表单声明的字段

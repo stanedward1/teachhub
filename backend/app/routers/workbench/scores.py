@@ -2,6 +2,7 @@
 from fastapi import Depends, File, UploadFile
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.routers.workbench._common import dep, get_current_user, get_db, new_router
 from app.schemas import ScoreCreate, ScoreOut, ScoreUpdate
 from app.services.workbench import scores_service
@@ -12,7 +13,7 @@ router = new_router("成绩")
 @router.get("/scores")
 def list_scores(
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = DEFAULT_PAGE_SIZE,
     student_id: int | None = None,
     class_id: int | None = None,
     subject: str = "",

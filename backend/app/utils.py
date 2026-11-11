@@ -6,6 +6,13 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.constants import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    POINTS_PER_RECORD_MAX,
+    POINTS_PER_RECORD_MIN,
+)
+
 
 def gen_student_no(db, student_model) -> str:
     """生成全局唯一学号（ZC + 日期 + 4 位随机），用于自助注册等无学号场景。"""
@@ -45,16 +52,26 @@ def stringify_dates(d: dict) -> dict:
     return d
 
 
-def normalize_page(page, page_size, max_size: int = 200):
-    """规范化分页参数：page >= 1，1 <= page_size <= max_size。"""
+def normalize_page(
+    page,
+    page_size,
+    max_size: int = MAX_PAGE_SIZE,
+    default_size: int = DEFAULT_PAGE_SIZE,
+):
+    """规范化分页参数：page >= 1，1 <= page_size <= max_size。
+
+    ``page_size`` 缺失 / 非数字时回落到 :data:`DEFAULT_PAGE_SIZE`，
+    上限取 :data:`MAX_PAGE_SIZE` —— 两者都是业务口径，只在 ``constants.py`` 定义一次
+    （R8 SMP-62：原先 20 / 200 是散落在 20+ 处的字面量）。
+    """
     try:
         page = int(page or 1)
     except (TypeError, ValueError):
         page = 1
     try:
-        page_size = int(page_size or 20)
+        page_size = int(page_size or default_size)
     except (TypeError, ValueError):
-        page_size = 20
+        page_size = default_size
     return max(1, page), min(max(1, page_size), max_size)
 
 
@@ -98,6 +115,26 @@ def parse_date_or_400(value):
 def clamp_score(value, lo: float = 0.0, hi: float = 100.0) -> float:
     """把数值钳制到 [lo, hi] 区间（用于雷达分数等 0-100 指标，避免出现负分）。"""
     return max(lo, min(hi, value))
+
+
+def clamp_points(value) -> int:
+    """把单条表现积分钳制到 :data:`POINTS_PER_RECORD_MIN` ~ ``..._MAX``（RBT-82）。
+
+    为什么钳在**服务层**而不是 schema 层：`PerformanceCreate` 的 `points` 允许缺省
+    （留空按类型默认 +1 / -1），加 `ge/le` 会把「缺省仍 200」的既有语义改掉；
+    而真正的危害是**值域**——教师可录 ±21 亿，直接污染 `sum(Performance.points)`
+    的班级积分排名（排行条被一条记录拉满，几万条正常记录都修不回来）。
+    所以「缺省」交给 schema、「越界」钳在写库前，两者互不干扰。
+
+    Raises:
+        HTTPException: 400 —— 非整数（防御性：schema 已做类型校验，走到这里说明
+            有人绕过 schema 直接调 service）。
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="积分必须是整数")
+    return max(POINTS_PER_RECORD_MIN, min(POINTS_PER_RECORD_MAX, n))
 
 
 def safe_filename(name: str) -> str:

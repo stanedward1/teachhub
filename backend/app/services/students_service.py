@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.audit import audit, batch_user_map
 from app.cleanup import delete_avatar_file, purge_student_data, purge_user_data
 from app.models import (
@@ -102,7 +103,8 @@ def create_school(db: Session, user: User, payload: dict) -> dict:
         if db.query(User).filter(
             User.school_id == s.id, User.username == admin_username
         ).first():
-            raise HTTPException(status_code=400, detail="该校已存在同名管理员账号")
+            # 409：唯一性冲突（RDB-71 口径），与建号冲突同码
+            raise HTTPException(status_code=409, detail="该校已存在同名管理员账号")
         pwd = payload.get("admin_password") or "School@123"
         db.add(User(
             username=admin_username,
@@ -164,7 +166,8 @@ def ensure_school_code_unique(db: Session, code: str | None, exclude_id: int | N
     if exclude_id:
         q = q.filter(School.id != exclude_id)
     if q.first():
-        raise HTTPException(status_code=400, detail="学校代码已存在")
+        # 409：`schools.code` 唯一索引冲突（RDB-71 口径）
+        raise HTTPException(status_code=409, detail="学校代码已存在")
 
 
 def set_school_status(db: Session, user: User, school_id: int, payload: dict) -> dict:
@@ -256,7 +259,8 @@ def create_classroom(db: Session, user: User, payload: dict) -> dict:
     if not name or not code:
         raise HTTPException(status_code=400, detail="班级名称和代码不能为空")
     if db.query(Classroom).filter(Classroom.code == code).first():
-        raise HTTPException(status_code=400, detail="班级代码已存在")
+        # 409：`classrooms.code` 唯一索引冲突（RDB-71 口径）
+        raise HTTPException(status_code=409, detail="班级代码已存在")
     # 归属学校：平台超管必须显式指定；学校管理员默认取本校
     # 🔴 必须先校验「请求体里的 school_id 属于本校」：`before_flush` 只在未赋值时回填，
     # 显式传入他校 id 不会被纠正 ⇒ 学校管理员能把班级建到他校去。
@@ -393,11 +397,13 @@ def add_class_teacher(db: Session, user: User, class_id: int, payload: dict) -> 
     if not t or t.role != "teacher":
         raise HTTPException(status_code=400, detail="所选教师不存在或不是教师角色")
     if c.teacher_id == teacher_id:
-        raise HTTPException(status_code=400, detail="该教师已是班主任")
+        # 409：状态冲突（同一教师不能重复担任班主任）
+        raise HTTPException(status_code=409, detail="该教师已是班主任")
     if db.query(ClassTeacher).filter(
         ClassTeacher.class_id == class_id, ClassTeacher.teacher_id == teacher_id
     ).first():
-        raise HTTPException(status_code=400, detail="该教师已是科任老师")
+        # 409：状态冲突（同一 (班级, 教师) 只能有一条科任记录）
+        raise HTTPException(status_code=409, detail="该教师已是科任老师")
     db.add(ClassTeacher(class_id=class_id, teacher_id=teacher_id))
     audit(db, user, "add_class_teacher", target=f"班级#{class_id}-新增科任老师#{teacher_id}", class_id=class_id)
     db.commit()
@@ -453,7 +459,7 @@ def list_students(
     class_id: int | None = None,
     keyword: str = "",
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = DEFAULT_PAGE_SIZE,
     dropped_out: str = "",
 ) -> dict:
     """学生列表（分页）。单次 SQL 取回当前页 + 总数（见 app.pagination.paginate）。"""
@@ -506,7 +512,10 @@ def create_student(db: Session, user: User, payload: StudentCreate) -> dict:
         if not is_teacher_class_owner(db, user.id, class_id):
             raise HTTPException(status_code=403, detail="无权在该班级添加学生")
     if db.query(Student).filter(Student.student_no == student_no).first():
-        raise HTTPException(status_code=400, detail="学号已存在")
+        # 409 而非 400（RDB-71）：「学号已存在」是**状态冲突**（换一个学号即可重试），
+        # 不是参数格式错误。与同文件其它建号/建卡冲突、`uq_student_school_no` 兜底
+        # 的 IntegrityError handler（main.py）统一为 409。
+        raise HTTPException(status_code=409, detail="学号已存在")
     # 🔴 同班同名建号冲突必须在**写库之前**判定（RBT-66）：学生登录名即姓名，同班内
     # 唯一性由 `uq_user_scope_username` 兜底，同班已有同名账号时建号必然撞唯一键。
     # 旧实现是「查不到自己的账号就跳过建号、照样返回 200」，教师以为账号已建好，

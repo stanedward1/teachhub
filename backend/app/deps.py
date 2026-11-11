@@ -10,6 +10,20 @@ from app.security import decode_token
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
+def _as_int(value, *, detail: str) -> int:
+    """把 JWT 声明转成 int；非法值一律 401（RBT-84）。
+
+    原实现是裸 ``int(payload.get("sub"))`` / ``int(payload.get("tv") or 0)``：只要
+    ``sub`` / ``tv`` 不是数字（签名密钥在开发环境是固定串，旁人可自行签发），
+    ``ValueError`` 会一路冒到全局处理器 ⇒ **500 + 全栈日志**，
+    而正确的语义是「凭证无效 ⇒ 401」。
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail=detail)
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
@@ -18,25 +32,29 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="未登录")
     try:
         payload = decode_token(credentials.credentials)
-        user_id = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="无效的凭证")
     except Exception:
         raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="无效的凭证")
 
-    user = db.get(User, int(user_id))
+    user = db.get(User, _as_int(user_id, detail="登录已过期，请重新登录"))
     if user is None:
         raise HTTPException(status_code=401, detail="用户不存在")
 
     # 租户上下文校验一：token 记录的学校与账号当前归属不一致（换校/迁校）需重新登录
     token_school_id = payload.get("school_id")
-    if token_school_id is not None and token_school_id != user.school_id:
+    if token_school_id is not None and _as_int(
+        token_school_id, detail="登录已过期，请重新登录"
+    ) != user.school_id:
         raise HTTPException(status_code=401, detail="账号归属已变更，请重新登录")
 
     # 会话版本校验（token_version）：改密 / 重置密码会把 `users.token_version` 加一，
     # 旧 access token 的 `tv` 声明随之失配 ⇒ 该账号的全部旧会话**立即失效**。
     # 升级前签发的老 token 没有 `tv` 声明，按 0 处理，因此本次变更本身不会强制全体重登。
-    if int(payload.get("tv") or 0) != int(user.token_version or 0):
+    if _as_int(payload.get("tv") or 0, detail="登录状态已失效，请重新登录") != _as_int(
+        user.token_version or 0, detail="登录状态已失效，请重新登录"
+    ):
         raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
 
     # 租户上下文校验二：停用学校的全部账号拒绝访问（平台超管不属于任何学校，不受限）

@@ -6,6 +6,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.database import get_db
 from app.deps import (
     get_current_user,
@@ -323,7 +324,7 @@ def companion_clear(
 def companion_conversations(
     assignment_id: int,
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = DEFAULT_PAGE_SIZE,
     user=Depends(require_teacher_only),
     db: Session = Depends(get_db),
 ):

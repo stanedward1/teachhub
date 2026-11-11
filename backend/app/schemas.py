@@ -189,14 +189,15 @@ class ScoreCreate(BaseModel):
     student_id: int = Field(..., gt=0)
     subject: str = Field("未分类", max_length=50)
     score: float = Field(..., ge=SCORE_MIN, le=SCORE_MAX)
-    exam_name: str | None = None
+    # 列宽 String(100)：超长在 MySQL STRICT 模式下抛 DataError → 500，故提前拦成 422
+    exam_name: str | None = Field(None, max_length=100)
 
 
 class ScoreUpdate(BaseModel):
     student_id: int | None = Field(None, gt=0)
     subject: str | None = Field(None, max_length=50)
     score: float | None = Field(None, ge=SCORE_MIN, le=SCORE_MAX)
-    exam_name: str | None = None
+    exam_name: str | None = Field(None, max_length=100)
 
 
 # ============ 请假 ============
@@ -213,7 +214,8 @@ def _check_leave_status(v: str | None) -> str | None:
 
 class LeaveCreate(BaseModel):
     student_id: int = Field(..., gt=0)
-    reason: str | None = None
+    # 列宽 String(255)：与 StudentUpdate 同理（RBT-80），超长在 MySQL 会变成 500
+    reason: str | None = Field(None, max_length=255)
     start_date: str | None = None
     end_date: str | None = None
     status: str = "登记"
@@ -254,14 +256,37 @@ class StudentCreate(BaseModel):
 
 
 class StudentUpdate(BaseModel):
-    name: str | None = None
-    gender: str | None = None
+    """学生信息编辑请求体（`PUT /api/students/{id}`）。
+
+    🔴 **`max_length` 必须与列宽一一对齐**（RBT-80）：创建侧 `StudentCreate` 早有限制、
+    编辑侧原先全是裸类型，于是「改名传 200 字」→ Pydantic 放行 → MySQL 在
+    `STRICT_TRANS_TABLES` 下抛 `DataError` → 全局兜底成 **500**，而 SQLite 不校验长度，
+    所以测试永远是绿的。下面每个 `max_length` 都对应 `models/school.py` 的一个列宽：
+
+    ==============  ==========  ======
+    字段            列宽        位置
+    ==============  ==========  ======
+    name            String(50)
+    gender          String(10)
+    major           String(100)
+    parent_name     String(50)
+    parent_phone    String(20)
+    student_type    String(20)
+    ==============  ==========  ======
+
+    其余三个字段不加：`class_id` 是整数、`is_dropped_out` 是布尔（无长度语义），
+    `birth_date` 是 `Date` 列且服务层统一走 `parse_date_or_400`（格式非法 → **400**，
+    已是有语义的客户端错误，无需再靠 422）。
+    """
+
+    name: str | None = Field(None, max_length=50)
+    gender: str | None = Field(None, max_length=10)
     birth_date: str | None = None
     class_id: int | None = None
-    major: str | None = None
-    parent_name: str | None = None
-    parent_phone: str | None = None
-    student_type: str | None = None
+    major: str | None = Field(None, max_length=100)
+    parent_name: str | None = Field(None, max_length=50)
+    parent_phone: str | None = Field(None, max_length=20)
+    student_type: str | None = Field(None, max_length=20)
     is_dropped_out: bool | None = None
 
 
@@ -291,8 +316,15 @@ class PerformanceCreate(BaseModel):
 
     字段全部可选并带**等价默认值**，保持「缺省仍返回 200」的既有语义；
     仅做**类型**校验：`points` 非数字 → 422（原先会写库时抛 `DataError` → 500）。
-    刻意不在 schema 层加取值范围 —— 默认分值由服务层按类型决定（积极 +1 / 消极 -1），
-    保持原语义不变。
+
+    刻意不在 schema 层加 `ge`/`le`：默认分值由服务层按类型决定（积极 +1 / 消极 -1），
+    加了范围会让「留空」先撞 422，破坏既有语义。
+
+    ⚠️ **代价与兜底（RBT-82）**：schema 放行 ≠ 值域无限制。原实现让 `points` 原样入库，
+    一条 ±21 亿的记录就能把 `sum(Performance.points)` 算出来的班级积分排名永久拉满。
+    现在由 `utils.clamp_points` 在**写库前**钳到
+    :data:`~app.constants.POINTS_PER_RECORD_MIN` ~ ``POINTS_PER_RECORD_MAX``（±100），
+    越界不报错、按边界入库 —— 这是「注释只写了为什么不加范围、没写加了会怎样」的补课。
     """
 
     student_id: int | None = Field(None, description="学生 ID")
@@ -314,8 +346,9 @@ class CommunicationCreate(BaseModel):
 class ResourceCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200, description="资源名称")
     category: str = Field("其他", max_length=50)
-    filename: str | None = None
-    filepath: str | None = None
+    # 列宽 filename(255) / filepath(500)：与 StudentUpdate 同理（RBT-80）
+    filename: str | None = Field(None, max_length=255)
+    filepath: str | None = Field(None, max_length=500)
     # 学校级实体归属：平台超管必须显式指定；教师/校管由服务层忽略并取自身 school_id
     school_id: int | None = Field(None, description="归属学校 ID（仅平台超管需要）")
 

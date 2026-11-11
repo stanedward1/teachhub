@@ -7,6 +7,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.audit import (
     active_student_id_query,
     attach_student,
@@ -50,7 +51,7 @@ def list_scores(
     db: Session,
     user,
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = DEFAULT_PAGE_SIZE,
     student_id: int | None = None,
     class_id: int | None = None,
     subject: str = "",

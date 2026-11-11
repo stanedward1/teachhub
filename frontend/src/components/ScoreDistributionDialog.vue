@@ -223,6 +223,18 @@ const dialogTitle = computed(() =>
 const distribution = ref(null)
 const loading = ref(false)
 const error = ref(false)
+/** 当前 `distribution` 属于哪个任务（用于切任务时先清空，避免新标题下继续显示旧明细） */
+const loadedFor = ref(null)
+/**
+ * 「最后一次请求胜出」序号（与 `composables/useCrudList.js` 同款）。
+ *
+ * `api/request.js` 的并发去重 key 里含 url/params ⇒「作业 A 的分布」与「作业 B 的分布」
+ * 是两个 key、互不取消。没有序号保护时，先打开 A（慢）、再切到 B，A 的响应会最后落到
+ * `distribution` 上：弹窗标题是 B，明细却是 A 的学生，点姓名还会用 B 的 assignmentId
+ * 拼上 A 的 submission_id 跳转（RBT-101）。同一文件里 `runAnalysis` 早有目标 id 校对，
+ * `load` 原先没有，属口径不一致。
+ */
+let loadSeq = 0
 /** AI 综合分析结果（null = 本次打开还没生成过；关闭弹窗/切换任务时清空） */
 const analysis = ref(null)
 /** 分析请求进行中（按钮 loading；请求期间禁止重复点击） */
@@ -365,16 +377,31 @@ function resetAnalysis() {
 
 async function load() {
   if (!props.assignmentId) return
+  const targetId = String(props.assignmentId)
+  const my = ++loadSeq
+  // 任务已变：先清空旧明细，否则请求返回前会出现「B 的标题 + A 的明细」
+  if (loadedFor.value !== targetId) {
+    distribution.value = null
+    activeFilter.value = 'all'
+  }
   loading.value = true
   error.value = false
   try {
-    distribution.value = await homeworkApi.scoreDistribution(props.assignmentId)
+    const res = await homeworkApi.scoreDistribution(targetId)
+    // 期间又切了任务：本次结果已过期，直接丢弃（不覆盖新数据）
+    if (my !== loadSeq) return
+    distribution.value = res
+    loadedFor.value = targetId
     activeFilter.value = 'all'
   } catch (e) {
+    // 被新请求淘汰的旧请求失败时，也不得污染最新请求的错误态
+    if (my !== loadSeq) return
     distribution.value = null
+    loadedFor.value = null
     error.value = true
   } finally {
-    loading.value = false
+    // 只有最新一次请求才能结束 loading
+    if (my === loadSeq) loading.value = false
   }
 }
 

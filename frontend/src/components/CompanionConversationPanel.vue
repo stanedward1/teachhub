@@ -97,22 +97,33 @@ const refusedCount = ref(0)
 let unmounted = false
 
 /**
+ * 「最后一次请求胜出」序号（与 `composables/useCrudList.js` 同款）。
+ *
+ * 每个会话的详情是一个独立 url，`api/request.js` 的并发去重不会互相取消。
+ * 没有序号保护时，先点 A 学生的会话（慢）、再点 B 学生，A 的对话会最后落到面板上：
+ * 教师会以为 B 学生问了 A 的问题（跨学生内容错配，RBT-101）。
+ */
+let loadSeq = 0
+
+/**
  * 载入单个会话的完整消息（学生提问原文 + AI 全文，设计 §14.2）。
  * 教师侧严格只读：本组件不提供任何写入口（对应硬约束 X6）。
  */
 async function load() {
+  const my = ++loadSeq
   if (!props.conversationId) {
     meta.value = null
     messages.value = []
     refusedCount.value = 0
     error.value = ''
+    loading.value = false
     return
   }
   loading.value = true
   error.value = ''
   try {
     const res = await homeworkApi.companionConversationDetail(props.conversationId)
-    if (unmounted) return
+    if (unmounted || my !== loadSeq) return
     meta.value = {
       student_name: res?.student_name || '',
       assignment_title: res?.assignment_title || '',
@@ -128,13 +139,13 @@ async function load() {
     }))
     refusedCount.value = messages.value.filter((m) => m.refused).length
   } catch (e) {
-    if (unmounted) return
+    if (unmounted || my !== loadSeq) return
     messages.value = []
     // 越权一律 404（不泄露会话存在性，设计 §14.2 / X5）；其余失败由全局拦截器提示
     error.value =
       e?.response?.status === 404 ? '会话不存在或不在你的班级范围内' : '加载学伴会话失败'
   } finally {
-    if (!unmounted) loading.value = false
+    if (!unmounted && my === loadSeq) loading.value = false
   }
 }
 

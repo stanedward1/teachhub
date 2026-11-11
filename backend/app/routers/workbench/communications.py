@@ -2,6 +2,7 @@
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.routers.workbench._common import get_current_user, get_db, new_router
 from app.schemas import CommunicationCreate, CommunicationOut
 from app.services.workbench import communications_service
@@ -10,7 +11,7 @@ router = new_router("家校沟通")
 
 
 @router.get("/communications")
-def list_communications(page: int = 1, page_size: int = 20, student_id: int | None = None, class_id: int | None = None, user=Depends(get_current_user), db: Session = Depends(get_db)):
+def list_communications(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, user=Depends(get_current_user), db: Session = Depends(get_db)):
     return communications_service.list_communications(
         db, user, page=page, page_size=page_size, student_id=student_id, class_id=class_id
     )

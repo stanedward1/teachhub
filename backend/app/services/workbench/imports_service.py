@@ -7,6 +7,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.constants import DEFAULT_PAGE_SIZE
 from app.models import (
     Classroom,
     ImportHistory,
@@ -165,7 +166,7 @@ def import_students(db: Session, user, file) -> dict:
     )
 
 
-def list_import_history(db: Session, user, import_type: str = "", page: int = 1, page_size: int = 20) -> dict:
+def list_import_history(db: Session, user, import_type: str = "", page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict:
     """查询导入历史记录（分页）。"""
     page, page_size = normalize_page(page, page_size)
     stmt = select(ImportHistory)
