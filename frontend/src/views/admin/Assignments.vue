@@ -82,7 +82,10 @@
             <el-upload :show-file-list="false" :http-request="doUpload" multiple>
               <el-button>上传附件</el-button>
             </el-upload>
-            <div v-for="(att, i) in form.attachments" :key="i" class="attach-item">
+            <span v-if="uploadingCount > 0" class="uploading-tip">
+              正在上传 {{ uploadingCount }} 个文件…
+            </span>
+            <div v-for="(att, i) in form.attachments" :key="att.filepath || i" class="attach-item">
               <el-link type="primary" :href="'/uploads/' + att.filepath" target="_blank">{{
                 att.filename
               }}</el-link>
@@ -93,7 +96,13 @@
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+        <el-button
+          type="primary"
+          :loading="saving"
+          :disabled="uploadingCount > 0"
+          @click="save"
+          >保存</el-button
+        >
       </template>
     </el-dialog>
 
@@ -217,6 +226,10 @@ const error = ref(false)
 const dialog = ref(false)
 const editing = ref(null)
 const saving = ref(false)
+// 正在上传的附件数：上传是异步的，若用户在传完之前点「保存」，新附件不在
+// form.attachments 里 ⇒ 保存后只剩之前那几个（表现为「传了新文件却只显示一个」）。
+// 上传期间禁用保存，并在 doUpload 的 finally 里复位，失败也不会卡死。
+const uploadingCount = ref(0)
 const form = reactive({
   title: '',
   description: '',
@@ -397,9 +410,17 @@ async function openEdit(row) {
 }
 
 async function doUpload({ file }) {
-  const res = await uploadFile(file)
-  form.attachments.push({ filename: res.filename, filepath: res.filepath })
-  ElMessage.success('附件上传成功')
+  uploadingCount.value += 1
+  try {
+    const res = await uploadFile(file)
+    form.attachments.push({ filename: res.filename, filepath: res.filepath })
+    ElMessage.success('附件上传成功')
+  } catch {
+    // 失败原因由全局拦截器统一提示（含扩展名不在白名单、超过 20MB 等）；
+    // 这里只保证计数复位，不吞掉状态
+  } finally {
+    uploadingCount.value -= 1
+  }
 }
 
 function removeAttachment(i) {
@@ -409,6 +430,9 @@ function removeAttachment(i) {
 async function save() {
   if (!form.title || !form.content) return ElMessage.warning('请填写标题和内容')
   if (!form.class_id) return ElMessage.warning('请选择下发班级')
+  // 附件还在上传时保存，会把「还没进 form.attachments」的文件漏掉（按钮已置灰，
+  // 这里再兜一层，覆盖回车/程序化触发等路径）。
+  if (uploadingCount.value > 0) return ElMessage.warning('附件正在上传，请稍候再保存')
   saving.value = true
   try {
     if (editing.value) {
@@ -538,6 +562,12 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   margin-top: 8px;
+}
+
+.uploading-tip {
+  margin-left: 12px;
+  font-size: 13px;
+  color: #9ca3af;
 }
 
 .unsubmitted-list {
