@@ -10,6 +10,10 @@ venv/
 .env
 .env.local
 .env.*.local
+# 密钥轮换备份（scripts/rotate_secrets.py 生成）：含**旧密钥**，绝不入库。
+# 注意 `.env` 是精确名匹配，挡不住 `.env.bak.20261117-195500` 这类带后缀的文件。
+.env.bak.*
+.env.backup*
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

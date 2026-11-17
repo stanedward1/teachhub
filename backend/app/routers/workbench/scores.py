@@ -17,11 +17,12 @@ def list_scores(
     student_id: int | None = None,
     class_id: int | None = None,
     subject: str = "",
+    order: str = "",
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     return scores_service.list_scores(
-        db, user, page=page, page_size=page_size, student_id=student_id, class_id=class_id, subject=subject
+        db, user, page=page, page_size=page_size, student_id=student_id, class_id=class_id, subject=subject, order=order
     )
 
 

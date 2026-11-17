@@ -47,11 +47,12 @@ from app.permissions import (
     is_teacher_class_owner,
 )
 from app.schemas import StudentCreate, StudentUpdate
+from app.services.auth_service import invalidate_user_sessions
 from app.services.student_account import build_student_user, student_account_conflict_detail
 from app.services.student_serialization import student_out, students_out
 from app.services.uploads_service import save_avatar
 from app.security import hash_password, validate_password_strength
-from app.utils import normalize_page, parse_date_or_400, to_dict
+from app.utils import normalize_page, order_direction, parse_date_or_400, to_dict
 
 
 
@@ -461,8 +462,13 @@ def list_students(
     page: int = 1,
     page_size: int = DEFAULT_PAGE_SIZE,
     dropped_out: str = "",
+    order: str = "asc",
 ) -> dict:
-    """学生列表（分页）。单次 SQL 取回当前页 + 总数（见 app.pagination.paginate）。"""
+    """学生列表（分页）。单次 SQL 取回当前页 + 总数（见 app.pagination.paginate）。
+
+    ⚠️ `order` 的**默认值是 asc**（与改造前 `order_by(Student.id)` 等价）：学生列表
+    还被移动端速查、下拉选择等不传 order 的调用方复用，默认翻向不能变。
+    """
     page, page_size = normalize_page(page, page_size)
     # 管理员看所有学生，教师只看自己负责班级的学生
     is_admin = is_any_admin(user)
@@ -478,7 +484,7 @@ def list_students(
         stmt = stmt.where(Student.is_dropped_out.is_(False))
     elif dropped_out == "true":
         stmt = stmt.where(Student.is_dropped_out.is_(True))
-    rows, total = paginate(db, stmt.order_by(Student.id), page, page_size)
+    rows, total = paginate(db, stmt.order_by(order_direction(Student.id, order)), page, page_size)
     return {"items": students_out(db, rows), "total": total}
 
 
@@ -675,9 +681,35 @@ def update_student(db: Session, user: User, student_id: int, payload: StudentUpd
         new_school_id = target_cls.school_id
     else:
         new_school_id = s.school_id
+    # 🔴 学号可改（RBT-120），唯一性在这里显式判定：`uq_student_school_no` =
+    # ``(school_id, student_no)``。两个坑：
+    # 1. 前端编辑弹窗**整行原样提交**，未改动时也会带上同值 ⇒ 判据必须是
+    #    「目标值 != 当前值」，否则每次保存都会撞到自己的唯一键、误报 409；
+    # 2. 跨校转学（仅平台超管）时归属已换成目标校，必须按 ``new_school_id`` 查，
+    #    且超管上下文 `set_tenant(None)` 不注入租户 ⇒ 必须显式给 school_id，
+    #    否则会拿别校占用的学号误报冲突。冲突 → 409（RDB-71：状态冲突不是参数错误）。
+    new_student_no = data.get("student_no")
+    if new_student_no is not None:
+        new_student_no = str(new_student_no).strip()
+        if not new_student_no:
+            raise HTTPException(status_code=400, detail="学号不能为空")
+        data["student_no"] = new_student_no
+        if new_student_no != s.student_no:
+            dup = (
+                db.query(Student.id)
+                .filter(
+                    Student.student_no == new_student_no,
+                    Student.id != s.id,
+                    Student.school_id == new_school_id,
+                )
+                .first()
+            )
+            if dup is not None:
+                raise HTTPException(status_code=409, detail="学号已存在")
     for f in (
         "name", "gender", "birth_date", "class_id", "major",
         "parent_name", "parent_phone", "student_type", "is_dropped_out",
+        "student_no",
     ):
         if f in data and data[f] is not None:
             setattr(s, f, parse_date_or_400(data[f]) if f == "birth_date" else data[f])
@@ -770,6 +802,13 @@ def reset_student_password(db: Session, student_id: int, payload: dict, user: Us
         u.password_hash = hash_password(new_pwd)
         u.must_change_password = must_change
     audit(db, user, "reset_student_password", target=f"{s.name} ({s.student_no})", student_id=student_id)
+    # 🔴 改密必须同时踢掉该账号的**全部既有会话**（SEC-02）：与 `admin_service.reset_password`
+    # （:495）、`auth_service.change_password` 同一不变量。少了这一步，重置只挡住「新登录」——
+    # 攻击者手里的旧 access 仍 200、旧 refresh 仍能换新 access（`token_version` 没变），
+    # 最长可续 30 天，且每次重置都赶不走他，「改密」对被盗账号等于无效。
+    # `u` 为 None 表示本次是**新建**账号（无既有会话），跳过即可。
+    if u is not None:
+        invalidate_user_sessions(db, u)
     db.commit()
     return {"ok": True}
 
@@ -790,10 +829,9 @@ def batch_reset_student_passwords(db: Session, payload, user: User) -> dict:
       前端据此提示「成功 n 人 / 失败 m 人」。
 
     ⚠️ 批量操作有上限（schema 层 `max_length=500`），避免一次事务过大。
-    ⚠️ 与单个改密不同，这里**不**主动踢出学生会话 —— 与现有单个改密行为保持一致
-    （`reset_student_password` 也不调 `invalidate_user_sessions`）；改密本身已把口令
-    哈希换掉，旧会话虽仍可访问，但下次凭证校验即失败。若日后要求「改密即踢出」，
-    应在两处一起改，而不是只改批量这一个入口。
+    ⚠️ 改密即踢出会话：每个被成功改密的学生都会作废其全部既有会话（SEC-02），与
+    单个改密、`admin_service.reset_password` 同一不变量。旧文案曾写「与单个改密一致地
+    不踢出」，那条口径本身就是缺陷（攻击者旧 refresh 可续 30 天），已于 2026-11-17 改掉。
     """
     new_pwd = (getattr(payload, "password", None) or "").strip() or "123456"
     must_change = validate_password_strength(new_pwd) is not None
@@ -856,6 +894,10 @@ def batch_reset_student_passwords(db: Session, payload, user: User) -> dict:
             target=f"{s.name} ({s.student_no})",
             student_id=sid,
         )
+        # 改密即踢会话（SEC-02），与单个改密同一口径：批量路径同样不能只挡新登录。
+        # `u` 为 None = 本次新建账号（无既有会话）。
+        if u is not None:
+            invalidate_user_sessions(db, u)
         updated += 1
 
     db.commit()
@@ -923,10 +965,18 @@ def _fmt_dt(dt):
 
 
 def get_board_history(db: Session, user: User, student_id: int) -> dict:
-    """获取学生寄宿/通学状态：当前状态、各时间段（含起始/结束时间）与变更日志。"""
-    student = db.get(Student, student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="学生不存在")
+    """获取学生寄宿/通学状态：当前状态、各时间段（含起始/结束时间）与变更日志。
+
+    🔴 必须走学生域统一收口 `ensure_student_visible`（SEC-01）：原实现只有
+    `db.get(Student, student_id)`，**只有租户维度、没有班级维度** —— 任一班学生能读
+    别班学生的寄宿时间线（同文件紧邻的 `board_type_stats` / `export_students` 都按
+    `get_teacher_class_ids` 过滤过，本函数纯属遗漏）。跨校仍 404 是 ORM 租户注入的功劳，
+    与班级越权无关。
+    `check_operable=False`：退学/毕业学生的寄宿史教师仍需可查（历史档案）。
+    """
+    student = ensure_student_visible(
+        db, user, student_id, detail_403="无权查看该学生寄宿信息", check_operable=False
+    )
 
     changes = (
         db.query(StudentBoardHistory)

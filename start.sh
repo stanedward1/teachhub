@@ -29,6 +29,23 @@ info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
+# ---------- 随机密钥生成 ----------
+# 🔴 绝不硬编码密钥。本脚本曾把一个随仓库公开的字面量写死成 JWT 签名密钥，
+# 于是任何读过仓库的人都能：
+#   ① 伪造任意身份的 access token（`security.py:62` 用它签 JWT，实测可伪造 super_admin）；
+#   ② 由 `crypto._fernet()` 的回落规则离线解开 `ai_credentials` 里的 API Key 明文。
+# 这把密钥一旦泄露就不可"修复"，只能轮换（scripts/rotate_secrets.py）。
+gen_secret() {
+  # 32 字节 = 64 位十六进制；满足 config.py 生产校验的 >=32 位门槛
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import secrets; print(secrets.token_hex(32))'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    od -An -tx1 -N32 /dev/urandom | tr -d ' \n'
+  fi
+}
+
 # ---------- 路径配置 ----------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend"
@@ -196,17 +213,28 @@ setup_backend() {
   # 生成 .env（不存在时）；已存在则尊重用户已有配置
   if [ ! -f "$ENV_FILE" ]; then
     warn "未找到 .env，基于当前配置生成..."
+    # 两把密钥**各自独立随机**：一把泄露不应连带另一把（SECRET_KEY 泄露 = JWT 可伪造；
+    # AI_CREDENTIAL_KEY 泄露 = 库内 AI 凭证可解密，两者影响面完全不同）。
+    local new_secret new_ai_key
+    new_secret="$(gen_secret)"
+    new_ai_key="$(gen_secret)"
     cat > "$ENV_FILE" <<EOF
 # 运行环境：development / production
+# 注意：`bash start.sh --prod` / `--prod-single` 会强制以 production 启动（覆盖此值），
+# 并校验 SECRET_KEY 必须为 >=32 位的强随机串，不合格则拒绝启动。
 ENV=development
 
 # 数据库连接串
 DATABASE_URL=${DATABASE_URL_VALUE}
 
-# JWT 签名密钥
-SECRET_KEY=teachhub-dev-secret-key-2026
+# JWT 签名密钥（修改后全部既有登录态立即失效，需重新登录）
+SECRET_KEY=${new_secret}
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
+
+# AI 凭证加密主密钥（用于加密 ai_credentials.api_key_encrypted）
+# 修改后库内已加密的 AI Key 将无法解密，须先运行 scripts/rotate_secrets.py 重新加密。
+AI_CREDENTIAL_KEY=${new_ai_key}
 
 # CORS 允许来源（逗号分隔）
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://0.0.0.0:5173
@@ -214,7 +242,8 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://0.0.0.0:5173
 # 文件上传上限（字节，默认 20MB）
 MAX_UPLOAD_SIZE=20971520
 EOF
-    info ".env 已生成"
+    chmod 600 "$ENV_FILE" 2>/dev/null || true
+    info ".env 已生成（SECRET_KEY / AI_CREDENTIAL_KEY 均为随机生成，未入库、勿提交）"
   else
     DATABASE_URL_VALUE="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
     info "使用已有 .env 配置（DATABASE_URL=$DATABASE_URL_VALUE）"
@@ -421,12 +450,62 @@ start_services() {
   echo ""
 }
 
+# ---------- 生产模式前置校验（CRITICAL） ----------
+# 修复前的两个问题，缺一不可：
+#   ① `--prod` **不设** ENV=production ⇒ config.py 的生产密钥校验根本不触发；
+#   ② 脚本自己给了一个随仓库公开的 SECRET_KEY ⇒ 生产部署静默用着公开密钥。
+# 现在：生产模式**强制** export ENV=production（环境变量优先级高于 .env），
+# 并在启动前校验密钥；不合格就带指引退出，而不是抛一段 pydantic traceback。
+preflight_prod_env() {
+  local env_val secret secret_len
+
+  if [ ! -f "$ENV_FILE" ]; then
+    error ".env 不存在，拒绝以生产模式启动。先执行一次 bash start.sh 生成配置。"
+    exit 1
+  fi
+
+  env_val="$(grep -E '^ENV=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+  secret="$(grep -E '^SECRET_KEY=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+  secret_len="${#secret}"
+
+  if [ -z "$secret" ]; then
+    error ".env 中的 SECRET_KEY 为空，拒绝以生产模式启动。"
+    error "  修复：python3 scripts/rotate_secrets.py   （生成随机密钥并重新加密已存 AI 凭证）"
+    exit 1
+  fi
+
+  case "$secret" in
+    "teachhub-dev-secret-key"|"teachhub-dev-secret-key-2026")
+      error "SECRET_KEY 是随仓库公开的字面量，等同于「密钥已泄露」，拒绝以生产模式启动。"
+      error "  风险：任何读过仓库的人都能伪造任意身份的 JWT（含平台超管），"
+      error "        并能据此派生出 Fernet 主密钥、离线解密库内的 AI API Key 明文。"
+      error "  修复：python3 scripts/rotate_secrets.py"
+      error "        完成后还须到 AI 服务商后台作废旧 Key 并换新（旧 Key 视同已泄露）。"
+      exit 1
+      ;;
+  esac
+
+  if [ "$secret_len" -lt 32 ]; then
+    error "SECRET_KEY 长度只有 ${secret_len} 位（生产要求 >=32 位），拒绝启动。"
+    error "  修复：python3 scripts/rotate_secrets.py"
+    exit 1
+  fi
+
+  # 强制生产环境：环境变量 > .env，因此这一行会覆盖 .env 里的 ENV=development
+  export ENV=production
+  if [ "$(printf '%s' "$env_val" | tr '[:upper:]' '[:lower:]')" != "production" ]; then
+    warn ".env 中 ENV=${env_val:-<未设置>}，已按生产模式覆盖为 ENV=production（仅本次进程）"
+  fi
+  info "生产模式校验通过（ENV=production，SECRET_KEY ${secret_len} 位）"
+}
+
 # ---------- 生产模式 A（默认）：前端 :5173 静态服务 + 后端 :8080 API ----------
 # 用 frontend/serve.mjs 而不是 `npm run dev` / `vite preview`：
 #   npm run dev   → 首屏 23 请求 / 4.5MB，逐模块 no-cache（线上卡顿的根因）
 #   vite preview  → 面向本地验收，不压缩（sirv 只在磁盘已有 .gz 时才走压缩）
 #   serve.mjs     → 构建产物 + gzip + /assets 一年 immutable + SPA 回落 + /api 反代，零依赖
 start_services_prod() {
+  preflight_prod_env
   stop_existing_services
   build_frontend
 
@@ -479,6 +558,7 @@ start_services_prod() {
 # ---------- 生产模式 B：前端产物由后端单端口 :8080 托管 ----------
 # 适合「只对外开放一个端口」的服务器（或已在前置反向代理里统一入口）。
 start_services_single() {
+  preflight_prod_env
   stop_existing_services
   build_frontend
 

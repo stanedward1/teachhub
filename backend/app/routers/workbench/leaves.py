@@ -17,11 +17,12 @@ def list_leaves(
     student_id: int | None = None,
     class_id: int | None = None,
     status: str = "",
+    order: str = "",
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     return leaves_service.list_leaves(
-        db, user, page=page, page_size=page_size, student_id=student_id, class_id=class_id, status=status
+        db, user, page=page, page_size=page_size, student_id=student_id, class_id=class_id, status=status, order=order
     )
 
 

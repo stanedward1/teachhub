@@ -35,12 +35,22 @@
       </el-main>
       <footer class="footer">TeachHub · code by longbiu</footer>
     </el-container>
+    <!-- 头像上传：顶栏菜单「更换头像」触发这个隐藏的 file input -->
+    <input
+      ref="avatarInput"
+      type="file"
+      accept="image/jpeg,image/png,image/gif,image/webp"
+      class="avatar-input"
+      @change="onAvatarChange"
+    />
   </el-container>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { authApi } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useLogout } from '../composables/useLogout'
 import AdminSidebar from './admin/AdminSidebar.vue'
@@ -86,6 +96,43 @@ function onCommand(cmd) {
     logout('/login')
   } else if (cmd === 'change-password') {
     router.push('/admin/change-password')
+  } else if (cmd === 'change-avatar') {
+    // 后端 `POST /api/auth/avatar` 本来就对任意登录用户开放（学生/教师均可传
+    // 自己的头像），但此前只有学生端 Profile 有入口，管理端顶栏头像永远是空的。
+    avatarInput.value?.click()
+  }
+}
+
+/* -------- 更换头像（教师 / 管理员） -------- */
+const avatarInput = ref(null)
+const AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+const AVATAR_MAX = 2 * 1024 * 1024
+
+async function onAvatarChange(e) {
+  const file = e.target.files?.[0]
+  // 立刻清空：否则连续选同一个文件不会再触发 change（浏览器按值比较）
+  e.target.value = ''
+  if (!file) return
+  // 前端先挡一层只是为了省一次请求；真正的权威校验在 uploads_service.save_avatar
+  // （扩展名白名单 → 400，超过 2MB → 413）
+  if (!AVATAR_TYPES.includes(file.type)) {
+    return ElMessage.error('仅支持 JPG/PNG/GIF/WebP 格式的图片')
+  }
+  if (file.size > AVATAR_MAX) {
+    return ElMessage.error('头像文件不能超过 2MB')
+  }
+  const fd = new FormData()
+  fd.append('file', file)
+  try {
+    const res = await authApi.uploadAvatar(fd)
+    if (res?.avatar) {
+      // 必须走 setAuth 回写：顶栏 el-avatar 读的是 auth.user.avatar，
+      // 同时 localStorage 里的用户副本也要一起更新，否则刷新后又变回首字
+      auth.setAuth(auth.token, { ...auth.user, avatar: res.avatar })
+    }
+    ElMessage.success('头像更新成功')
+  } catch (e) {
+    // 错误提示由 request.js 的全局拦截器统一弹出（含 400/413 的具体文案）
   }
 }
 </script>
@@ -176,5 +223,10 @@ function onCommand(cmd) {
   color: #9ca3af;
   font-size: 12px;
   padding: 20px;
+}
+
+/* 隐藏的头像选择器：只由顶栏菜单触发 click() */
+.avatar-input {
+  display: none;
 }
 </style>

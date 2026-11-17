@@ -7,7 +7,8 @@
 支持范围（P0，对应 docs/AI-GRADING-PRD.md §8 Q4「附件纳入批改」）：
 
 - 纯文本类（.txt/.md/.csv/.json 及常见代码后缀）→ 直接读取，编码容错；
-- Word（.docx）→ python-docx 抽取段落文本；
+- Word（.docx）→ python-docx 抽取段落文本（**解析前**先过
+  `uploads.zip_expansion_reason` 的解压体积护栏：0.2MB 的 docx 可以声明 200MB 解压体积）；
 - PDF（.pdf）→ pypdf 抽取前若干页文本；
 - 图片类（.jpg/.jpeg/.png/.gif/.webp/.jfif/.jpe）→ **仅在凭证开启 `vision_enabled` 时**
   以 base64 data URL 形式随消息送入多模态；格式按**文件实际内容**嗅探（不看文件名/扩展名），
@@ -30,7 +31,7 @@ from functools import lru_cache
 
 from app.config import settings
 from app.services.ai_image import prepare_data_url
-from app.uploads import resolve_upload_path
+from app.uploads import resolve_upload_path, zip_expansion_reason
 
 logger = logging.getLogger("teachhub.ai")
 
@@ -482,6 +483,12 @@ def _extract_attachment_impl(
         if ext in TEXT_EXTS:
             text = _read_text_file(path)
         elif ext == ".docx":
+            # 🔴 解压体积护栏必须在 python-docx **之前**（SEC-05）：0.2MB 的 docx 可以
+            # 声明 200MB 的解压体积，python-docx 会把它整块读进内存；批改与 API 同进程，
+            # 一次 OOM 会带走整个服务（含其他租户）。只读中央目录，不解压任何条目。
+            bomb = zip_expansion_reason(path)
+            if bomb:
+                return AttachmentPayload(note=f"附件未参与批改：{bomb}（{display}）")
             text = _extract_docx(path)
         elif ext == ".pdf":
             text = _extract_pdf(path)

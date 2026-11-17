@@ -70,7 +70,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
@@ -102,12 +102,16 @@ const {
   buildParams: () => ({
     student_id: studentId.value,
     class_id: classId.value,
+    order: order.value,
   }),
   removeTip: () => '确定删除该记录吗？',
 })
 
-const { order, useSorted } = useSort('returnrecords')
-const items = useSorted(rawItems)
+// 时间排序：**服务端**全量排序（RBT-122），只排当前页会让页与页之间顺序矛盾
+const { order } = useSort('returnrecords')
+// 排序方向变化 → 后端重排全量后重新取第 1 页
+watch(order, reload)
+const items = rawItems
 
 onMounted(load)
 

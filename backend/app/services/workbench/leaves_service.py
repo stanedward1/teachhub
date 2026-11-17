@@ -26,6 +26,7 @@ from app.schemas import (
 )
 from app.utils import (
     normalize_page,
+    order_direction,
     parse_date_or_400,
     stringify_dates,
     to_dict,
@@ -40,6 +41,7 @@ def list_leaves(
     student_id: int | None = None,
     class_id: int | None = None,
     status: str = "",
+    order: str = "",
 ) -> dict:
     """请假列表（分页）。单次 SQL 取回当前页 + 总数。"""
     page, page_size = normalize_page(page, page_size)
@@ -58,7 +60,7 @@ def list_leaves(
         stmt = stmt.where(Leave.student_id == student_id)
     if status:
         stmt = stmt.where(Leave.status == status)
-    rows, total = paginate(db, stmt.order_by(Leave.id.desc()), page, page_size)
+    rows, total = paginate(db, stmt.order_by(order_direction(Leave.id, order)), page, page_size)
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 

@@ -191,6 +191,10 @@ const droppedFilter = ref('false')
 // 通学生/寄宿生图表
 const chartRef = ref(null)
 
+// 时间排序：**服务端**全量排序（RBT-122）。只排当前页会把「最新 20 条」倒过来，
+// 页与页之间仍然最新在前，用户会以为记录丢了。
+const { order } = useSort('students')
+
 // 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（查询参数与删除文案）
 const {
   items: rawItems,
@@ -208,6 +212,7 @@ const {
     keyword: keyword.value,
     class_id: classId.value,
     dropped_out: droppedFilter.value,
+    order: order.value,
   }),
   removeTip: (row) => `确定删除学生「${row.name}」吗？`,
   onLoaded: () => {
@@ -218,6 +223,8 @@ const {
 
 // 搜索条件变化必须重置页码：否则在第 3 页改关键词会拿新条件查旧页码，结果错乱
 watch(keyword, reload)
+// 排序方向变化也必须 reload：让后端按新方向重排**全量**数据（而不是只倒序当前页）
+watch(order, reload)
 
 // 学生表单弹窗
 const formDialog = ref(false)
@@ -238,8 +245,9 @@ const boardStudent = ref(null)
 // 批量导入弹窗
 const importDialog = ref(false)
 
-const { order, useSorted } = useSort('students')
-const items = useSorted(rawItems)
+// 表格直接消费后端排好序的结果（不再本地重排）
+const items = rawItems
+
 
 onMounted(async () => {
   // 管理员看全部班级，教师只看自己负责的班级

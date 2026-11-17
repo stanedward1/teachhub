@@ -107,11 +107,12 @@ def list_students(
     page: int = 1,
     page_size: int = DEFAULT_PAGE_SIZE,
     dropped_out: str = "",
+    order: str = "asc",
     user: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
     return students_service.list_students(
-        db, user, class_id=class_id, keyword=keyword, page=page, page_size=page_size, dropped_out=dropped_out
+        db, user, class_id=class_id, keyword=keyword, page=page, page_size=page_size, dropped_out=dropped_out, order=order
     )
 
 
@@ -172,8 +173,13 @@ def board_type_stats(class_id: int | None = None, user: User = Depends(get_curre
 
 
 @router.get("/students/{student_id}/board-history")
-def get_board_history(student_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """获取学生寄宿/通学状态：当前状态、各时间段（含起始/结束时间）与变更日志。"""
+def get_board_history(student_id: int, user: User = Depends(require_teacher), db: Session = Depends(get_db)):
+    """获取学生寄宿/通学状态：当前状态、各时间段（含起始/结束时间）与变更日志。
+
+    依赖 `require_teacher`（SEC-01）：原为 `get_current_user`，学生也能进 —— 而服务层
+    当时只查了 `db.get(Student, id)`（仅租户维度），于是 1 班学生能读 3 班学生的寄宿史。
+    前端只有 `/admin/students/:id/profile` 与寄宿弹窗调它（均为教师端），学生端无入口。
+    """
     return students_service.get_board_history(db, user, student_id)
 
 

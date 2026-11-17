@@ -62,7 +62,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
@@ -80,6 +80,9 @@ const previewDialog = ref(false)
 const previewContent = ref('')
 const form = reactive({ title: '', class_id: null, content: '' })
 
+// 时间排序：**服务端**全量排序（RBT-122），只排当前页会让页与页之间顺序矛盾
+const { order } = useSort('activities')
+
 // 列表取数 / 分页 / 删除：统一由 useCrudList 提供，本页只描述差异（删除文案）
 const {
   items: rawItems,
@@ -89,14 +92,17 @@ const {
   loading,
   error,
   load,
+  reload,
   remove,
 } = useCrudList(activityApi.list, {
   removeApi: activityApi.remove,
+  buildParams: () => ({ order: order.value }),
   removeTip: () => '确定删除该活动吗？',
 })
 
-const { order, useSorted } = useSort('activities')
-const items = useSorted(rawItems)
+// 排序方向变化 → 后端重排全量后重新取第 1 页
+watch(order, reload)
+const items = rawItems
 
 onMounted(async () => {
   const res = await studentApi.classrooms()

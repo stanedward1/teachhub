@@ -37,6 +37,8 @@ from sqlalchemy.orm import Session
 
 from app.models import ImportHistory
 from app.audit import audit
+from app.config import settings
+from app.uploads import zip_expansion_reason
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +93,23 @@ def run_import(
     if ext not in _ALLOWED_EXTS:
         raise HTTPException(status_code=400, detail="仅支持 .xlsx / .xls 格式")
 
-    contents = file.file.read()
+    # 🔴 读取必须**带上限**（SEC-05）：原实现 `file.file.read()` 没有长度参数，一个超大
+    # 请求体就能把整个文件读进内存 —— 导入接口与批改/API 同进程，OOM 会带走全部租户。
+    # 多读 1 字节即可判定超限，不必把大文件整个读进来。
+    contents = file.file.read(settings.MAX_UPLOAD_SIZE + 1)
+    if len(contents) > settings.MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大，最大允许 {settings.MAX_UPLOAD_SIZE // (1024 * 1024)}MB",
+        )
+    # 与 docx 同一类风险：`.xlsx` 也是 zip 容器，0.2MB 的包可声明几百 MB 的解压体积，
+    # `load_workbook` 会照解。护栏只读中央目录，不解压条目。（`.xls` 是老式二进制格式，
+    # 不是 zip，跳过本护栏，其错误语义保持原样。）
+    if ext == ".xlsx":
+        bomb = zip_expansion_reason(contents)
+        if bomb:
+            raise HTTPException(status_code=400, detail=f"无法解析该文件：{bomb}")
+
     wb = load_workbook(BytesIO(contents))
     try:
         ws = wb.active

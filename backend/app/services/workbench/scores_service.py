@@ -42,6 +42,7 @@ from app.services.workbench.importer import (
 )
 from app.utils import (
     normalize_page,
+    order_direction,
     stringify_dates,
     to_dict,
 )
@@ -55,6 +56,7 @@ def list_scores(
     student_id: int | None = None,
     class_id: int | None = None,
     subject: str = "",
+    order: str = "",
 ) -> dict:
     """成绩列表（分页）。单次 SQL 取回当前页 + 总数（见 app.pagination.paginate）。"""
     page, page_size = normalize_page(page, page_size)
@@ -75,7 +77,7 @@ def list_scores(
         stmt = stmt.where(Score.student_id == student_id)
     if subject:
         stmt = stmt.where(Score.subject == subject)
-    rows, total = paginate(db, stmt.order_by(Score.id.desc()), page, page_size)
+    rows, total = paginate(db, stmt.order_by(order_direction(Score.id, order)), page, page_size)
     items = serialize_list_with_students(db, rows)
     return {"items": items, "total": total}
 

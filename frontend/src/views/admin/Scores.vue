@@ -107,7 +107,7 @@
  *  - Excel 下载 → 复用公共件 ../../composables/useDownload.js。
  * 纯结构重构，对外行为（接口调用、文案、刷新时机、列顺序与宽度）完全等价。
  */
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
 import PaginationBar from '../../components/PaginationBar.vue'
@@ -123,7 +123,8 @@ import { scoreApi } from '../../api'
 
 const activeTab = ref('list')
 
-const { order, useSorted } = useSort('scores')
+// 时间排序：**服务端**全量排序（RBT-122），只排当前页会让页与页之间顺序矛盾
+const { order } = useSort('scores')
 const subject = ref('')
 const studentId = ref(null)
 const classId = ref(null)
@@ -143,10 +144,13 @@ const {
     subject: subject.value,
     student_id: studentId.value,
     class_id: classId.value,
+    order: order.value,
   }),
   removeTip: () => '确定删除该成绩记录吗？',
 })
-const items = useSorted(rawItems)
+// 排序方向变化 → 后端重排全量后重新取第 1 页
+watch(order, reload)
+const items = rawItems
 const dialog = ref(false)
 const editing = ref(null)
 

@@ -6,6 +6,7 @@
 - ``CORS_ORIGINS`` 兼容「逗号分隔字符串」与「列表」两种形态。
 - 生产环境强制校验 ``SECRET_KEY``（弱密钥 / 短密钥直接启动失败）。
 """
+import logging
 import os
 from typing import Annotated
 
@@ -13,11 +14,25 @@ from dotenv import load_dotenv
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+logger = logging.getLogger(__name__)
+
 # 兼容既有语义：把 .env 注入 os.environ，供其他仍使用 os.getenv 的模块（如 database.py）读取
 load_dotenv()
 
 # 仅供本地开发兜底，生产环境禁止使用
 _DEV_SECRET_KEY = "teachhub-dev-secret-key"
+
+# 🔴 历史上被 ``start.sh`` 硬编码写进 .env、且随仓库公开的字面量。
+# 它一旦被用作 ``SECRET_KEY``，**任何读过仓库的人都能**：
+#   ① 伪造任意身份的 access token（`security.py` 用它签 JWT，已实测可伪造 super_admin）；
+#   ② 由 ``crypto._fernet()`` 的回落规则离线解开 ``ai_credentials`` 里的 API Key 明文。
+# 因此它不只是「弱口令」，而是**已泄露的密钥**——任何环境都应拒绝，生产环境直接启动失败。
+# `_DEV_SECRET_KEY` 同样随仓库公开，一并列入（作为「值」黑名单，与它「开发兜底」的角色不冲突：
+# 兜底仍会生效，只是在生产环境会被拒绝、在开发环境会告警）。
+_LEAKED_SECRET_KEYS = frozenset({_DEV_SECRET_KEY, "teachhub-dev-secret-key-2026"})
+
+# 生产环境 SECRET_KEY 的最小长度（32 字符 ≈ 128 bit 熵的最低门槛）
+_MIN_PROD_SECRET_KEY_LEN = 32
 
 # 学生积分初始基础分（每个学生默认 100 分，加减分在此基础上累加）
 BASE_POINTS = 100
@@ -216,6 +231,22 @@ class Settings(BaseSettings):
             return _DEV_SECRET_KEY
         return value
 
+    @field_validator("ENV", mode="before")
+    @classmethod
+    def _normalize_env(cls, value):
+        """``ENV`` 规范化：去空白 + 转小写。
+
+        🔴 必须在这里收口，而不是在每个消费点各写一次。此前 ``config.py`` 用
+        ``self.ENV == "production"`` 精确比较（大小写敏感），而 ``run.py:8`` 用的是
+        ``.strip().lower()`` —— 两处口径不一致 ⇒ ``ENV=Production`` 会**静默跳过**
+        生产密钥校验、同时 ``main.py`` 仍把 ``/docs`` 当生产关掉，行为自相矛盾。
+        规范化后 ``settings.ENV`` 只可能是 ``development`` / ``production`` 这类全小写值，
+        ``main.py:110``（``/docs`` 开关）与 ``main.py:321`` 一并受益。
+        """
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_list_setting(cls, value):
@@ -224,15 +255,43 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _enforce_production_secret(self):
-        """生产环境安全校验：必须显式设置强随机 SECRET_KEY，否则启动失败。"""
-        if self.ENV == "production":
-            raw = self.SECRET_KEY or ""
-            if not raw or raw == _DEV_SECRET_KEY:
+        """生产环境安全校验：必须显式设置强随机 SECRET_KEY，否则启动失败。
+
+        三层判据（任一命中即失败）：
+        1. 为空或等于开发兜底值 ``_DEV_SECRET_KEY``；
+        2. 命中 ``_LEAKED_SECRET_KEYS``（随仓库公开过的字面量，等同于已泄露密钥）；
+        3. 长度不足 ``_MIN_PROD_SECRET_KEY_LEN``。
+
+        非生产环境只对第 2 层告警不阻断 —— 开发机用公开串跑起来不影响功能，但必须
+        让人看见「你正在用一把公开密钥」，否则问题会被一路带到生产。
+        """
+        raw = (self.SECRET_KEY or "").strip()
+        # 大小写归一再比对：`TeachHub-Dev-Secret-Key-2026` 虽然作为密钥并不等价，
+        # 但显然是同一类弱口令，一并拒绝比放行更安全。
+        leaked = raw.lower() in _LEAKED_SECRET_KEYS or raw == _DEV_SECRET_KEY
+        is_prod = self.ENV == "production"
+
+        if leaked:
+            if is_prod:
+                raise RuntimeError(
+                    "生产环境禁止使用随仓库公开的 SECRET_KEY（该值可用于伪造任意身份"
+                    "并解密库内 AI 凭证）。请用 `python scripts/rotate_secrets.py` 生成随机密钥。"
+                )
+            logger.warning(
+                "SECRET_KEY 是随仓库公开的字面量，任何人都能据此伪造 JWT / 解密 AI 凭证。"
+                "仅限本地开发使用；上线前请执行 `python scripts/rotate_secrets.py` 换钥。"
+            )
+
+        if is_prod:
+            if not raw:
                 raise RuntimeError(
                     "生产环境必须通过环境变量设置强随机的 SECRET_KEY，且不得使用开发默认值。"
                 )
-            if len(raw) < 32:
-                raise RuntimeError("生产环境 SECRET_KEY 长度不足 32 位，请使用强随机密钥。")
+            if len(raw) < _MIN_PROD_SECRET_KEY_LEN:
+                raise RuntimeError(
+                    f"生产环境 SECRET_KEY 长度不足 {_MIN_PROD_SECRET_KEY_LEN} 位，"
+                    "请使用强随机密钥（如 `secrets.token_hex(32)`）。"
+                )
         return self
 
 

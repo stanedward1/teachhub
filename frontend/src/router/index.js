@@ -123,6 +123,11 @@ const routes = [
         component: () => import('../views/admin/Scores.vue'),
       },
       {
+        path: 'attendance',
+        name: 'admin-attendance',
+        component: () => import('../views/admin/Attendance.vue'),
+      },
+      {
         path: 'leaves',
         name: 'admin-leaves',
         component: () => import('../views/admin/Leaves.vue'),

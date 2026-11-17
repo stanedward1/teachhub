@@ -1,4 +1,14 @@
 // 时间排序状态管理 — 支持 localStorage 持久化 + 响应式排序
+//
+// 🔴 分页列表用「服务端排序」（RBT-122）：把 `order` 放进查询参数、并在
+// `watch(order, reload)` 里重取第 1 页，表格直接消费后端返回的顺序
+// （见 Students.vue / Scores.vue 等 10 个页面的写法）。
+// 只有**非分页**页面（Exams / Resources / Plans，一次性返回全量）才继续用本文件的
+// `useSorted()` 做本地排序 —— 那种场景下「本地排序 === 全局排序」。
+//
+// 为什么不能对分页列表用 `useSorted()`：它排序的是**已经取回的 20 条**，
+// 翻到第 1 页点「最早在前」只是把「最新 20 条」倒过来，第 2 页仍是最新的一条在前，
+// 页与页之间顺序矛盾，用户会以为有一半记录丢了。
 import { ref, watch } from 'vue'
 
 const STORAGE_KEY = 'teachhub_sort_prefs'

@@ -50,7 +50,14 @@ from app.permissions import (
     ensure_class_operable,
     resolve_school_id_or_400,
 )
-from app.utils import stringify_dates, to_dict, normalize_page, parse_date_or_400, clamp_points
+from app.utils import (
+    clamp_points,
+    normalize_page,
+    order_direction,
+    parse_date_or_400,
+    stringify_dates,
+    to_dict,
+)
 
 
 # ---------------- 内部辅助 ----------------
@@ -126,13 +133,14 @@ def _serialize_talk(d: dict) -> dict:
 
 
 # ---------------- 工作日志 ----------------
-def list_work_logs(db: Session, page: int, page_size: int, user: User) -> dict:
+def list_work_logs(db: Session, page: int, page_size: int, user: User, order: str = "") -> dict:
     page, page_size = normalize_page(page, page_size)
     stmt = select(WorkLog)
     # 教师只看自己的日志；管理员看全部
     if not is_any_admin(user):
         stmt = stmt.where(WorkLog.teacher_id == user.id)
-    stmt = stmt.order_by(WorkLog.id.desc())
+    # order=asc 才是「最早在前」；不传/非法值仍按 id 降序（与改造前一致）
+    stmt = stmt.order_by(order_direction(WorkLog.id, order))
     rows, total = paginate(db, stmt, page, page_size)
     return {"items": [to_dict(x) for x in rows], "total": total}
 
@@ -355,7 +363,7 @@ def delete_schedule(db: Session, schedule_id: int, user: User) -> dict:
 
 
 # ---------------- 班级活动 ----------------
-def list_activities(db: Session, page: int, page_size: int, user: User) -> dict:
+def list_activities(db: Session, page: int, page_size: int, user: User, order: str = "") -> dict:
     page, page_size = normalize_page(page, page_size)
     stmt = select(Activity)
     # 排除毕业班级的活动
@@ -367,7 +375,7 @@ def list_activities(db: Session, page: int, page_size: int, user: User) -> dict:
             stmt = stmt.where(Activity.class_id.in_(class_ids))
         else:
             return {"items": [], "total": 0}
-    stmt = stmt.order_by(Activity.id.desc())
+    stmt = stmt.order_by(order_direction(Activity.id, order))
     rows, total = paginate(db, stmt, page, page_size)
     return {"items": [_serialize_activity(x) for x in rows], "total": total}
 
@@ -424,6 +432,7 @@ def list_talks(
     student_id: int | None,
     class_id: int | None,
     user: User,
+    order: str = "",
 ) -> dict:
     page, page_size = normalize_page(page, page_size)
     stmt = _filter_student_stmt(db, Talk, user)
@@ -436,7 +445,7 @@ def list_talks(
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
             return {"items": [], "total": 0}
         stmt = stmt.where(Talk.student_id == student_id)
-    rows, total = paginate(db, stmt.order_by(Talk.id.desc()), page, page_size)
+    rows, total = paginate(db, stmt.order_by(order_direction(Talk.id, order)), page, page_size)
     return {
         "items": [_serialize_talk(x) for x in serialize_list_with_students(db, rows)],
         "total": total,
@@ -481,6 +490,7 @@ def list_return_records(
     student_id: int | None,
     class_id: int | None,
     user: User,
+    order: str = "",
 ) -> dict:
     page, page_size = normalize_page(page, page_size)
     stmt = _filter_student_stmt(db, ReturnRecord, user)
@@ -493,7 +503,9 @@ def list_return_records(
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
             return {"items": [], "total": 0}
         stmt = stmt.where(ReturnRecord.student_id == student_id)
-    rows, total = paginate(db, stmt.order_by(ReturnRecord.id.desc()), page, page_size)
+    rows, total = paginate(
+        db, stmt.order_by(order_direction(ReturnRecord.id, order)), page, page_size
+    )
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
@@ -537,6 +549,7 @@ def list_performances(
     class_id: int | None,
     ptype: str,
     user: User,
+    order: str = "",
 ) -> dict:
     page, page_size = normalize_page(page, page_size)
     stmt = _filter_student_stmt(db, Performance, user)
@@ -551,7 +564,9 @@ def list_performances(
         stmt = stmt.where(Performance.student_id == student_id)
     if ptype:
         stmt = stmt.where(Performance.ptype == ptype)
-    rows, total = paginate(db, stmt.order_by(Performance.id.desc()), page, page_size)
+    rows, total = paginate(
+        db, stmt.order_by(order_direction(Performance.id, order)), page, page_size
+    )
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
@@ -766,6 +781,7 @@ def list_student_comments(
     student_id: int | None,
     class_id: int | None,
     user: User,
+    order: str = "",
 ) -> dict:
     page, page_size = normalize_page(page, page_size)
     stmt = _filter_student_stmt(db, StudentComment, user)
@@ -778,7 +794,9 @@ def list_student_comments(
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
             return {"items": [], "total": 0}
         stmt = stmt.where(StudentComment.student_id == student_id)
-    rows, total = paginate(db, stmt.order_by(StudentComment.id.desc()), page, page_size)
+    rows, total = paginate(
+        db, stmt.order_by(order_direction(StudentComment.id, order)), page, page_size
+    )
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 

@@ -22,6 +22,11 @@ logger = logging.getLogger("teachhub.ai")
 # DeepSeek 视觉接口原生支持的 4 种格式（由文件内容判定，不看扩展名）
 SUPPORTED_FORMATS = ("jpeg", "png", "gif", "webp")
 
+# 单图像素总量上限（SEC-05）。模型侧最终只吃缩放后的长边 `max_side`（默认 ≤1600 ⇒ 约
+# 256 万像素），4000 万是「绝不误伤真实手机原图」与「防止单图解爆进程」之间的折中：
+# 常见 5000×4000 手机照片是 2000 万，仍可通过。
+_MAX_PIXELS = 40_000_000
+
 
 def sniff_format(raw: bytes) -> str | None:
     """按魔数判定图片真实格式，返回小写规范名；未知返回 None。
@@ -134,6 +139,14 @@ def prepare_data_url(
 
     try:
         img = Image.open(BytesIO(raw))
+        # 🔴 像素总量护栏（SEC-05）：0.49MB 的 PNG 可以解出 1.69 亿像素。Pillow 只在
+        # >89M 时 `DecompressionBombWarning`（**只告警不阻断**）、>178M 才抛
+        # `DecompressionBombError`，中间区间会真的把整图解出来 ⇒ 单张图就能把进程撑爆
+        # （批改与 API 同进程，OOM 会带走全部租户）。这里在 EXIF 摆正 / 缩放**之前**拦，
+        # 因为 `img.size` 只读文件头，触发时一次解码都没发生。
+        width, height = img.size
+        if width * height > _MAX_PIXELS:
+            return None, f"图片像素过大（{width}×{height}，上限 {_MAX_PIXELS // 10_000} 万像素）"
         # EXIF 方向摆正：手机照片常因 Orientation 元数据横躺，显著拉低识别率。
         # 摆正失败（极少数损坏/极端小图）不阻断——保留原图继续处理，最坏只是方向未校正。
         try:

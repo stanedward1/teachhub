@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import os
 import uuid
+import zipfile
+from io import BytesIO
 from typing import Callable, Iterable
 
 from fastapi import HTTPException, UploadFile
@@ -99,6 +101,55 @@ def save_upload(
         "filename": original,
         "size": size,
     }
+
+
+# ---------------- 压缩容器的解压体积护栏（zip bomb） ----------------
+# `.docx` / `.xlsx` 都是 zip 容器：0.2MB 的包可以声明 200MB 的解压体积。2026-11-17 实测
+# 0.2MB docx → 解压 200MB 被 python-docx **完整读入内存**（1.8s，全程无拒绝）。批改与
+# API 跑在同一个进程里，一次 OOM 会带走整个服务（含其他租户），所以必须在**解析之前**
+# 按下表拦掉（`docs/REVIEW-2026-11-17-OPT.md` SEC-05）。
+#
+# 两个判据缺一不可：
+# - 绝对上限：解压总量 ≤ `ZIP_MAX_UNCOMPRESSED_BYTES`；
+# - 解压比：总量超过 `ZIP_RATIO_MIN_BYTES` 后，比值 > `ZIP_MAX_RATIO` 视为异常。
+#   下限是必需的：压缩比高本身不是问题（纯 XML 的 docx 轻松 10×~30×），
+#   1KB 的包解出 200KB 完全正常；只在大体积时比值才有判别力。
+ZIP_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
+ZIP_MAX_RATIO = 100
+ZIP_RATIO_MIN_BYTES = 16 * 1024 * 1024
+
+
+def zip_expansion_reason(src) -> str | None:
+    """检查 zip 容器的解压体积：安全返回 ``None``，否则返回中文原因。**不抛异常**。
+
+    Args:
+        src: 磁盘路径，或已经读进内存的 ``bytes``（导入接口用后者，避免二次读盘）。
+
+    ⚠️ 只读 zip 中央目录里的 ``file_size`` / ``compress_size``，**一个条目都不解压** ——
+    护栏本身不能成为新的内存消耗点（这也是「先查目录、再交给解析库」的原因）。
+    """
+    try:
+        handle = BytesIO(src) if isinstance(src, (bytes, bytearray)) else src
+        archive = zipfile.ZipFile(handle)
+    except zipfile.BadZipFile:
+        return "文件不是有效的压缩包（可能已损坏）"
+    except OSError:
+        return "无法读取文件"
+    try:
+        infos = archive.infolist()
+        total = sum(i.file_size for i in infos)
+        packed = sum(i.compress_size for i in infos)
+    finally:
+        archive.close()
+
+    if total > ZIP_MAX_UNCOMPRESSED_BYTES:
+        return (
+            f"解压后体积过大（{total // (1024 * 1024)}MB，"
+            f"上限 {ZIP_MAX_UNCOMPRESSED_BYTES // (1024 * 1024)}MB）"
+        )
+    if total > ZIP_RATIO_MIN_BYTES and packed > 0 and total / packed > ZIP_MAX_RATIO:
+        return f"解压比异常（约 {total // packed}×，上限 {ZIP_MAX_RATIO}×），疑似压缩炸弹"
+    return None
 
 
 # ---------------- 相对路径解析（唯一安全口径） ----------------

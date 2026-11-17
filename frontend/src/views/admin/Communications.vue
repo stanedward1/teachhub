@@ -100,7 +100,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import Markdown from '../../components/Markdown.vue'
 import MarkdownEditor from '../../components/MarkdownEditor.vue'
@@ -113,7 +113,8 @@ import { useSort } from '../../composables/useSort'
 import { useCrudList } from '../../composables/useCrudList'
 import { communicationApi } from '../../api'
 
-const { order, useSorted } = useSort('communications')
+// 时间排序：**服务端**全量排序（RBT-122），只排当前页会让页与页之间顺序矛盾
+const { order } = useSort('communications')
 const studentId = ref(null)
 const classId = ref(null)
 const dialog = ref(false)
@@ -139,10 +140,13 @@ const {
   buildParams: () => ({
     student_id: studentId.value,
     class_id: classId.value,
+    order: order.value,
   }),
   removeTip: () => '确定删除该记录吗？',
 })
-const items = useSorted(rawItems)
+// 排序方向变化 → 后端重排全量后重新取第 1 页
+watch(order, reload)
+const items = rawItems
 
 // 跨模块学生卡片
 const studentCardVisible = ref(false)

@@ -29,8 +29,8 @@ dep = require_teacher
 
 # ---------------- 工作日志 ----------------
 @router.get("/work-logs")
-def list_work_logs(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return classlog_service.list_work_logs(db, page, page_size, user)
+def list_work_logs(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, order: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return classlog_service.list_work_logs(db, page, page_size, user, order)
 
 
 @router.post("/work-logs")
@@ -94,8 +94,8 @@ def delete_schedule(schedule_id: int, user: User = Depends(get_current_user), db
 
 # ---------------- 班级活动 ----------------
 @router.get("/activities")
-def list_activities(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return classlog_service.list_activities(db, page, page_size, user)
+def list_activities(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, order: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return classlog_service.list_activities(db, page, page_size, user, order)
 
 
 @router.post("/activities")
@@ -110,8 +110,8 @@ def delete_activity(activity_id: int, user: User = Depends(get_current_user), db
 
 # ---------------- 师生谈心 ----------------
 @router.get("/talks")
-def list_talks(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return classlog_service.list_talks(db, page, page_size, student_id, class_id, user)
+def list_talks(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, order: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return classlog_service.list_talks(db, page, page_size, student_id, class_id, user, order)
 
 
 @router.post("/talks", response_model=TalkOut)
@@ -126,8 +126,8 @@ def delete_talk(talk_id: int, user: User = Depends(get_current_user), db: Sessio
 
 # ---------------- 返校记录 ----------------
 @router.get("/return-records")
-def list_return_records(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return classlog_service.list_return_records(db, page, page_size, student_id, class_id, user)
+def list_return_records(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, order: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return classlog_service.list_return_records(db, page, page_size, student_id, class_id, user, order)
 
 
 @router.post("/return-records", response_model=ReturnRecordOut)
@@ -142,8 +142,8 @@ def delete_return_record(record_id: int, user: User = Depends(get_current_user),
 
 # ---------------- 学生表现 ----------------
 @router.get("/performances")
-def list_performances(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, ptype: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return classlog_service.list_performances(db, page, page_size, student_id, class_id, ptype, user)
+def list_performances(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, ptype: str = "", order: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return classlog_service.list_performances(db, page, page_size, student_id, class_id, ptype, user, order)
 
 
 # 必须声明在 `/performances/{performance_id}` 之前：否则 "summary" 会被当成路径参数匹配掉
@@ -173,8 +173,8 @@ def suggest_student_comment(student_id: int, user: User = Depends(get_current_us
 
 
 @router.get("/student-comments")
-def list_student_comments(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return classlog_service.list_student_comments(db, page, page_size, student_id, class_id, user)
+def list_student_comments(page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, student_id: int | None = None, class_id: int | None = None, order: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return classlog_service.list_student_comments(db, page, page_size, student_id, class_id, user, order)
 
 
 @router.post("/student-comments", response_model=StudentCommentOut)

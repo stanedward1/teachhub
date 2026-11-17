@@ -98,9 +98,15 @@
         :rows="16"
         placeholder="报告内容将根据数据自动生成，您也可以手动编辑..."
       />
-      <div style="margin-top: 12px; display: flex; gap: 8px">
-        <el-button type="primary" :loading="saving" @click="saveReport">保存报告</el-button>
+      <div style="margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+        <el-button type="primary" :loading="saving" @click="saveReport">
+          {{ editingReportId ? '保存修改' : '保存报告' }}
+        </el-button>
+        <el-button v-if="editingReportId" @click="saveAsCopy">另存为新报告</el-button>
         <el-button @click="previewReport">预览</el-button>
+        <span v-if="editingReportId" style="color: var(--el-color-warning); font-size: 12px">
+          正在编辑历史报告，保存将覆盖原报告
+        </span>
       </div>
     </div>
 
@@ -155,6 +161,14 @@ const historyLoading = ref(false)
 const historyError = ref(false)
 const reportContent = ref(null)
 const reportTitle = ref('')
+/**
+ * 当前正在编辑的历史报告 id（RBT-121）。
+ *
+ * 后端 `POST /api/reports` 是 **upsert-by-id**：带 id 走 update、不带则 insert。
+ * 原实现从不传 id ⇒ 「查看历史报告 → 改一个字 → 保存」会新建一份同名副本，
+ * 原报告不动，连点两次还产生两条重复。null = 新建（另存为也用它）。
+ */
+const editingReportId = ref(null)
 const saving = ref(false)
 
 const historyDialog = ref(false)
@@ -206,6 +220,8 @@ function onClassChange() {
   invalidateLoads()
   weeklyData.value = null
   reportContent.value = null
+  // 换班就不能再覆盖原报告了（原报告属于别的班级），退回新建模式
+  editingReportId.value = null
   error.value = false
 }
 
@@ -239,6 +255,8 @@ function generateReport() {
   const cls = classes.value.find((c) => c.id === classId.value)
   const [start, end] = dateRange.value || ['', '']
 
+  // 「生成周报」= 按当前班级/周期新写一份，不覆盖任何历史报告
+  editingReportId.value = null
   reportTitle.value = `${cls?.name || ''}班级周报（${start} ~ ${end}）`
   reportContent.value = `# ${cls?.name || ''}班级周报
 
@@ -276,22 +294,34 @@ ${d.profile_summaries?.length ? d.profile_summaries.map((s) => `- ${s.name}（${
 
 async function saveReport() {
   if (!reportTitle.value.trim()) return ElMessage.warning('请输入报告标题')
+  const isUpdate = !!editingReportId.value
   saving.value = true
   try {
     const [start, end] = dateRange.value || ['', '']
-    await reportApi.save({
+    const payload = {
       class_id: classId.value,
       title: reportTitle.value.trim(),
       content: reportContent.value,
       week_start: start,
       week_end: end,
       data_snapshot: weeklyData.value,
-    })
-    ElMessage.success('报告保存成功')
+    }
+    // 只有编辑历史报告时才带 id：带上即覆盖原报告，不带才会新建（upsert-by-id）
+    if (isUpdate) payload.id = editingReportId.value
+    const res = await reportApi.save(payload)
+    // 新建成功后记住新 id：否则紧接着再点一次「保存」又会插入第二条一模一样的报告
+    if (!isUpdate && res?.id) editingReportId.value = res.id
+    ElMessage.success(isUpdate ? '报告已更新' : '报告保存成功')
   } catch (e) {
   } finally {
     saving.value = false
   }
+}
+
+/** 另存为：脱离「编辑原报告」状态，下次保存插入新记录。 */
+function saveAsCopy() {
+  editingReportId.value = null
+  ElMessage.info('已转为新建模式，保存后将生成一份新报告')
 }
 
 function previewReport() {
@@ -320,6 +350,9 @@ function viewReport(row) {
   // 打开历史报告前先作废在途查询：否则上一次「查询数据」的响应会把视图里的
   // 快照 data 顶掉，看到的是 A 班的数字配 B 班的报告
   invalidateLoads()
+  // 🔴 必须记住 id（RBT-121）：保存时带上它才会覆盖本报告，否则后端 upsert
+  // 走 insert 分支、历史列表里多出一条同名副本
+  editingReportId.value = row.id
   reportTitle.value = row.title
   reportContent.value = row.content || ''
   // 回填该报告的班级 / 周期 / 数据快照：否则随后点「保存报告」会用当前表单的

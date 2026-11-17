@@ -144,7 +144,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import StudentSelect from '../../components/StudentSelect.vue'
 import SortBar from '../../components/SortBar.vue'
@@ -179,6 +179,7 @@ const {
     ptype: ptype.value,
     student_id: studentId.value,
     class_id: classId.value,
+    order: order.value,
   }),
   removeTip: () => '确定删除该记录吗？',
   // 列表每次加载成功后同步刷新积分汇总；删除记录走的也是 load()，因此汇总会自动跟着变
@@ -229,8 +230,11 @@ function onPtypeChange(val) {
   form.points = val === '积极' ? Math.abs(form.points) : -Math.abs(form.points)
 }
 
-const { order, useSorted } = useSort('performances')
-const items = useSorted(rawItems)
+// 时间排序：**服务端**全量排序（RBT-122），只排当前页会让页与页之间顺序矛盾
+const { order } = useSort('performances')
+// 排序方向变化 → 后端重排全量后重新取第 1 页
+watch(order, reload)
+const items = rawItems
 
 onMounted(load)
 

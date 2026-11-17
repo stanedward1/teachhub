@@ -272,14 +272,23 @@ class StudentUpdate(BaseModel):
     parent_name     String(50)
     parent_phone    String(20)
     student_type    String(20)
+    student_no      String(50)
     ==============  ==========  ======
 
     其余三个字段不加：`class_id` 是整数、`is_dropped_out` 是布尔（无长度语义），
     `birth_date` 是 `Date` 列且服务层统一走 `parse_date_or_400`（格式非法 → **400**，
     已是有语义的客户端错误，无需再靠 422）。
+
+    🔴 `student_no` 曾经**不在**本类里（RBT-120）：前端编辑弹窗允许改学号并整行提交，
+    Pydantic 默认忽略未知字段 ⇒ 接口 200、前端弹「保存成功」、库里学号不变，教师
+    以为改好了。学号**不是登录名**（学生 username 恒等于姓名，见
+    `students_service._sync_account_identity`），所以补这个字段不需要动账号；
+    唯一性口径 `uq_student_school_no` = `(school_id, student_no)`，由服务层
+    `update_student` 在改值前按**目标学校**判重，冲突 → 409。
     """
 
     name: str | None = Field(None, max_length=50)
+    student_no: str | None = Field(None, max_length=50)
     gender: str | None = Field(None, max_length=10)
     birth_date: str | None = None
     class_id: int | None = None

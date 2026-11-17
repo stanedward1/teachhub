@@ -19,6 +19,10 @@
     </span>
     <template #dropdown>
       <el-dropdown-menu>
+        <el-dropdown-item command="change-avatar">
+          <el-icon><User /></el-icon>
+          更换头像
+        </el-dropdown-item>
         <el-dropdown-item command="change-password">
           <el-icon><Key /></el-icon>
           修改密码

@@ -34,7 +34,20 @@ export const MENU = [
     children: [
       { index: '/admin/students', label: '学生管理' },
       { index: '/admin/scores', label: '成绩管理' },
-      { index: '/admin/leaves', label: '考勤管理' },
+      // 考勤点名**刻意不设 need**（RBT-124 返工）：后端 `is_teacher_class_owner`
+      // 的判据是「`Classroom.teacher_id` == 教师 **或** `class_teacher` 表存在该
+      // (class_id, 教师) 行」，即**班主任 ∪ 科任老师**都放行（见 permissions.py:197-210）；
+      // /api/attendance* 三接口用的正是它。此前标 `head_teacher`（只认班主任）比后端更严，
+      // 会把科任老师挡在 /403，而同一批人在移动端 /m/checkin 却能点名（移动端不受
+      // routeDenied 约束）—— 属「前端比后端更窄」的能力缺失，不是安全加固。
+      //
+      // 不设 need 不会越权：本页的班级下拉来自 `GET /api/classrooms`，该接口同样走
+      // `filter_classrooms_by_teacher`（班主任 ∪ 科任），教师选不到别人的班；后端各接口
+      // 还会再按 `is_teacher_class_owner` 403 兜底。完全不带班的教师进来只会看到空下拉
+      // （页面给「你还没有带班班级」文案），无副作用。
+      { index: '/admin/attendance', label: '考勤点名' },
+      // 本页只是请假登记/销假，与考勤无关，RBT-124 把原「考勤管理」正名为「请假管理」
+      { index: '/admin/leaves', label: '请假管理' },
       { index: '/admin/communications', label: '家校沟通' },
       { index: '/admin/resources', label: '资源管理' },
       { index: '/admin/exams', label: '试卷管理' },
@@ -79,7 +92,7 @@ export const MENU = [
 /**
  * 路由路径 -> 页面标题（用于顶栏面包屑）。
  *
- * 注意：本映射刻意与路由表保持一致的原文件内容（23 条）。
+ * 注意：本映射刻意与路由表保持一致的原文件内容（24 条）。
  * 其中不含 `/admin/audit-logs`，该路径的面包屑会退化为 `['TeachHub']`，属既有行为，保持不变。
  *
  * @type {Record<string, string>}
@@ -90,7 +103,8 @@ export const PAGE_TITLES = {
   '/admin/students': '学生管理',
   '/admin/classrooms': '班级管理',
   '/admin/scores': '成绩管理',
-  '/admin/leaves': '考勤管理',
+  '/admin/attendance': '考勤点名',
+  '/admin/leaves': '请假管理',
   '/admin/communications': '家校沟通',
   '/admin/resources': '资源管理',
   '/admin/exams': '试卷管理',

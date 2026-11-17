@@ -98,6 +98,109 @@ def _attachments_out(a: Assignment) -> list:
     ]
 
 
+# ---------------- 附件路径的归属校验（SEC-03） ----------------
+# 背景：`submissions.filepath` / `attachments[].filepath` 都是**请求体直传**。
+# `ensure_upload_path` 只保证「路径不逃出上传目录」，**不管这个文件是谁的**；而这些
+# 路径落库后就是 `_remove_upload_files` 的删除目标 ⇒ 学生 B 把提交的 filepath 填成学生 A
+# 的文件，再交一次新文件，就能让 A 的文件从磁盘消失（永久 404、不可恢复）。
+# 学生能合法拿到他人文件名：`GET /api/homework/excellent`（本班优秀作品）与
+# `GET /api/homework/assignments/{id}`（教师任务附件）都会下发 `to_dict()` 的整表列。
+# 见 `docs/REVIEW-2026-11-17-OPT.md` SEC-03。
+
+
+def _ensure_filepath_not_shared_for_submission(
+    db: Session, filepath: str, student_id: int
+) -> None:
+    """学生提交附件：该路径不得已被**他人**引用（400）。
+
+    两条禁令：
+    1. 已被**其他学生**的提交引用 ⇒ 400（本缺陷的主体）；
+    2. 已被任一**任务附件**引用 ⇒ 400（否则学生重交即可删掉教师下发的任务附件）。
+
+    判据用 `skip_tenant_filter`：归属是**全局**性质（同一 `filepath` 指向磁盘上同一个
+    文件），若只看本校，别校的同一路径仍可被顺手牵走 —— 而 `/uploads` 是静态直出的，
+    文件名一旦外泄就跨校可用。同一学生自己在多份作业里复用同一路径**允许**
+    （文件本就归他；删侧 `_remove_unreferenced_upload_files` 另有引用计数兜底）。
+    """
+    if not filepath:
+        return
+    if (
+        db.query(Submission.id)
+        .execution_options(skip_tenant_filter=True)
+        .filter(Submission.filepath == filepath, Submission.student_id != student_id)
+        .first()
+    ):
+        raise HTTPException(status_code=400, detail="该附件已被其他学生的作业提交使用，请重新上传")
+    if (
+        db.query(AssignmentAttachment.id)
+        .execution_options(skip_tenant_filter=True)
+        .filter(AssignmentAttachment.filepath == filepath)
+        .first()
+    ):
+        raise HTTPException(status_code=400, detail="该附件属于教师的任务附件，不能作为作业提交")
+
+
+def _ensure_filepath_not_shared_for_attachment(
+    db: Session, filepath: str, assignment_id: int | None
+) -> None:
+    """任务附件（`_sync_attachments`）：该路径不得已被**他人**引用（400）。
+
+    与提交侧对称的两条禁令：
+    1. 已被任一**学生提交**引用 ⇒ 400（否则教师侧成了同一删除链的另一个入口：
+       把学生的提交附件挂到自己任务的附件里，删任务时连学生的作品一起删）；
+    2. 已被**其他任务**的附件引用 ⇒ 400。
+
+    `assignment_id is None` 表示新建任务（此时 `a.id` 尚未生成）⇒ 不豁免任何任务附件，
+    即「已被任一任务引用就拒」。
+    """
+    if not filepath:
+        return
+    if (
+        db.query(Submission.id)
+        .execution_options(skip_tenant_filter=True)
+        .filter(Submission.filepath == filepath)
+        .first()
+    ):
+        raise HTTPException(status_code=400, detail="该附件已被学生的作业提交使用，不能作为任务附件")
+    q = (
+        db.query(AssignmentAttachment.id)
+        .execution_options(skip_tenant_filter=True)
+        .filter(AssignmentAttachment.filepath == filepath)
+    )
+    if assignment_id is not None:
+        # 编辑任务时前端是「整行原样提交」（连带既有附件），必须豁免本任务自己的旧行
+        q = q.filter(AssignmentAttachment.assignment_id != assignment_id)
+    if q.first():
+        raise HTTPException(status_code=400, detail="该附件已被其他任务使用，请重新上传")
+
+
+def _filepath_referenced(db: Session, filepath: str) -> bool:
+    """该上传路径是否**仍被任何业务行引用**（提交附件 / 任务附件）。
+
+    🔴 必须 `skip_tenant_filter`：删盘不可逆，引用可能落在别校分区（跨校共用同一路径的
+    历史数据，或本缺陷被利用后写下的脏行）。只看当前租户 ⇒ 删掉别校仍在用的文件，
+    对方看到的是「库里有行、文件永久 404」，与 P0-A 同类不可逆。
+    ⚠️ 只覆盖 `submissions` 与 `assignment_attachments`：班级日志图片走
+    `classlog_service._encode_filepath`，教师写入，不参与「请求体自由填 filepath ⇒
+    落库 ⇒ 删盘」这条链路，不构成引用源。
+    """
+    if not filepath:
+        return False
+    if (
+        db.query(Submission.id)
+        .execution_options(skip_tenant_filter=True)
+        .filter(Submission.filepath == filepath)
+        .first()
+    ):
+        return True
+    return (
+        db.query(AssignmentAttachment.id)
+        .execution_options(skip_tenant_filter=True)
+        .filter(AssignmentAttachment.filepath == filepath)
+        .first()
+    ) is not None
+
+
 def _remove_upload_files(paths) -> None:
     """删除上传目录内的文件（失败静默，不阻断主流程）。
 
@@ -125,18 +228,43 @@ def _remove_upload_files(paths) -> None:
             pass
 
 
-def _sync_attachments(a: Assignment, attachments) -> list[str]:
+def _remove_unreferenced_upload_files(db: Session, paths) -> None:
+    """`db.commit()` 成功后的删盘收尾：**只删已无任何行引用**的路径（SEC-03）。
+
+    为什么非有不可：写入侧已由 `_ensure_filepath_not_shared_*` 拦住新脏数据，但删盘是
+    **不可逆**的，还有两种合法/存量情形会误伤：
+    - 同一学生把同一 `filepath` 用在多份作业里（写入侧有意允许，文件归他）—— 其中一份
+      重交时，这个路径仍被另一份引用，不能删；
+    - 修复前已被写下的脏行（他人提交指着同一个文件），删旧就会把受害者的文件带走。
+
+    因此这里的默认偏向是「宁可留个垃圾文件，也不删仍在用的文件」：漏删只是占盘，
+    误删是不可恢复的丢数据（受害者的提交/优秀作品永久 404）。
+    """
+    if not paths:
+        return
+    keep = [p for p in paths if p and _filepath_referenced(db, p)]
+    if keep:
+        logger.info("附件仍被其他记录引用，保留不删：%r", keep)
+    _remove_upload_files([p for p in paths if p and p not in keep])
+
+
+def _sync_attachments(db: Session, a: Assignment, attachments) -> list[str]:
     """同步作业附件（传入 [{filename, filepath}, ...]，整体替换旧附件）。
 
     **只收集待删文件，不删文件**：返回被移除附件的 `filepath` 列表，由调用方在
-    `db.commit()` **成功之后**交给 `_remove_upload_files`（RBT-71）。理由：事务能回滚，
+    `db.commit()` **成功之后**交给 `_remove_unreferenced_upload_files`（RBT-71）。理由：事务能回滚，
     `os.remove()` 不能 —— 先删文件再校验/提交，一旦后续任何一步 raise，记录回滚复原、
     文件却已物理消失，附件永久 404 且无日志。正确顺序的样板见
     `admin_service.delete_user` / `students_service.delete_student`（commit 后再删）。
 
     🔴 每个 `filepath` 都要先过 `ensure_upload_path`（非法 ⇒ **400**）：附件路径同样来自
     请求体，落库后会成为 `delete_assignment` / `_sync_attachments` 的删除目标
-    （与 P0-A 同一条攻击链的另一个入口）。
+    （与 P0-A 同一条攻击链的另一个入口）；再过
+    `_ensure_filepath_not_shared_for_attachment`（已被学生提交/其他任务引用 ⇒ **400**，
+    SEC-03：否则教师侧就是「借别人的文件名删盘」的第二个入口）。
+
+    ⚠️ 两处校验都在 `a.attachments` 被改动**之前**完成：校验抛错时本函数没有任何副作用
+    （旧附件行仍在库里），调用方只需正常回滚。
     """
     items = [
         att
@@ -145,6 +273,7 @@ def _sync_attachments(a: Assignment, attachments) -> list[str]:
     ]
     for att in items:
         ensure_upload_path(att["filepath"])
+        _ensure_filepath_not_shared_for_attachment(db, att["filepath"], a.id)
     new_paths = {att["filepath"] for att in items}
     removed = [att.filepath for att in a.attachments if att.filepath and att.filepath not in new_paths]
     a.attachments.clear()
@@ -553,11 +682,11 @@ def create_assignment(db: Session, payload: dict, user: User) -> dict:
     )
     # 新建作业时 `a.attachments` 为空 ⇒ pending 恒为空列表；仍走同一收尾，
     # 是为了让「文件只在提交成功后才删」在两条路径上口径一致（RBT-71）。
-    pending = _sync_attachments(a, payload.get("attachments"))
+    pending = _sync_attachments(db, a, payload.get("attachments"))
     db.add(a)
     audit(db, user, "create_assignment", target=f"布置作业", class_id=class_id)
     db.commit()
-    _remove_upload_files(pending)
+    _remove_unreferenced_upload_files(db, pending)
     db.refresh(a)
     d = to_dict(a)
     d["attachments"] = _attachments_out(a)
@@ -579,7 +708,7 @@ def update_assignment(db: Session, assignment_id: int, payload: dict, user: User
         if field in payload and payload[field] is not None:
             setattr(a, field, payload[field])
     if "attachments" in payload:
-        pending = _sync_attachments(a, payload["attachments"])
+        pending = _sync_attachments(db, a, payload["attachments"])
     if payload.get("class_id") and payload["class_id"] != a.class_id:
         new_cid = payload["class_id"]
         cls_row = db.get(Classroom, new_cid)
@@ -602,7 +731,7 @@ def update_assignment(db: Session, assignment_id: int, payload: dict, user: User
     db.commit()
     # 提交成功后才删磁盘文件（RBT-71）：此时被移除的附件行已经不在库里，
     # 晚删几百毫秒没有副作用；而提前删会在回滚后留下「记录在、文件没了」。
-    _remove_upload_files(pending)
+    _remove_unreferenced_upload_files(db, pending)
     db.refresh(a)
     d = to_dict(a)
     d["attachments"] = _attachments_out(a)
@@ -621,7 +750,7 @@ def delete_assignment(db: Session, assignment_id: int, user: User) -> dict:
     db.delete(a)
     audit(db, user, "delete_assignment", target=f"作业#{assignment_id}", class_id=a.class_id)
     db.commit()
-    _remove_upload_files(pending)
+    _remove_unreferenced_upload_files(db, pending)
     return {"ok": True}
 
 
@@ -1033,6 +1162,9 @@ def submit(db: Session, assignment_id: int, payload: dict, user: User) -> dict:
         # 第二道防线：路由层已由 `SubmissionCreate` 校验（422），这里兜住内部直调，
         # 保证非法路径**永不落库**（落库即成为重交时的删除目标，见 P0-A）。
         ensure_upload_path(filepath)
+        # 归属校验（SEC-03）：路径合法 ≠ 文件是我的。不拦这一步，学生 B 只要把 filepath
+        # 填成学生 A 的文件再交一次新文件，A 的文件就会在本函数末尾的删盘里消失。
+        _ensure_filepath_not_shared_for_submission(db, filepath, stu.id)
     if not content and not filepath:
         raise HTTPException(status_code=400, detail="请填写作业内容或上传文件")
 
@@ -1056,7 +1188,7 @@ def submit(db: Session, assignment_id: int, payload: dict, user: User) -> dict:
         # 一旦作废失败就只剩日志，师生继续看到旧内容的批改结论。
         _discard_ai_grading(db, existing.id)
         db.commit()
-        _remove_upload_files([replaced])
+        _remove_unreferenced_upload_files(db, [replaced])
         db.refresh(existing)
         return to_dict(existing)
 

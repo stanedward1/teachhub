@@ -75,6 +75,27 @@ def normalize_page(
     return max(1, page), min(max(1, page_size), max_size)
 
 
+def order_direction(column, order=None):
+    """把前端的 ``order=asc|desc`` 翻译成 SQLAlchemy 排序表达式。
+
+    背景（RBT-122）：分页列表原先只在**前端**排当前页（`composables/useSort.js`
+    的 `sortItems` 对已取回的 20 条排序），后端恒按 id 降序 ⇒ 翻到第 2 页点
+    「最早在前」，只是把「最新 20 条」倒过来，页与页之间仍然是最新在前。
+
+    🔴 这里**只认 ``asc``**，其余一切（None / 空串 / 拼错 / 大小写混杂）都回落
+    ``desc``，绝不抛 400：排序方向是展示偏好，不是业务参数；前端 localStorage
+    里可能存着旧值，翻页时突然报错比排错序更难排查。
+
+    Args:
+        column: 用于排序的列（`Model.id` / `Model.created_at` 等）。
+        order: 前端传入的方向串。
+
+    Returns:
+        `column.asc()` 或 `column.desc()`，可直接交给 `.order_by(...)`。
+    """
+    return column.asc() if str(order or "").strip().lower() == "asc" else column.desc()
+
+
 def parse_date(value):
     """把前端传入的日期归一化为 `date` 对象，供 `Date` 列写入。
 

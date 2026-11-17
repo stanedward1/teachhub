@@ -6,7 +6,15 @@
     @update:model-value="(v) => emit('update:modelValue', v)"
   >
     <el-form label-width="90px">
-      <el-form-item label="学号" required><el-input v-model="form.student_no" /></el-form-item>
+      <el-form-item label="学号" required>
+        <el-input v-model="form.student_no" />
+        <div
+          v-if="student"
+          style="color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; margin-top: 4px"
+        >
+          可直接修改，保存后立即生效。学生登录用「姓名 + 班级」，与学号无关。
+        </div>
+      </el-form-item>
       <el-form-item label="姓名" required><el-input v-model="form.name" /></el-form-item>
       <el-form-item label="性别">
         <el-radio-group v-model="form.gender"

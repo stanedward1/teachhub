@@ -23,6 +23,7 @@ from app.permissions import (
 from app.schemas import CommunicationCreate
 from app.utils import (
     normalize_page,
+    order_direction,
     stringify_dates,
     to_dict,
 )
@@ -35,6 +36,7 @@ def list_communications(
     page_size: int = DEFAULT_PAGE_SIZE,
     student_id: int | None = None,
     class_id: int | None = None,
+    order: str = "",
 ) -> dict:
     """家校沟通列表（分页）。单次 SQL 取回当前页 + 总数。"""
     page, page_size = normalize_page(page, page_size)
@@ -51,7 +53,9 @@ def list_communications(
         if not is_any_admin(user) and not is_student_in_teacher_classes(db, user.id, student_id):
             return {"items": [], "total": 0}
         stmt = stmt.where(Communication.student_id == student_id)
-    rows, total = paginate(db, stmt.order_by(Communication.id.desc()), page, page_size)
+    rows, total = paginate(
+        db, stmt.order_by(order_direction(Communication.id, order)), page, page_size
+    )
     return {"items": serialize_list_with_students(db, rows), "total": total}
 
 
