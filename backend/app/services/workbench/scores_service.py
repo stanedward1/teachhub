@@ -43,7 +43,7 @@ from app.services.workbench.importer import (
 from app.utils import (
     normalize_page,
     order_direction,
-    stringify_dates,
+    safe_append,
     to_dict,
 )
 
@@ -238,7 +238,8 @@ def create_score(db: Session, user, payload: ScoreCreate) -> dict:
     audit(db, user, "create_score", target=f"新增成绩-{student_name(db, s.student_id)}", student_id=s.student_id, detail=f"科目：{s.subject}；分数：{s.score}；考试：{s.exam_name or '日常测验'}")
     db.commit()
     db.refresh(s)
-    return stringify_dates(attach_student(db, to_dict(s), s.student_id))
+    # FA-13：ScoreOut.created_at 已是原生 datetime，交给 jsonable_encoder 输出 ISO 串。
+    return attach_student(db, to_dict(s), s.student_id)
 
 
 def update_score(db: Session, user, score_id: int, payload: ScoreUpdate) -> dict:
@@ -264,7 +265,8 @@ def update_score(db: Session, user, score_id: int, payload: ScoreUpdate) -> dict
     audit(db, user, "update_score", target=f"成绩#{score_id}-{student_name(db, s.student_id)}", student_id=s.student_id)
     db.commit()
     db.refresh(s)
-    return stringify_dates(attach_student(db, to_dict(s), s.student_id))
+    # FA-13：同上，ScoreOut 已改原生类型。
+    return attach_student(db, to_dict(s), s.student_id)
 
 
 def delete_score(db: Session, user, score_id: int) -> dict:
@@ -284,7 +286,7 @@ def _empty_score_export() -> StreamingResponse:
     wb = Workbook()
     ws = wb.active
     ws.title = "成绩单"
-    ws.append(["学号", "姓名", "科目", "成绩", "考试名称"])
+    safe_append(ws, ["学号", "姓名", "科目", "成绩", "考试名称"])
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -315,10 +317,21 @@ def export_scores(db: Session, user, student_id: int | None = None, class_id: in
     wb = Workbook()
     ws = wb.active
     ws.title = "成绩单"
-    ws.append(["学号", "姓名", "科目", "成绩", "考试名称"])
+    # safe_append 而非 ws.append：学号/姓名来自学生自助注册，首字符 `=` 会被 openpyxl
+    # 当成公式写出（SEC2-01 / CWE-1236）。成绩列是数字，保持数值类型不动。
+    safe_append(ws, ["学号", "姓名", "科目", "成绩", "考试名称"])
     for s in rows:
         stu = stu_map.get(s.student_id)
-        ws.append([stu["no"] if stu else "", stu["name"] if stu else "", s.subject, s.score, s.exam_name or ""])
+        safe_append(
+            ws,
+            [
+                stu["no"] if stu else "",
+                stu["name"] if stu else "",
+                s.subject,
+                s.score,
+                s.exam_name or "",
+            ],
+        )
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)

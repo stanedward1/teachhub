@@ -24,7 +24,6 @@ from app.schemas import CommunicationCreate
 from app.utils import (
     normalize_page,
     order_direction,
-    stringify_dates,
     to_dict,
 )
 
@@ -75,7 +74,8 @@ def create_communication(db: Session, user, payload: CommunicationCreate) -> dic
     audit(db, user, "create_communication", target=f"新增沟通-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"方式：{x.method or ''}；内容：{(x.content or '')[:50]}")
     db.commit()
     db.refresh(x)
-    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
+    # FA-13：CommunicationOut.created_at 已是原生 datetime，交给 jsonable_encoder 输出 ISO 串。
+    return attach_student(db, to_dict(x), x.student_id)
 
 
 def delete_communication(db: Session, user, communication_id: int) -> dict:

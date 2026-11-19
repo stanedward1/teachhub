@@ -403,7 +403,12 @@ async function loadClasses() {
   }
   if (classes.value.length && !classId.value) {
     classId.value = classes.value[0].id
-    await loadCheckin()
+    // 必须按**当前页签**取数：只调 loadCheckin 的话，「在统计页签点重试班级列表」
+    // 会让 stats 一次都没请求过（summary 仍为 null、statsError 为 false），
+    // 于是 StateView 的 :empty 成立 → 显示「暂无考勤数据」。
+    // 这是把「没加载」说成「没有」，与 VUE-16 同一类病。
+    if (activeTab.value === 'stats') await loadSummary()
+    else await loadCheckin()
   }
 }
 
@@ -541,7 +546,18 @@ function markAll(status) {
   }
 }
 
-/** 提交点名：仅提交本班在籍学生的合法状态。 */
+/**
+ * 提交点名：仅提交本班在籍学生的合法状态。
+ *
+ * 必须校验后端返回的 `count` / `skipped`（VUE-16 四层缺口的 PC 端同型残留）：
+ * `attendance_service.checkin` 对「不属本班 / 已退学 / 学生不存在」的记录是**静默跳过**的，
+ * 于是一份全错班的 payload 会返回 200 + `count: 0`，若这里无条件报成功，老师会看到
+ * 「点名成功」而当天考勤一条未写库。三档判定与 `mobile/views/Checkin.vue` 的 `submit()`
+ * 保持同一口径：
+ * - `count <= 0`    → 提示失败，绝不报成功；
+ * - `count < 总数`  → 提示「仅记录 X/Y 人」（+ 被跳过人数），不报成功；
+ * - `count === 总数` → 成功（此时 skipped 必为 0：每条记录非 saved 即 skipped）。
+ */
 async function submit() {
   if (!classId.value) return ElMessage.warning('请先选择班级')
   if (!items.value.length) {
@@ -563,12 +579,32 @@ async function submit() {
 
   saving.value = true
   try {
-    await attendanceApi.checkin({ class_id: classId.value, date: date.value, records })
-    ElMessage.success('点名成功')
-    // 点名会改变统计口径，让统计页签下次进入时重新取数
-    statsLoadedKey = ''
+    const res = await attendanceApi.checkin({
+      class_id: classId.value,
+      date: date.value,
+      records,
+    })
+    const count = Number(res?.count ?? 0)
+    const skipped = Number(res?.skipped ?? 0)
+    const total = records.length
+    if (count <= 0) {
+      // 后端一条都没写（典型成因：这份名单其实属于另一个班）——绝不能报「点名成功」
+      ElMessage.error('未记录任何学生，请检查班级与名单')
+    } else if (count < total || skipped > 0) {
+      const extra = skipped > 0 ? `，${skipped} 人不在本班或已退学` : ''
+      // 部分写入必须说清条数，否则老师会以为整班都点完了
+      ElMessage.warning(`仅记录 ${count}/${total} 人${extra}`)
+      // 点名会改变统计口径，让统计页签下次进入时重新取数
+      statsLoadedKey = ''
+    } else {
+      ElMessage.success('点名成功')
+      // 同上：只有真正写入才需要让统计页签重新取数
+      statsLoadedKey = ''
+    }
   } catch (e) {
-    // 全局拦截器已弹出后端错误详情，这里只解除 loading
+    // 全局拦截器已弹出后端错误详情，这里补一条面向老师的收尾提示，
+    // 避免「点了提交什么都没发生」；loading 在 finally 里解除。
+    ElMessage.error('点名提交失败，请重试')
   } finally {
     saving.value = false
   }

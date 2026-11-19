@@ -1,4 +1,6 @@
 """学生考勤点名业务逻辑（B1 分层：自 routers/attendance.py 下沉，行为完全不变）。"""
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -7,6 +9,8 @@ from app.models import Attendance, Student, User
 from app.permissions import ensure_class_operable, is_any_admin, is_teacher_class_owner
 from app.schemas import AttendanceCheckin
 from app.utils import parse_date_or_400
+
+logger = logging.getLogger("teachhub.attendance")
 
 ATTENDANCE_STATUS = ("出勤", "缺勤", "请假", "迟到")
 
@@ -89,12 +93,19 @@ def checkin(db: Session, user: User, payload: AttendanceCheckin) -> dict:
     }
 
     saved = 0
+    # 被跳过的条数（非本班 / 已退学 / 学生不存在）。
+    # 原实现静默 ``continue``，前端拿到 ``{"ok": True, "count": 0}`` 后无条件提示
+    # 「点名成功」——当天考勤一条未写库而老师以为记上了（VUE-16 / 教学事故级）。
+    # 现在把它变成可观测字段，由调用方决定如何提示；``count`` 语义保持不变
+    # （仍是成功写入条数），只新增 ``skipped``（与 ``saved`` 同值冗余，便于前端直读）。
+    skipped = 0
     for r in records:
         student_id = r.student_id
         status = r.status
         # 仅接受本班在籍学生
         student = students.get(student_id)
         if not student or student.class_id != class_id or student.is_dropped_out:
+            skipped += 1
             continue
 
         existing = existing_map.get(student_id)
@@ -116,7 +127,14 @@ def checkin(db: Session, user: User, payload: AttendanceCheckin) -> dict:
 
     audit(db, user, "attendance_checkin", target=f"班级#{class_id} {date} 考勤点名", class_id=class_id, detail=f"记录 {saved} 条")
     db.commit()
-    return {"ok": True, "count": saved}
+    if skipped:
+        # 落一条 WARNING：老师端只会看到「部分未记录」，事后追查需要知道是哪次点名、
+        # 哪个班、跳过了多少条（同一份 payload 里混进别班学生 = 前端串班或客户端 bug）。
+        logger.warning(
+            "考勤点名跳过 %d 条非本班/已退学记录 class_id=%s date=%s user_id=%s saved=%d",
+            skipped, class_id, date, user.id, saved,
+        )
+    return {"ok": True, "count": saved, "saved": saved, "skipped": skipped}
 
 
 def attendance_summary(

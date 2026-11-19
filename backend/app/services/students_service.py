@@ -52,7 +52,7 @@ from app.services.student_account import build_student_user, student_account_con
 from app.services.student_serialization import student_out, students_out
 from app.services.uploads_service import save_avatar
 from app.security import hash_password, validate_password_strength
-from app.utils import normalize_page, order_direction, parse_date_or_400, to_dict
+from app.utils import normalize_page, order_direction, parse_date_or_400, safe_append, to_dict
 
 
 
@@ -1057,9 +1057,14 @@ def export_students(db: Session, user: User, class_id: int | None = None, droppe
     ws = wb.active
     ws.title = "学生花名册"
     headers = ["学号", "姓名", "性别", "出生日期", "专业", "家长姓名", "家长电话", "类型", "是否退学"]
-    ws.append(headers)
+    # safe_append 而非 ws.append：姓名/专业/家长姓名来自学生自助注册或导入，没有字符
+    # 白名单，首字符 `=` 会被 openpyxl 当成公式写出（SEC2-01 / CWE-1236）。教师打开花名册
+    # 即触发 `=WEBSERVICE(...)` 把家长联系方式外带。safe_append 把字符串单元格强制成
+    # inlineStr（`t="inlineStr"`，不产生 `<f>`），数值/日期仍保持原类型。
+    safe_append(ws, headers)
     for s in rows:
-        ws.append(
+        safe_append(
+            ws,
             [
                 s.student_no,
                 s.name,
@@ -1070,7 +1075,7 @@ def export_students(db: Session, user: User, class_id: int | None = None, droppe
                 s.parent_phone,
                 "通学生" if s.student_type == "day" else "寄宿生",
                 "是" if s.is_dropped_out else "否",
-            ]
+            ],
         )
     buf = BytesIO()
     wb.save(buf)

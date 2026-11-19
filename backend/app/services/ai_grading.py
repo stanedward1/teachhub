@@ -72,7 +72,45 @@ _CRED_NOT_CONFIGURED_REASON = "AI 凭证未配置、未启用或密钥不可用"
 # 后台批改线程数：批改是 I/O 密集（等模型返回），2 个并发足以消化一个班的提交量，
 # 又不会把上游服务打爆或抢占太多连接。
 _MAX_WORKERS = 2
-_executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="ai-grading")
+
+
+def _new_executor() -> ThreadPoolExecutor:
+    """创建批改线程池（唯一构造点，保证参数一致）。"""
+    return ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="ai-grading")
+
+
+# 模块级线程池。**允许为 None**：应用 lifespan 结束时由 `shutdown_grading_executor`
+# 关闭并置空，下次 `trigger_grading` 再按需重建。这样「关闭 → 再次触发」是安全的
+# —— 测试进程里 TestClient 会反复起停 lifespan，若关闭后不可重建，第二个用例起
+# `trigger_grading` 就会抛 `RuntimeError: cannot schedule new tasks after shutdown`。
+_executor: ThreadPoolExecutor | None = _new_executor()
+
+
+def _ensure_executor() -> ThreadPoolExecutor:
+    """取当前线程池；已被关闭（置 None）则重建。"""
+    global _executor
+    if _executor is None:
+        _executor = _new_executor()
+    return _executor
+
+
+def shutdown_grading_executor(wait: bool = False) -> None:
+    """优雅关闭批改线程池（由应用 lifespan 的清理阶段调用）。
+
+    幂等：重复调用不会报错；关闭后把模块级引用置 None，后续 ``trigger_grading``
+    会重建一个，因此本函数不会把"进程还能不能继续批改"作为副作用泄漏出去。
+
+    Args:
+        wait: 是否等待排队中的任务跑完。进程退出路径用 ``False``（不等，避免
+            阻塞关闭）；测试或需要确定性时可用 ``True``。
+    """
+    global _executor
+    executor = _executor
+    if executor is None:
+        return
+    _executor = None
+    executor.shutdown(wait=wait)
+
 
 _SYSTEM_PROMPT = """你是一位经验丰富的中小学教师，正在批改学生的上机作业。
 
@@ -1399,7 +1437,7 @@ def _run_grading(submission_id: int, school_id: int | None) -> None:
 
 def trigger_grading(submission_id: int, school_id: int | None) -> None:
     """把批改任务提交到线程池（非阻塞）。"""
-    _executor.submit(_run_grading, submission_id, school_id)
+    _ensure_executor().submit(_run_grading, submission_id, school_id)
 
 
 def _apply_prewrite(

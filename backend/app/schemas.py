@@ -20,6 +20,31 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=50, description="密码")
     class_id: int | None = Field(None, description="班级 ID")
 
+    @field_validator("name")
+    @classmethod
+    def _reject_formula_prefix(cls, value: str) -> str:
+        """拒绝形如电子表格公式的姓名（SEC2-01 / CWE-1236 的输入侧）。
+
+        姓名会被写进导出的 Excel 花名册，而 Excel 系软件会把以 ``= + - @``、
+        TAB、CR 开头的单元格当公式/特殊值处理。即使导出侧已经强制 inlineStr
+        （见 ``app.utils.safe_append``），**输入侧也不该接受**这种姓名：
+        它是可疑数据的信号，且下游还有别的落地形态（CSV、邮件、打印）。
+        ``-`` 与 ``+`` 看起来像"名字以短横线开头"（外籍姓名合法），但那类姓名
+        在本系统里不是真实场景，且前端注册表单同样没有提示，宁可显式拒绝。
+
+        Args:
+            value: 待校验的姓名。
+
+        Returns:
+            原样返回（校验通过时）。
+
+        Raises:
+            ValueError: 姓名以危险字符开头时。
+        """
+        if value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+            raise ValueError("姓名不能以 = + - @ 等字符开头")
+        return value
+
 
 class PasswordRequest(BaseModel):
     old_password: str
@@ -467,7 +492,7 @@ class ScoreOut(_ORMOut):
     subject: str | None = None
     score: float | None = None
     exam_name: str | None = None
-    created_at: str | None = None
+    created_at: datetime | None = None
     # 序列化时由 audit.attach_student 附加
     student_name: str | None = None
     student_no: str | None = None
@@ -477,11 +502,11 @@ class LeaveOut(_ORMOut):
     id: int | None = None
     student_id: int | None = None
     reason: str | None = None
-    start_date: str | None = None
-    end_date: str | None = None
+    start_date: date | None = None
+    end_date: date | None = None
     status: str | None = None
     image: str | None = None
-    created_at: str | None = None
+    created_at: datetime | None = None
     student_name: str | None = None
     student_no: str | None = None
 
@@ -492,7 +517,7 @@ class CommunicationOut(_ORMOut):
     method: str | None = None
     content: str | None = None
     feedback: str | None = None
-    created_at: str | None = None
+    created_at: datetime | None = None
     student_name: str | None = None
     student_no: str | None = None
 
@@ -503,7 +528,7 @@ class PerformanceOut(_ORMOut):
     ptype: str | None = None
     content: str | None = None
     points: int | None = None
-    created_at: str | None = None
+    created_at: datetime | None = None
     student_name: str | None = None
     student_no: str | None = None
 
@@ -514,7 +539,7 @@ class TalkOut(_ORMOut):
     teacher_id: int | None = None
     content: str | None = None
     images: list[str] | None = None
-    created_at: str | None = None
+    created_at: datetime | None = None
     student_name: str | None = None
     student_no: str | None = None
 
@@ -522,10 +547,10 @@ class TalkOut(_ORMOut):
 class ReturnRecordOut(_ORMOut):
     id: int | None = None
     student_id: int | None = None
-    return_date: str | None = None
+    return_date: date | None = None
     reason: str | None = None
     note: str | None = None
-    created_at: str | None = None
+    created_at: datetime | None = None
     student_name: str | None = None
     student_no: str | None = None
 
@@ -534,7 +559,7 @@ class StudentCommentOut(_ORMOut):
     id: int | None = None
     student_id: int | None = None
     content: str | None = None
-    created_at: str | None = None
+    created_at: datetime | None = None
     student_name: str | None = None
     student_no: str | None = None
 

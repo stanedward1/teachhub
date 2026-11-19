@@ -55,7 +55,6 @@ from app.utils import (
     normalize_page,
     order_direction,
     parse_date_or_400,
-    stringify_dates,
     to_dict,
 )
 
@@ -467,7 +466,7 @@ def create_talk(db: Session, payload, user: User) -> dict:
     audit(db, user, "create_talk", target=f"新增谈心-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"内容：{(x.content or '')[:50]}")
     db.commit()
     db.refresh(x)
-    return stringify_dates(_serialize_talk(attach_student(db, to_dict(x), x.student_id)))
+    return _serialize_talk(attach_student(db, to_dict(x), x.student_id))
 
 
 def delete_talk(db: Session, talk_id: int, user: User) -> dict:
@@ -524,8 +523,10 @@ def create_return_record(db: Session, payload, user: User) -> dict:
     audit(db, user, "create_return_record", target=f"新增返校-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"返校日期：{x.return_date or ''}；事由：{(x.reason or '')[:50]}")
     db.commit()
     db.refresh(x)
-    # ReturnRecordOut.return_date / created_at 声明为 str，必须过 stringify_dates
-    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
+    # FA-13：ReturnRecordOut.return_date / created_at 已是原生 date / datetime，
+    # 由 FastAPI jsonable_encoder 输出 ISO 串（与本端点列表接口同一条路径），
+    # 不再需要 stringify_dates 中间层。
+    return attach_student(db, to_dict(x), x.student_id)
 
 
 def delete_return_record(db: Session, record_id: int, user: User) -> dict:
@@ -676,9 +677,9 @@ def create_performance(db: Session, payload: dict, user: User) -> dict:
     audit(db, user, "create_performance", target=f"新增表现-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"类型：{x.ptype}；积分：{x.points}；内容：{(x.content or '')[:50]}")
     db.commit()
     db.refresh(x)
-    # PerformanceOut.created_at 声明为 str，必须过 stringify_dates ——
-    # 否则会「先 commit 成功、再在响应校验时抛错」，客户端收到 500 但数据已落库
-    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
+    # FA-13：PerformanceOut.created_at 已是原生 datetime，不再需要 stringify_dates；
+    # 这同时消除了「先 commit 成功、再在响应校验时抛错 → 客户端 500 但数据已落库」的路径。
+    return attach_student(db, to_dict(x), x.student_id)
 
 
 def delete_performance(db: Session, performance_id: int, user: User) -> dict:
@@ -815,8 +816,8 @@ def create_student_comment(db: Session, payload: dict, user: User) -> dict:
     audit(db, user, "create_student_comment", target=f"新增评语-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"内容：{(x.content or '')[:80]}")
     db.commit()
     db.refresh(x)
-    # StudentCommentOut.created_at 声明为 str，必须过 stringify_dates
-    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
+    # FA-13：StudentCommentOut.created_at 已是原生 datetime，无需 stringify_dates 中间层。
+    return attach_student(db, to_dict(x), x.student_id)
 
 
 def update_student_comment(db: Session, comment_id: int, payload: dict, user: User) -> dict:
@@ -830,8 +831,8 @@ def update_student_comment(db: Session, comment_id: int, payload: dict, user: Us
     audit(db, user, "update_student_comment", target=f"评语#{comment_id}-{student_name(db, x.student_id)}", student_id=x.student_id)
     db.commit()
     db.refresh(x)
-    # StudentCommentOut.created_at 声明为 str，必须过 stringify_dates
-    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
+    # FA-13：同上，StudentCommentOut 已改原生类型。
+    return attach_student(db, to_dict(x), x.student_id)
 
 
 def delete_student_comment(db: Session, comment_id: int, user: User) -> dict:

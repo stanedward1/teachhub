@@ -28,7 +28,6 @@ from app.utils import (
     normalize_page,
     order_direction,
     parse_date_or_400,
-    stringify_dates,
     to_dict,
 )
 
@@ -83,7 +82,9 @@ def create_leave(db: Session, user, payload: LeaveCreate) -> dict:
     audit(db, user, "create_leave", target=f"新增请假-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"事由：{x.reason or '未填写'}；时间：{x.start_date or ''} ~ {x.end_date or ''}")
     db.commit()
     db.refresh(x)
-    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
+    # FA-13：LeaveOut.start_date / end_date / created_at 已是原生 date / datetime，
+    # 由 FastAPI jsonable_encoder 输出 ISO 串（列表接口走的同一条路径），无需中间层。
+    return attach_student(db, to_dict(x), x.student_id)
 
 
 def update_leave(db: Session, user, leave_id: int, payload: LeaveUpdate) -> dict:
@@ -99,7 +100,8 @@ def update_leave(db: Session, user, leave_id: int, payload: LeaveUpdate) -> dict
     audit(db, user, "update_leave", target=f"请假#{leave_id}-{student_name(db, x.student_id)}", student_id=x.student_id, detail=f"事由：{x.reason or '未填写'}；时间：{x.start_date or ''} ~ {x.end_date or ''}")
     db.commit()
     db.refresh(x)
-    return stringify_dates(attach_student(db, to_dict(x), x.student_id))
+    # FA-13：同上，LeaveOut 已改原生类型。
+    return attach_student(db, to_dict(x), x.student_id)
 
 
 def delete_leave(db: Session, user, leave_id: int) -> dict:

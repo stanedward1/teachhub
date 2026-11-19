@@ -1,6 +1,7 @@
 import ipaddress
 import logging
 import os
+from contextlib import asynccontextmanager, contextmanager
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
@@ -76,6 +77,97 @@ logger = logging.getLogger("teachhub")
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
 
+# =========================================================================== #
+# 应用生命周期（FA-01）
+#
+# 背景：迁移 / 建日志 / 启动兜底原先在 **import 期**执行，副作用有三层后果：
+# 1. 任何 `import app.main` 的进程（脚本、`pytest --collect-only`、alembic 自身）
+#    都会跑一遍数据库迁移 —— 这就是 `start.sh` 里「只能 workers=1」的根因；
+# 2. import 期没有对应的"结束"钩子，engine 与批改线程池无处释放；
+# 3. 迁移失败时抛在 import 里，报错栈落在 uvicorn 的 loader 里，很难定位。
+#
+# 现在改到 FastAPI 的 lifespan（官方：Lifespan Events）。顺序保持
+# 迁移 → 日志 → 对账；`yield` 之后补清理 engine / 线程池。
+# =========================================================================== #
+@contextmanager
+def _migration_lock():
+    """跨进程互斥的迁移锁（尽力而为，失败即退化为无锁）。
+
+    ``uvicorn --workers N`` 会为**每个** worker 进程各跑一次 lifespan；若不加锁，
+    N 个进程会并发 ``alembic upgrade head`` —— MySQL 下表现为 DDL 死锁或
+    ``duplicate column`` 之类错误，worker 启动失败后被反复重启（表现为服务抖动）。
+
+    只用 POSIX 的 ``fcntl.flock``：Windows 无该模块（开发机通常是 Windows + SQLite、
+    单进程，本来就不需要锁），ImportError 时退化为无锁，不引入跨平台依赖。
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - Windows 开发环境
+        yield
+        return
+
+    lock_path = os.path.join(LOG_DIR, ".migrate.lock")
+    handle = open(lock_path, "w", encoding="utf-8")  # noqa: SIM115 - 需与 flock 同生命周期
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _should_run_startup_migrations() -> bool:
+    """启动时是否执行 Alembic 迁移（**默认执行**）。
+
+    只有显式设置 ``SKIP_STARTUP_MIGRATIONS=1`` 才跳过。用途仅限测试进程：
+    ``tests/conftest.py`` 用 ``Base.metadata.create_all`` 直接建库（schema 由模型
+    定义、与 Alembic 版本表无关），再跑一遍迁移链既慢又会与已存在的表冲突。
+
+    **生产不设该变量 ⇒ 行为与改动前完全一致（fail-fast 迁移）。**
+    """
+    return os.getenv("SKIP_STARTUP_MIGRATIONS", "").strip().lower() not in ("1", "true", "yes")
+
+
+def _run_startup_tasks() -> None:
+    """启动副作用：迁移 → 日志落盘 → 对账（顺序不可调换）。"""
+    if _should_run_startup_migrations():
+        with _migration_lock():
+            run_migrations()
+    else:
+        logger.info("SKIP_STARTUP_MIGRATIONS 已设置：跳过 Alembic 迁移（仅测试环境应出现）")
+
+    # 必须在迁移之后：alembic 的 fileConfig 会重置 root handler
+    _setup_file_logging()
+
+    _reconcile_interrupted_grading()
+
+
+def _run_shutdown_tasks() -> None:
+    """关闭副作用：释放批改线程池与数据库连接池（幂等）。"""
+    from app.database import engine
+    from app.services import ai_grading
+
+    # 不等待排队任务：关闭路径不能被一次慢模型调用阻塞（进程本来就要退出了）
+    ai_grading.shutdown_grading_executor(wait=False)
+    engine.dispose()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """应用生命周期钩子（替代原来的 import 期副作用）。
+
+    Args:
+        _app: FastAPI 实例（Starlette 传入，本函数不使用）。
+    """
+    _run_startup_tasks()
+    try:
+        yield
+    finally:
+        _run_shutdown_tasks()
+
+
 def _docs_kwargs(env: str) -> dict:
     """按运行环境决定 FastAPI 交互式文档的开关（纯函数，便于单测）。
 
@@ -108,6 +200,7 @@ app = FastAPI(
 """,
     version=settings.APP_VERSION,
     **_docs_kwargs(settings.ENV),
+    lifespan=lifespan,
 )
 
 # ⚠️ CORSMiddleware 必须在**所有** `@app.middleware("http")` 之后注册（见文件末尾），
@@ -280,16 +373,18 @@ app.include_router(classlog.router)
 app.include_router(admin.router)
 app.include_router(uploads.router)
 
-# 数据库迁移：Alembic 是 schema 的唯一来源，启动时迁移到最新版本。
-# 不再用 create_all 兜底建表，避免与 Alembic 交叉导致版本号/表结构不一致。
-run_migrations()
-
-# 迁移完成后配置日志落盘（alembic 会重置 root handler，须在其后设置）
-_setup_file_logging()
+# 🔴 这里**不再**执行 run_migrations() / _setup_file_logging() / 启动对账。
+# 三者已迁到本文件上方的 `lifespan`（FA-01）：import 期没有任何"结束"钩子，
+# engine 与批改线程池无处释放，且任何 `import app.main` 的进程都会跑一遍迁移。
+# 顺序与依赖关系不变（迁移 → 日志 → 对账），见 `_run_startup_tasks`。
 
 
 def _reconcile_interrupted_grading() -> None:
-    """启动兜底：把上次进程中断遗留的 pending 批改标记为失败。"""
+    """启动兜底：把上次进程中断遗留的 pending 批改标记为失败。
+
+    由 ``lifespan`` 的启动阶段调用（必须在 ``_setup_file_logging`` 之后，
+    这样这里的 WARNING 才会落盘）。
+    """
     from app.database import SessionLocal
     from app.services import ai_grading
     from app.tenant import tenant_scope
@@ -304,9 +399,6 @@ def _reconcile_interrupted_grading() -> None:
         logger.exception("启动兜底清理 AI 批改 pending 行失败（忽略）")
     finally:
         db.close()
-
-
-_reconcile_interrupted_grading()
 
 
 @app.get("/")
